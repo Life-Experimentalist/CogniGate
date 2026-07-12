@@ -1,0 +1,23 @@
+# CODEOWNERS for CogniGate
+# https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# Default: VKrishna04 reviews everything
+*                   @VKrishna04
+
+# Go Edge Proxy
+/gateway/           @VKrishna04
+
+# Java Domain Engine
+/analytics/         @VKrishna04
+
+# Documentation Site
+/docs/              @VKrishna04
+
+# CI/CD and GitHub community files
+/.github/           @VKrishna04
+
+# Core config and setup
+docker-compose.yml  @VKrishna04
+setup.sh            @VKrishna04
+setup.ps1           @VKrishna04
+cognigate.config.yml @VKrishna04
