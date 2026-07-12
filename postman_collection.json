@@ -1,0 +1,176 @@
+{
+	"info": {
+		"_postman_id": "8bb3805f-0b33-4b68-961f-d748f3cf4456",
+		"name": "CogniGate E2E Test Suite",
+		"description": "Postman integration suite for verifying CogniGate Edge Proxy and Admin Engine",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"item": [
+		{
+			"name": "Edge Proxy - Chat Completions (Mock Auth)",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Authorization",
+						"value": "Bearer test",
+						"type": "text"
+					},
+					{
+						"key": "Content-Type",
+						"value": "application/json",
+						"type": "text"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n  \"model\": \"gpt-4\",\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"Hello CogniGate!\"\n    }\n  ]\n}"
+				},
+				"url": {
+					"raw": "http://localhost:8080/v1/chat/completions",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "8080",
+					"path": [
+						"v1",
+						"chat",
+						"completions"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Admin - Create Tenant",
+			"request": {
+				"method": "POST",
+				"header": [],
+				"url": {
+					"raw": "http://localhost:8081/api/admin/tenants?name=test-organization",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "8081",
+					"path": [
+						"api",
+						"admin",
+						"tenants"
+					],
+					"query": [
+						{
+							"key": "name",
+							"value": "test-organization"
+						}
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Admin - Add Provider Key",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json",
+						"type": "text"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n  \"providerName\": \"anthropic\",\n  \"apiKey\": \"sk-ant-prod-key-1234567\"\n}"
+				},
+				"url": {
+					"raw": "http://localhost:8081/api/admin/tenants/1/keys",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "8081",
+					"path": [
+						"api",
+						"admin",
+						"tenants",
+						"1",
+						"keys"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Admin - Add Routing Rule",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json",
+						"type": "text"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n  \"modelName\": \"claude-3-opus\",\n  \"backupModelName\": \"gpt-4-turbo\",\n  \"priority\": 1\n}"
+				},
+				"url": {
+					"raw": "http://localhost:8081/api/admin/tenants/1/rules",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "8081",
+					"path": [
+						"api",
+						"admin",
+						"tenants",
+						"1",
+						"rules"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Admin - Upload Dynamic Plugin",
+			"request": {
+				"method": "POST",
+				"header": [],
+				"body": {
+					"mode": "formdata",
+					"formdata": [
+						{
+							"key": "file",
+							"type": "file",
+							"src": []
+						},
+						{
+							"key": "className",
+							"value": "com.cognigate.plugin.AnthropicHandler",
+							"type": "text"
+						}
+					]
+				},
+				"url": {
+					"raw": "http://localhost:8081/api/admin/plugins/upload",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "8081",
+					"path": [
+						"api",
+						"admin",
+						"plugins",
+						"upload"
+					]
+				}
+			},
+			"response": []
+		}
+	]
+}
