@@ -1,0 +1,24 @@
+# IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS files
+Thumbs.db
+db.sqlite3
+.DS_Store
+
+# Go
+gateway-go/cognigate-go
+gateway-go/gateway-go
+
+# Java
+**/target/
+*.class
+*.jar
+*.war
+*.ear
+
+# Docker
+pgdata/
