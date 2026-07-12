@@ -1,0 +1,58 @@
+version: '3.8'
+
+services:
+  cognigate-go:
+    build:
+      context: ./gateway-go
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      - REDIS_URL=redis:6379
+    networks:
+      - cogni-net
+    depends_on:
+      - redis
+
+  cognigate-java:
+    build:
+      context: ./analytics-java
+      dockerfile: Dockerfile
+    ports:
+      - "8081:8081"
+    environment:
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://postgres-db:5432/cognigate
+      - SPRING_DATASOURCE_USERNAME=cognigate_user
+      - SPRING_DATASOURCE_PASSWORD=cognigate_pass
+      - ENCRYPTION_MASTER_KEY=0123456789abcdef0123456789abcdef
+    networks:
+      - cogni-net
+    depends_on:
+      - postgres-db
+
+  postgres-db:
+    image: postgres:16-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_DB=cognigate
+      - POSTGRES_USER=cognigate_user
+      - POSTGRES_PASSWORD=cognigate_pass
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - cogni-net
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    networks:
+      - cogni-net
+
+networks:
+  cogni-net:
+    driver: bridge
+
+volumes:
+  pgdata:
