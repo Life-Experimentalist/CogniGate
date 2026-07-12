@@ -9,8 +9,8 @@
 
 ### 1. Root Orchestration & Config
 - [x] **Create `docker-compose.yml`**
-  - Configure `cognigate-go` (Port 8080 -> 8080)
-  - Configure `cognigate-java` (Port 8081 -> 8081)
+  - Configure `gateway` (Port 8080 -> 8080)
+  - Configure `analytics` (Port 8081 -> 8081)
   - Configure `postgres-db` (Image: `postgres:16-alpine`, Port 5432, Volume: `pgdata:/var/lib/postgresql/data`)
   - Configure `redis` (Image: `redis:7-alpine`, Port 6379)
   - Set up shared bridge network: `cogni-net`
@@ -18,7 +18,7 @@
   - Define OpenAPI 3.1.0 specification for `POST /v1/chat/completions`
   - Set up Bearer Auth security definitions
 
-### 2. High-Speed Edge Proxy (`/gateway-go`)
+### 2. High-Speed Edge Proxy (`/gateway`)
 - [x] **Initialize Module:** Create `go.mod` targeting Go 1.26 with dependencies:
   - `github.com/gofiber/fiber/v2`
   - `github.com/go-redis/redis/v8`
@@ -36,7 +36,7 @@
 - [x] **Create `Dockerfile`:**
   - Multi-stage build: Stage 1 (`golang:1.26-alpine`) to compile static binary (`CGO_ENABLED=0`), Stage 2 (`alpine:latest` or `scratch`) for minimal runtime image.
 
-### 3. Enterprise Domain & Analytics Engine (`/analytics-java`)
+### 3. Enterprise Domain & Analytics Engine (`/analytics`)
 - [x] **Initialize Build:** Create `pom.xml` targeting Java 25 and Spring Boot 4.1.0 with dependencies:
   - `spring-boot-starter-web`
   - `spring-boot-starter-data-jpa`

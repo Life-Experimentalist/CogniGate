@@ -17,7 +17,7 @@ RUN mvn package -DskipTests -B
 FROM eclipse-temurin:21-jre-jammy
 
 WORKDIR /app
-COPY --from=builder /app/target/analytics-java-1.0.0-SNAPSHOT.jar app.jar
+COPY --from=builder /app/target/analytics-1.0.0-SNAPSHOT.jar app.jar
 
 EXPOSE 8081
 
