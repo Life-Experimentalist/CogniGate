@@ -9,16 +9,32 @@ Thumbs.db
 db.sqlite3
 .DS_Store
 
-# Go
-gateway-go/cognigate-go
-gateway-go/gateway-go
+# Secrets — real credentials must never be committed.
+# `.env.example` is the tracked template; `.env` is local-only.
+.env
+.env.*
+!.env.example
+
+# Go — compiled gateway binaries
+gateway/gateway
+gateway/gateway.exe
+
+# Node
+node_modules/
 
 # Java
 **/target/
 *.class
+# The Maven wrapper jar is downloaded by `mvnw` at build time (see
+# analytics/.mvn/wrapper/maven-wrapper.properties) and is never committed.
 *.jar
 *.war
 *.ear
 
 # Docker
 pgdata/
+
+# dev-prune machine-local state (project.devprune.json IS tracked)
+.devprune.json
+.devprune-ignore
+ignore.devprune.json
