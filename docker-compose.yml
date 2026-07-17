@@ -1,4 +1,10 @@
-version: '3.8'
+# CogniGate reference deployment.
+#
+# Copy `.env.example` to `.env` and fill it in before running:
+#   cp .env.example .env
+#   openssl rand -hex 32   # -> ENCRYPTION_MASTER_KEY
+#
+# Compose reads `.env` from this directory automatically.
 
 services:
   gateway:
@@ -12,7 +18,8 @@ services:
     networks:
       - cogni-net
     depends_on:
-      - redis
+      redis:
+        condition: service_healthy
 
   analytics:
     build:
@@ -21,27 +28,35 @@ services:
     ports:
       - "8081:8081"
     environment:
-      - SPRING_DATASOURCE_URL=jdbc:postgresql://postgres-db:5432/cognigate
-      - SPRING_DATASOURCE_USERNAME=cognigate_user
-      - SPRING_DATASOURCE_PASSWORD=cognigate_pass
-      - ENCRYPTION_MASTER_KEY=0123456789abcdef0123456789abcdef
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://postgres-db:5432/${POSTGRES_DB:-cognigate}
+      - SPRING_DATASOURCE_USERNAME=${POSTGRES_USER:-cognigate_user}
+      - SPRING_DATASOURCE_PASSWORD=${POSTGRES_PASSWORD:-cognigate_pass}
+      # No default: AES-256-GCM requires exactly 32 bytes (64 hex chars).
+      # Compose refuses to start rather than fall back to a guessable key.
+      - ENCRYPTION_MASTER_KEY=${ENCRYPTION_MASTER_KEY:?must be a 64-char hex string; generate with `openssl rand -hex 32`}
     networks:
       - cogni-net
     depends_on:
-      - postgres-db
+      postgres-db:
+        condition: service_healthy
 
   postgres-db:
     image: postgres:16-alpine
     ports:
       - "5432:5432"
     environment:
-      - POSTGRES_DB=cognigate
-      - POSTGRES_USER=cognigate_user
-      - POSTGRES_PASSWORD=cognigate_pass
+      - POSTGRES_DB=${POSTGRES_DB:-cognigate}
+      - POSTGRES_USER=${POSTGRES_USER:-cognigate_user}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-cognigate_pass}
     volumes:
       - pgdata:/var/lib/postgresql/data
     networks:
       - cogni-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-cognigate_user} -d ${POSTGRES_DB:-cognigate}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   redis:
     image: redis:7-alpine
@@ -49,6 +64,11 @@ services:
       - "6379:6379"
     networks:
       - cogni-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
 networks:
   cogni-net:
