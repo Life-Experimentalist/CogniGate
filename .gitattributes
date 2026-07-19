@@ -1,0 +1,32 @@
+# Normalise line endings so a checkout is correct on every platform.
+# Without this, a commit made on Windows stores CRLF and the shell scripts
+# and Maven wrapper below fail on Linux and macOS with `bad interpreter`.
+* text=auto
+
+# These are executed by a POSIX shell and must keep LF even when checked out
+# on Windows, where core.autocrlf would otherwise convert them.
+*.sh        text eol=lf
+mvnw        text eol=lf
+*.bash      text eol=lf
+
+# These are executed by Windows and must keep CRLF.
+*.bat       text eol=crlf
+*.cmd       text eol=crlf
+*.ps1       text eol=crlf
+
+# Never line-ending-convert these; doing so corrupts them.
+*.png       binary
+*.jpg       binary
+*.jpeg      binary
+*.gif       binary
+*.ico       binary
+*.webp      binary
+*.jar       binary
+*.exe       binary
+*.woff      binary
+*.woff2     binary
+*.ttf       binary
+
+# Collapse generated lockfiles in review views.
+docs/package-lock.json  linguist-generated=true
+analytics/mvnw          linguist-generated=true
