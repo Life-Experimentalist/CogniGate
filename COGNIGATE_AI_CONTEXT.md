@@ -12,6 +12,8 @@
 
 ## 1. Project Overview
 
+![CogniGate Banner](docs/public/banner.png)
+
 CogniGate is a **self-hosted, multi-tenant AI infrastructure platform** — a private enterprise alternative to OpenRouter and LiteLLM.
 
 **Core Value Propositions:**
@@ -33,7 +35,7 @@ CogniGate is a **self-hosted, multi-tenant AI infrastructure platform** — a pr
 ```
 CogniGate/
 ├── gateway/          # Go 1.26 + Fiber v2 — Edge Proxy on :8080
-├── analytics/        # Java 26 + Spring Boot 4.1 — Domain Engine on :8081
+├── analytics/        # Java 25 LTS + Spring Boot 4.1 — Domain Engine on :8081
 ├── docs/             # Next.js 15 — GitHub Pages documentation site
 ├── docker-compose.yml
 ├── setup.sh / setup.ps1  # One-command setup
@@ -191,7 +193,7 @@ Encrypts and stores a provider API key for a tenant.
 ```bash
 curl -X POST http://localhost:8081/api/admin/tenants/1/keys \
   -H "Content-Type: application/json" \
-  -d '{"providerName": "anthropic", "apiKey": "sk-ant-prod-..."}'
+  -d '{"providerName": "anthropic", "apiKey": "EXAMPLE-PROVIDER-KEY-NOT-REAL"}'
 ```
 
 #### `POST /api/admin/tenants/{id}/rules`
