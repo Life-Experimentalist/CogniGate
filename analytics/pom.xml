@@ -12,9 +12,9 @@
     </parent>
 
     <groupId>com.cognigate</groupId>
-    <artifactId>analytics-java</artifactId>
+    <artifactId>analytics</artifactId>
     <version>1.0.0-SNAPSHOT</version>
-    <name>analytics-java</name>
+    <name>analytics</name>
     <description>Enterprise Domain &amp; Analytics Engine for CogniGate</description>
 
     <properties>

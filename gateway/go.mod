@@ -1,4 +1,4 @@
-module github.com/cognigate/gateway-go
+module github.com/cognigate/gateway
 
 go 1.26
 

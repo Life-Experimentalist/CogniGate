@@ -14,15 +14,15 @@ RUN go mod download
 COPY . .
 
 # Build statically linked binary
-RUN CGO_ENABLED=0 GOOS=linux go build -o cognigate-go .
+RUN CGO_ENABLED=0 GOOS=linux go build -o gateway .
 
 # Stage 2: Minimal runtime image
 FROM alpine:latest
 RUN apk --no-cache add ca-certificates
 
 WORKDIR /app
-COPY --from=builder /app/cognigate-go .
+COPY --from=builder /app/gateway .
 
 EXPOSE 8080
 
-CMD ["./cognigate-go"]
+CMD ["./gateway"]
