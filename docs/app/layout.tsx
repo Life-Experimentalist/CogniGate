@@ -9,7 +9,7 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-    metadataBase: new URL("https://cognigate.vkrishan04.me"),
+    metadataBase: new URL("https://cognigate.vkrishna04.me"),
     title: {
         default:
             "CogniGate — The Zero-Downtime Cognitive Router for Enterprise AI",
@@ -44,7 +44,7 @@ export const metadata: Metadata = {
     openGraph: {
         type: "website",
         locale: "en_US",
-        url: "https://cognigate.vkrishan04.me",
+        url: "https://cognigate.vkrishna04.me",
         siteName: "CogniGate",
         title: "CogniGate — The Zero-Downtime Cognitive Router for Enterprise AI",
         description:
