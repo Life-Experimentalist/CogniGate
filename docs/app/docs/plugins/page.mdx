@@ -1,0 +1,72 @@
+export const metadata = {
+    title: "Plugins System",
+    description:
+        "Learn how to build and upload hot-swappable Java plugins using the Janino in-memory compiler.",
+};
+
+# Hot-Swap Plugin System
+
+CogniGate supports real-time customization through dynamic plugins. You can upload raw `.java` source files at runtime to customize how LLM providers are handled. The Domain Engine compiles your source in-memory via the Janino compiler without rebooting the JVM.
+
+## The Plugin Interface
+
+Every custom handler must implement the `com.cognigate.plugin.AiProviderHandler` interface:
+
+```java
+package com.cognigate.plugin;
+
+public interface AiProviderHandler {
+    String handleRequest(String prompt, String apiKey) throws Exception;
+}
+```
+
+## Example Plugin
+
+The following example demonstrates a custom handler that appends custom system metadata or modifies prompts before sending them to the downstream API:
+
+```java
+package com.cognigate.plugin;
+
+import java.net.URI;
+import java.net.http.*;
+
+public class MyCustomHandler implements AiProviderHandler {
+
+    @Override
+    public String handleRequest(String prompt, String apiKey) throws Exception {
+        // 1. Transform the prompt
+        String augmentedPrompt = "[SYSTEM: Audit Log Active] " + prompt;
+
+        // 2. Format a request to an internal proxy or customized endpoint
+        HttpClient client = HttpClient.newHttpClient();
+        HttpRequest request = HttpRequest.newBuilder()
+            .uri(URI.create("https://api.openai.com/v1/chat/completions"))
+            .header("Content-Type", "application/json")
+            .header("Authorization", "Bearer " + apiKey)
+            .POST(HttpRequest.BodyPublishers.ofString(
+                "{\"model\": \"gpt-4\", \"messages\": [{\"role\": \"user\", \"content\": \"" + augmentedPrompt + "\"}]}"
+            ))
+            .build();
+
+        HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+        return response.body();
+    }
+}
+```
+
+## Uploading a Plugin
+
+To upload your plugin and make it active instantly, issue a multipart form POST request containing the Java source code to the Domain Engine administration API:
+
+```bash
+curl -X POST "http://localhost:8081/api/admin/plugins/upload?className=com.cognigate.plugin.MyCustomHandler" \
+  -F "file=@MyCustomHandler.java"
+```
+
+## Compiler Limitations (Janino)
+
+The compilation environment utilizes **Janino 3.1.12**, which is a super-fast, lightweight in-memory compiler. Because it does not run the full `javac` compiler under the hood, there are a few limitations:
+
+- **Java Spec Subset**: Janino implements a subset of the Java language specification. For Java 25, standard statements, classes, methods, and expressions are fully supported.
+- **No Advanced Syntactic Sugar**: Complex modern Java language features (such as pattern matching for `switch`, Java Records, or modules) are not supported.
+- **Lambdas & Inner Classes**: While basic lambda functions are supported, we recommend using standard anonymous inner classes if you run into Janino-specific parsing exceptions.

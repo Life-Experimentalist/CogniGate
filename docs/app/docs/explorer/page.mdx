@@ -1,0 +1,87 @@
+import { Mermaid } from "../../components/Mermaid";
+
+export const metadata = {
+    title: "Codebase Explorer",
+    description:
+        "An interactive and detailed guide to exploring CogniGate's codebase structure, files, and modules.",
+};
+
+# Codebase Explorer
+
+Explore the internal architecture and codebase structure of CogniGate.
+
+## High-Level Architecture
+
+<Mermaid
+    chart={`
+graph TD
+    Client[Client Requests] --> GoProxy[Go Edge Proxy :8080]
+    GoProxy --> Redis[(Redis Cache)]
+    GoProxy --> OpenAIApi[Downstream AI Providers]
+    Admin[Admin Users] --> JavaEngine[Java Domain Engine :8081]
+    JavaEngine --> Postgres[(PostgreSQL)]
+    JavaEngine --> Redis
+    JavaEngine --> Plugins[Dynamic Java Plugins]
+`}
+/>
+
+## Repository Tree
+
+Welcome to the Codebase Explorer. This page acts as a comprehensive map of the CogniGate repository, detailing the function, structure, and integration of each file and folder in the project.
+
+## Repository Tree
+
+```tree
+CogniGate/
+├── gateway/              # Go 1.26 Edge Proxy (Port 8080)
+│   ├── main.go           # Proxy bootstrap & Fiber app init
+│   ├── router.go         # Model routing, circuit breaking, key rotation
+│   ├── redis.go          # Redis connection pool & cache invalidation Pub/Sub
+│   ├── telemetry.go      # Non-blocking async telemetry dispatcher
+│   └── Dockerfile        # Multi-stage lightweight build for Go proxy
+├── analytics/            # Java 25 Domain Admin Engine (Port 8081)
+│   ├── pom.xml           # Maven dependencies & Java 25 compiler config
+│   ├── src/main/java/    # Spring Boot application code
+│   │   └── com/cognigate/
+│   │       ├── entity/        # JPA Database Entities (Tenant, Keys, Rules)
+│   │       ├── repository/    # Spring Data JPA repositories
+│   │       ├── service/       # Business logic (AES encryption, Redis sync)
+│   │       ├── controller/    # REST endpoints (Admin API, Telemetry receiver)
+│   │       └── plugin/        # Dynamic Janino hot-swap compiler service
+│   └── Dockerfile        # Multi-stage Java 25 build and JRE runner
+├── docs/                 # Next.js 15 Documentation Website (Port 3000)
+│   ├── app/              # Next.js App Router (Landing page & doc routes)
+│   └── public/           # Branding assets (logo.png, banner.png)
+├── cognigate.config.yml  # Unified configuration default manifest
+├── docker-compose.yml    # Full-stack orchestrator manifest
+├── setup.sh              # Bash script for Linux/macOS setup
+└── setup.ps1             # PowerShell script for Windows setup
+```
+
+## 1. Edge Proxy Module (Go)
+
+The edge proxy is designed for maximum speed and zero overhead:
+
+- **`main.go`**: Launches a Fiber v2 server, connects to Redis, and registers the main chat completion endpoint (`POST /v1/chat/completions`).
+- **`router.go`**: Implements active round-robin key rotation and circuit breaking. Inspects downstream HTTP status codes and excludes unhealthy keys from the rotation pool.
+- **`redis.go`**: Launches a Redis connection pool. Spawns a background goroutine listening on the `cognigate:cache:invalidate` Pub/Sub channel to purge local memory caches.
+- **`telemetry.go`**: Spawns an asynchronous worker queue that dispatches usage data to the domain engine without blocking the user response.
+
+## 2. Domain Engine Module (Java)
+
+The admin engine coordinates all state modifications, billing logic, and plugin execution:
+
+- **JPA Entities (`entity/`)**:
+    - `Tenant`: Manages isolated client environments and master bearer keys.
+    - `ProviderKey`: Holds provider details and encrypted keys (AES-256-GCM).
+    - `RoutingRule`: Defines primary models, fallback models, and prioritization.
+    - `UsageMetric`: Captures token consumption audit records.
+- **Core Services (`service/`)**:
+    - `EncryptionService`: Performs AES-256-GCM encryption/decryption using `ENCRYPTION_MASTER_KEY`.
+    - `CacheSyncService`: Serializes configurations into JSON and pushes them to Redis.
+- **Plugin Manager (`plugin/`)**:
+    - Uses the Janino compiler to compile uploaded raw Java code in-memory, loading it dynamically into custom classloaders for hot-swappable routing extensions.
+
+## 3. Unified Configuration (YAML)
+
+The [cognigate.config.yml](https://github.com/Life-Experimentalist/CogniGate/blob/main/cognigate.config.yml) file provides default values and schema documentation for all environment options, including database parameters, thread models (virtual threads enabled by default), billing schedules, and docs locations.

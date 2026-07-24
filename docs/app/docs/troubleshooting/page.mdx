@@ -1,0 +1,54 @@
+export const metadata = {
+    title: "Troubleshooting",
+    description:
+        "Diagnose and resolve common issues with CogniGate, including key decryption errors, Redis synchronization failures, and Janino plugin compilation errors.",
+};
+
+# Troubleshooting Guide
+
+This guide documents common errors, diagnostic strategies, and steps to resolve issues with your CogniGate cluster.
+
+## 1. Common Request Errors
+
+### 401 Unauthorized
+
+- **Symptom**: Requests to the Edge Proxy on port `8080` return a `401 Unauthorized` response.
+- **Checks**:
+    1. Verify the request has the correct header format: `Authorization: Bearer cg-...`.
+    2. Confirm the tenant key exists in the database. Run `GET /api/admin/tenants` to list active keys.
+    3. Verify that the key is synced to Redis under the prefix `tenant:cfg:`.
+
+### 429 / Model Exhausted
+
+- **Symptom**: Requests return `429 Rate Limited or model exhausted`.
+- **Checks**:
+    1. All registered keys for the target model are marked unhealthy in Redis due to consecutive downstream rate-limits. Add additional provider keys to increase quota.
+    2. Check if your backup models are correctly configured. If all primary keys fail, the router should automatically cascade to the configured `backupModelName`.
+
+---
+
+## 2. Backend & System Failures
+
+### Janino Compiler Errors
+
+- **Symptom**: Uploading a plugin returns a `500 Dynamic compilation failed` status.
+- **Reason**: The uploaded `.java` file uses Java syntax that the Janino compiler cannot process.
+- **Remedy**: Janino supports a subset of the Java language. Simplify the plugin code:
+    - Avoid Java Records and modern switch pattern matching.
+    - Replace complex nested lambda streams with standard for-loops and collections.
+    - Ensure the class imports matches standard libraries or dependencies in `pom.xml`.
+
+### Redis Cache Mismatches
+
+- **Symptom**: Changes made via the Admin API do not seem to take effect in the Edge Proxy.
+- **Reason**: Cache synchronization between Java and Go failed because the Redis Pub/Sub invalidation channel is disconnected.
+- **Remedy**:
+    1. Verify that Redis is running: `docker compose ps redis`.
+    2. Check Domain Engine logs for Pub/Sub exceptions during key creation.
+    3. Verify the Redis configuration prefix match in [cognigate.config.yml](https://github.com/Life-Experimentalist/CogniGate/blob/main/cognigate.config.yml) (default `tenant:cfg:`).
+
+### Decryption Failures
+
+- **Symptom**: Java Domain Engine logs show `javax.crypto.AEADBadTagException: Tag mismatch!`.
+- **Reason**: The `ENCRYPTION_MASTER_KEY` used to decrypt the API keys in PostgreSQL does not match the key that was used to encrypt them.
+- **Remedy**: Restore the original `ENCRYPTION_MASTER_KEY` value in your `.env` file. If the master key was permanently lost, you must re-save all provider API keys via the Admin API.

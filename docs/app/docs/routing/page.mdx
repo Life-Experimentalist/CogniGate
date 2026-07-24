@@ -1,0 +1,94 @@
+import { Mermaid } from "../../components/Mermaid";
+
+export const metadata = {
+    title: "Routing & Failover",
+    description:
+        "Learn how CogniGate manages multi-tenant model routing, round-robin key rotation, circuit breakers, and backup model cascading.",
+};
+
+# Routing & Failover
+
+CogniGate acts as a cognitive gateway, ensuring your application always has access to AI models even during provider outages, rate-limit exhaustion, or credential failures.
+
+## Key Rotation
+
+For any model request, CogniGate cycles through all active provider API keys registered for that tenant. This prevents hitting individual key rate limits and maximizes throughput.
+
+- **Round-Robin Cycling**: Requests are distributed evenly across active keys for the target provider.
+- **Hot-Swap Invalidation**: If an administrator adds or removes a key, the change propagates system-wide via Redis Pub/Sub, updating the rotation pool in milliseconds without request interruption.
+
+## Failover Sequence
+
+<Mermaid chart={`
+flowchart TD
+  Req[Incoming Request]
+  Keys{Active Key Pool?}
+  SelectKey[Select Next Key Round-Robin]
+  CallLLM[Call LLM Provider]
+  Success{Call Success?}
+  Cascade{Fallback Model?}
+  Unhealthy[Mark Key Unhealthy in Redis]
+  Return[Return Response]
+  TriggerFallback[Cascade to Backup Model]
+  Fail[Return 429 / 5xx Error]
+
+Req --> Keys
+Keys -->|Yes| SelectKey
+SelectKey --> CallLLM
+CallLLM --> Success
+Success -->|Yes| Return
+Success -->|No| Unhealthy
+Unhealthy --> Cascade
+Keys -->|No| Cascade
+Cascade -->|Yes| TriggerFallback
+TriggerFallback --> Req
+Cascade -->|No| Fail
+`} />
+
+### Failover Flow Elements Described:
+
+- **Incoming Request**: Client triggers `POST /v1/chat/completions` API call.
+- **Active Key Pool**: Gateway looks up if there are active provider keys matching the model rules.
+- **Select Next Key**: Picks the next rotating credential using round-robin distribution.
+- **Call LLM**: Performs downstream API execution against the target provider.
+- **Call Success**: Evaluates HTTP status. 200 outputs payload; any 429/5xx error routes to failure handling.
+- **Mark Key Unhealthy**: Sets the specific key as offline in Redis with a 300s TTL.
+- **Fallback Model**: Cascades to alternative models (e.g. falling back to `gpt-3.5-turbo` when `gpt-4` keys are exhausted).
+
+## Circuit Breakers
+
+To prevent downstream failures from slowing down your applications, the Go Edge Proxy implements active circuit breaking for every provider key:
+
+1. **Interception**: When a request returns a failure status (such as a 429 Rate Limit, 401 Invalid Key, or 503 Service Unavailable), the proxy intercepts it.
+2. **Isolation**: The key is flagged as unhealthy in Redis with a configurable TTL (e.g., 300 seconds).
+3. **Recovery**: The unhealthy key is excluded from the rotation pool. Once the TTL expires, the key is placed back into a "half-open" state to verify if the downstream service has recovered.
+
+## Cascading Failover (Model Fallback)
+
+If all keys for a requested primary model are marked unhealthy, or if the primary model endpoint experiences systemic failure, CogniGate cascades the request to the tenant's configured backup model.
+
+For example, you can define a rule where requests to `gpt-4` fall back automatically to `gpt-3.5-turbo` or Anthropic's `claude-3-haiku`:
+
+```json
+{
+    "modelName": "gpt-4",
+    "backupModelName": "gpt-3.5-turbo",
+    "priority": 1
+}
+```
+
+This cascading behavior happens transparently at the proxy layer, meaning client applications see zero downtime or 5xx responses.
+
+## Configuring Routing Rules
+
+Routing rules can be customized through the Admin API:
+
+```bash
+curl -X POST http://localhost:8081/api/admin/tenants/1/rules \
+  -H "Content-Type: application/json" \
+  -d '{
+    "modelName": "gpt-4",
+    "backupModelName": "claude-3-opus",
+    "priority": 1
+  }'
+```
