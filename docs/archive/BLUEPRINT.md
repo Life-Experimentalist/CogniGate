@@ -2,7 +2,7 @@
 
 **Official Repository & Directory Name:** `CogniGate`
 
->**Branding Tagline:** *The Zero-Downtime Cognitive Router for Enterprise AI.*
+> **Branding Tagline:** _The Zero-Downtime Cognitive Router for Enterprise AI._
 
 ---
 
@@ -12,8 +12,8 @@
 
 By strictly adhering to a **polyglot architecture**, CogniGate eliminates the traditional trade-offs between network throughput and complex domain modeling:
 
-* **The Edge Proxy (`gateway-go`):** Compiled to a lightweight Go binary, it handles high-frequency prompt routing, token-bucket rate limiting, stateful round-robin key rotation, and circuit-breaking fallbacks with sub-millisecond overhead.
-* **The Domain Engine (`analytics-java`):** Built on Spring Boot and Java Virtual Threads, it manages multi-tenant isolation, tiered corporate billing, AES-256 zero-trust key encryption, and real-time in-memory bytecode compilation for proprietary AI model integrations.
+- **The Edge Proxy (`gateway-go`):** Compiled to a lightweight Go binary, it handles high-frequency prompt routing, token-bucket rate limiting, stateful round-robin key rotation, and circuit-breaking fallbacks with sub-millisecond overhead.
+- **The Domain Engine (`analytics-java`):** Built on Spring Boot and Java Virtual Threads, it manages multi-tenant isolation, tiered corporate billing, AES-256 zero-trust key encryption, and real-time in-memory bytecode compilation for proprietary AI model integrations.
 
 ### Why Just "CogniGate"?
 
@@ -25,24 +25,24 @@ Keeping the name strictly to **CogniGate** (and the repo as `/cognigate`) avoids
 
 ### High-Speed Edge Proxy (`/gateway-go`)
 
-* **Runtime / Language:** Go 1.26 (Statically linked standalone binary).
-* **HTTP Framework:** Fiber v2 (`github.com/gofiber/fiber/v2`) — chosen for zero-memory allocation routing and raw epoll/kqueue performance.
-* **State & Caching:** Go-Redis v8 (`github.com/go-redis/redis/v8`) — handles distributed token buckets and failover state tracking.
-* **Concurrency Model:** Goroutine-driven asynchronous telemetry dispatch (fire-and-forget usage reporting to the Java engine).
+- **Runtime / Language:** Go 1.26 (Statically linked standalone binary).
+- **HTTP Framework:** Fiber v2 (`github.com/gofiber/fiber/v2`) — chosen for zero-memory allocation routing and raw epoll/kqueue performance.
+- **State & Caching:** Go-Redis v8 (`github.com/go-redis/redis/v8`) — handles distributed token buckets and failover state tracking.
+- **Concurrency Model:** Goroutine-driven asynchronous telemetry dispatch (fire-and-forget usage reporting to the Java engine).
 
 ### Enterprise Domain & Analytics Engine (`/analytics-java`)
 
-* **Runtime / Language:** Java 21 / Java 25 LTS (Compiled to an Eclipse Temurin Fat-JAR with Project Loom / Virtual Threads explicitly enabled via `spring.threads.virtual.enabled=true`).
-* **Framework:** Spring Boot 4.1 (Spring Web, Spring Data JPA, Spring Security, Spring Actuator).
-* **Database ORM:** Hibernate / JPA with the PostgreSQL JDBC Driver.
-* **Dynamic Compiler:** Janino 3.1.12 (`org.codehaus.janino:janino`) — enables real-time in-memory compilation of `.java` plugin files without JVM restarts.
-* **Serialization:** Jackson (JSON/TOML mapping) + Lombok (boilerplate reduction).
+- **Runtime / Language:** Java 21 / Java 25 LTS (Compiled to an Eclipse Temurin Fat-JAR with Project Loom / Virtual Threads explicitly enabled via `spring.threads.virtual.enabled=true`).
+- **Framework:** Spring Boot 4.1 (Spring Web, Spring Data JPA, Spring Security, Spring Actuator).
+- **Database ORM:** Hibernate / JPA with the PostgreSQL JDBC Driver.
+- **Dynamic Compiler:** Janino 3.1.12 (`org.codehaus.janino:janino`) — enables real-time in-memory compilation of `.java` plugin files without JVM restarts.
+- **Serialization:** Jackson (JSON/TOML mapping) + Lombok (boilerplate reduction).
 
 ### Shared Infrastructure & Persistence
 
-* **Relational Database:** PostgreSQL 16 Alpine — single source of truth for organizations, encrypted provider keys, routing failover rules, and financial billing ledgers.
-* **Distributed Cache & Pub/Sub:** Redis 7 Alpine — acts as the fast-path configuration bridge between Java and Go, and broadcasts instant cache-invalidation events across nodes.
-* **Container Orchestration:** Docker & Docker Compose (Multi-stage builds producing sub-30MB Go images and optimized Java runtime containers).
+- **Relational Database:** PostgreSQL 16 Alpine — single source of truth for organizations, encrypted provider keys, routing failover rules, and financial billing ledgers.
+- **Distributed Cache & Pub/Sub:** Redis 7 Alpine — acts as the fast-path configuration bridge between Java and Go, and broadcasts instant cache-invalidation events across nodes.
+- **Container Orchestration:** Docker & Docker Compose (Multi-stage builds producing sub-30MB Go images and optimized Java runtime containers).
 
 ---
 
@@ -140,8 +140,8 @@ When `gateway-go` processes a prompt, it executes a strict failure-mitigation lo
 
 CogniGate supports two tiers of custom provider onboarding:
 
-* **Tier 1: Declarative JSON/TOML Mapping (`JsonMapper.java`):** For endpoints that conform strictly to the OpenAI chat completion schema (e.g., Groq, TogetherAI, local vLLM). The admin uploads a simple JSON file specifying the target Base URL and header authorization format.
-* **Tier 2: Dynamic Bytecode Hot-Swapping (`PluginManager.java`):** For providers with proprietary streaming protocols or complex cryptographic signing requirements (e.g., AWS Bedrock SigV4). The admin uploads a raw `.java` file implementing `AiProviderHandler`. Janino compiles the source code into bytecode in memory and injects it into the Spring ApplicationContext with zero downtime.
+- **Tier 1: Declarative JSON/TOML Mapping (`JsonMapper.java`):** For endpoints that conform strictly to the OpenAI chat completion schema (e.g., Groq, TogetherAI, local vLLM). The admin uploads a simple JSON file specifying the target Base URL and header authorization format.
+- **Tier 2: Dynamic Bytecode Hot-Swapping (`PluginManager.java`):** For providers with proprietary streaming protocols or complex cryptographic signing requirements (e.g., AWS Bedrock SigV4). The admin uploads a raw `.java` file implementing `AiProviderHandler`. Janino compiles the source code into bytecode in memory and injects it into the Spring ApplicationContext with zero downtime.
 
 ---
 
@@ -161,7 +161,7 @@ CogniGate does not calculate tokens locally at the edge. Instead, `gateway-go` e
 
 ### How do we prevent "noisy neighbor" problems where one tenant exhausts system connections?
 
-While upstream API limits are handled via round-robin rotation, local proxy exhaustion is prevented by **Bucket4j / Go-Redis rate limiting**. Each tenant API key is assigned a strict maximum requests-per-second (RPS) and concurrent connection limit. If a tenant exceeds their local threshold, `gateway-go` rejects the request immediately with `429 Too Many Requests` *before* initiating any upstream HTTP connections or hitting third-party APIs.
+While upstream API limits are handled via round-robin rotation, local proxy exhaustion is prevented by **Bucket4j / Go-Redis rate limiting**. Each tenant API key is assigned a strict maximum requests-per-second (RPS) and concurrent connection limit. If a tenant exceeds their local threshold, `gateway-go` rejects the request immediately with `429 Too Many Requests` _before_ initiating any upstream HTTP connections or hitting third-party APIs.
 
 ---
 
@@ -172,15 +172,15 @@ Pipe these exact instructions into your local agent (`gstack` / Antigravity) to 
 1. **Initialize Workspace:** Create the root directory `cognigate/` and generate the exact subdirectory structure and empty placeholder files outlined in Section 3.
 2. **Orchestration Scaffold:** Write `docker-compose.yml` configuring networking between `gateway-go` (port 8080), `analytics-java` (port 8081), `postgres-db` (port 5432), and `redis` (port 6379). Include health checks and persistent volume mapping for PostgreSQL (`pgdata`).
 3. **Domain & ORM Foundation (Java):**
-* Configure `analytics-java/pom.xml` with Spring Boot 4.1, Java 21 compiler properties, PostgreSQL JDBC driver, Spring Data JPA, Lombok, and Janino 3.1.12.
-* Implement the four JPA entity classes (`Tenant`, `ProviderKey`, `RoutingRule`, `UsageMetric`) with strict relational mapping (`@OneToMany`, `@ManyToOne`, `@Column(unique=true)`).
-* Implement `EncryptionService.java` utilizing `javax.crypto.Cipher` with AES-256-GCM to securely encrypt and decrypt the `apiKey` string attribute in `ProviderKey`.
 
+- Configure `analytics-java/pom.xml` with Spring Boot 4.1, Java 21 compiler properties, PostgreSQL JDBC driver, Spring Data JPA, Lombok, and Janino 3.1.12.
+- Implement the four JPA entity classes (`Tenant`, `ProviderKey`, `RoutingRule`, `UsageMetric`) with strict relational mapping (`@OneToMany`, `@ManyToOne`, `@Column(unique=true)`).
+- Implement `EncryptionService.java` utilizing `javax.crypto.Cipher` with AES-256-GCM to securely encrypt and decrypt the `apiKey` string attribute in `ProviderKey`.
 
 4. **Edge Proxy Skeleton (Go):**
-* Initialize `gateway-go/go.mod` with Go 1.26, `gofiber/fiber/v2`, and `go-redis/redis/v8`.
-* Write `redis.go` to establish the Redis client connection pool and a background Goroutine listening to the `cognigate:cache:invalidate` Pub/Sub channel.
-* Write `main.go` and `router.go` to expose `POST /v1/chat/completions`, validate incoming Bearer tokens against Redis, and return a mock OpenAPI-compliant JSON response.
 
+- Initialize `gateway-go/go.mod` with Go 1.26, `gofiber/fiber/v2`, and `go-redis/redis/v8`.
+- Write `redis.go` to establish the Redis client connection pool and a background Goroutine listening to the `cognigate:cache:invalidate` Pub/Sub channel.
+- Write `main.go` and `router.go` to expose `POST /v1/chat/completions`, validate incoming Bearer tokens against Redis, and return a mock OpenAPI-compliant JSON response.
 
 5. **Verification Build:** Execute `docker-compose up --build -d` and verify that all four containers initialize cleanly, database tables are auto-generated by Hibernate, and `curl -i http://localhost:8080/v1/chat/completions -H "Authorization: Bearer test"` successfully hits the Go edge proxy.
