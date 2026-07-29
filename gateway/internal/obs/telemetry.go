@@ -11,8 +11,11 @@ import (
 
 // Sink persists a usage record. In a compose deployment this is the analytics
 // client; in --dev it is the in-memory store.
+//
+// The signature matches store.Store's own, so either implementation is a Sink
+// without an adapter in between.
 type Sink interface {
-	RecordUsage(ctx context.Context, rec store.UsageRecord) error
+	RecordUsage(ctx context.Context, rec *store.UsageRecord) error
 }
 
 // Telemetry is the bounded, asynchronous path from a served request to durable
@@ -110,7 +113,9 @@ func (t *Telemetry) deliver(rec store.UsageRecord) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	if err := t.sink.RecordUsage(ctx, rec); err != nil && t.log != nil {
+	// The queue holds values, so this pointer is to the goroutine's own copy: a
+	// sink that retains it cannot reach another request's record.
+	if err := t.sink.RecordUsage(ctx, &rec); err != nil && t.log != nil {
 		t.log.Warn("usage record could not be persisted",
 			slog.String("request_id", rec.RequestID),
 			slog.String("error", err.Error()))
