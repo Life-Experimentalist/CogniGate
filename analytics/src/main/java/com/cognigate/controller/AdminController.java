@@ -6,6 +6,7 @@ import com.cognigate.entity.RoutingRule;
 import com.cognigate.repository.TenantRepository;
 import com.cognigate.repository.ProviderKeyRepo;
 import com.cognigate.repository.RoutingRuleRepo;
+import com.cognigate.plugin.PluginManager;
 import com.cognigate.service.CacheSyncService;
 import com.cognigate.service.EncryptionService;
 import lombok.Data;
@@ -26,17 +27,20 @@ public class AdminController {
     private final RoutingRuleRepo routingRuleRepo;
     private final EncryptionService encryptionService;
     private final CacheSyncService cacheSyncService;
+    private final PluginManager pluginManager;
 
     public AdminController(TenantRepository tenantRepository,
                            ProviderKeyRepo providerKeyRepo,
                            RoutingRuleRepo routingRuleRepo,
                            EncryptionService encryptionService,
-                           CacheSyncService cacheSyncService) {
+                           CacheSyncService cacheSyncService,
+                           PluginManager pluginManager) {
         this.tenantRepository = tenantRepository;
         this.providerKeyRepo = providerKeyRepo;
         this.routingRuleRepo = routingRuleRepo;
         this.encryptionService = encryptionService;
         this.cacheSyncService = cacheSyncService;
+        this.pluginManager = pluginManager;
     }
 
     @PostMapping("/tenants")
@@ -99,15 +103,17 @@ public class AdminController {
     }
 
     @PostMapping("/plugins/upload")
-    public ResponseEntity<?> uploadPlugin(@RequestParam("file") MultipartFile file) {
+    public ResponseEntity<?> uploadPlugin(@RequestParam("file") MultipartFile file, @RequestParam("className") String className) {
         if (file.isEmpty()) {
             return ResponseEntity.badRequest().body("File is empty");
         }
-        
-        // This is a placeholder for the dynamic class compiler.
-        // We will tie this to PluginManager.java in the next step.
-        String fileName = file.getOriginalFilename();
-        return ResponseEntity.ok("Plugin " + fileName + " uploaded successfully (compilation pending).");
+        try {
+            String sourceCode = new String(file.getBytes(), java.nio.charset.StandardCharsets.UTF_8);
+            pluginManager.loadPlugin(className, sourceCode);
+            return ResponseEntity.ok("Plugin class " + className + " compiled and loaded successfully.");
+        } catch (Exception e) {
+            return ResponseEntity.status(500).body("Dynamic compilation failed: " + e.getMessage());
+        }
     }
 
     @Data
