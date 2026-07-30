@@ -105,8 +105,10 @@ func TestRequestTooLarge(t *testing.T) {
 	h := newHarness(t)
 	tenant := h.newTenant("acme")
 
-	// MaxRequestBytes is 4096 in the harness; Fiber rejects this before any
-	// handler runs, which is exactly the path translateFiberError exists for.
+	// MaxRequestBytes is 4096 in the harness. This body is over that but well
+	// under bodyLimitSlack, so fasthttp reads it and limitBody is what refuses
+	// it — which is the point: the caller gets the GW-7 envelope and a request
+	// id, not a transport error on a closed connection.
 	oversize := `{"model":"test-small","messages":[{"role":"user","content":"` +
 		strings.Repeat("x", 8192) + `"}]}`
 
