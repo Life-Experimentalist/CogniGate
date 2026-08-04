@@ -11,6 +11,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 
 	"github.com/cognigate/gateway/internal/apierr"
+	"github.com/cognigate/gateway/internal/events"
 	"github.com/cognigate/gateway/internal/httpx"
 	"github.com/cognigate/gateway/internal/routing"
 	"github.com/cognigate/gateway/internal/store"
@@ -133,17 +134,9 @@ func (s *Server) adminMeta(c *fiber.Ctx) error {
 
 // eventRegistry is the closed list of event types a webhook may subscribe to.
 // Subscribing to a type outside it is rejected at creation rather than silently
-// accepted and never delivered.
-var eventRegistry = []string{
-	"quota.threshold_crossed",
-	"quota.hard_cap_reached",
-	"breaker.opened",
-	"breaker.closed",
-	"catalog.model_added",
-	"catalog.model_removed",
-	"alias.degraded",
-	"rule.degraded",
-}
+// accepted and never delivered. It is the dispatcher's own list, so what the
+// admin API accepts and what delivery knows how to raise cannot drift apart.
+var eventRegistry = events.Registry
 
 // --- tenants ----------------------------------------------------------------
 
