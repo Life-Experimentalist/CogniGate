@@ -119,8 +119,16 @@ func (s *Server) streamCompletion(c *fiber.Ctx, tenantID, requested string, body
 	c.Set("X-Accel-Buffering", "no")
 	c.Status(fiber.StatusOK)
 
-	requestID := httpx.RequestID(c)
-	logger := s.Logger
+	// Everything the usage record needs is read here, while the request is still
+	// alive, and carried into the writer by the closure. Reading any of it from
+	// the Fiber context inside the writer would be reading a recycled request:
+	// the handler has returned by the time the writer runs.
+	var (
+		requestID       = httpx.RequestID(c)
+		clientRequestID = httpx.ClientRequestID(c)
+		prefix          = keyPrefix(c)
+		logger          = s.Logger
+	)
 
 	c.Context().SetBodyStreamWriter(func(w *bufio.Writer) {
 		defer result.Response.Close()
@@ -143,7 +151,7 @@ func (s *Server) streamCompletion(c *fiber.Ctx, tenantID, requested string, body
 				slog.String("error", relayErr.Error()))
 		}
 
-		s.meterStream(requestID, c, result, requested, usage, time.Since(started))
+		s.meterStream(requestID, clientRequestID, tenantID, prefix, result, requested, usage, time.Since(started))
 	})
 
 	return nil
@@ -262,9 +270,18 @@ func (s *Server) meter(c *fiber.Ctx, result *routing.Result, requested string, u
 
 // meterStream is meter's counterpart for the streaming path, where the Fiber
 // context's own buffers are no longer safe to read: the handler has returned and
-// fasthttp may have recycled them. Everything needed is captured up front.
-func (s *Server) meterStream(requestID string, c *fiber.Ctx, result *routing.Result, requested string, usage *provider.Usage, elapsed time.Duration) {
-	s.record(requestID, "", "", "", result, requested, usage, true, fiber.StatusOK, elapsed)
+// fasthttp may have recycled them. So the identity of the request is passed in
+// as plain strings, captured by streamCompletion while the request was alive. A
+// streamed completion is metered exactly like a buffered one — anything less and
+// the most common shape of traffic would be missing from usage, quota and
+// billing.
+func (s *Server) meterStream(
+	requestID, clientRequestID, tenantID, prefix string,
+	result *routing.Result, requested string,
+	usage *provider.Usage, elapsed time.Duration,
+) {
+	s.record(requestID, clientRequestID, tenantID, prefix,
+		result, requested, usage, true, fiber.StatusOK, elapsed)
 }
 
 func (s *Server) record(
