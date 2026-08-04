@@ -1,0 +1,64 @@
+name: Feature Request
+description: Suggest a new feature or capability for CogniGate
+title: "[Feature]: "
+labels: ["enhancement", "needs-triage"]
+assignees: ["VKrishna04"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Have an idea to make CogniGate better? We'd love to hear it!
+
+  - type: checkboxes
+    id: existing-issue
+    attributes:
+      label: Is there an existing issue for this?
+      options:
+        - label: I have searched existing issues and discussions
+          required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Feature Area
+      options:
+        - "Gateway Routing / Circuit Breaker"
+        - "Plugin System"
+        - "Admin API"
+        - "Billing Engine"
+        - "Authentication / Security"
+        - "Observability / Monitoring"
+        - "Documentation / Docs Site"
+        - "Developer Experience (DX)"
+        - "Other"
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: Describe the problem or limitation you're facing.
+      placeholder: "Currently, there's no way to..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposed-solution
+    attributes:
+      label: Proposed Solution
+      description: Describe your ideal solution or API design.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: Any alternative approaches you've thought about?
+
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Additional Context
+      description: Add any mockups, diagrams, or external references.

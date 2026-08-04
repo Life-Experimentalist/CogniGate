@@ -1,0 +1,120 @@
+name: CI — Build & Test
+
+on:
+  push:
+    branches: ["main", "develop"]
+  pull_request:
+    branches: ["main"]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ============================================================
+  # Java — Spring Boot Analytics Engine
+  # ============================================================
+  build-analytics:
+    name: Analytics (Java 25 / Spring Boot 4.1)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: analytics
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Java 25
+        uses: actions/setup-java@v4
+        with:
+          java-version: "25"
+          distribution: "temurin"
+          cache: "maven"
+
+      - name: Build with Maven (skip tests)
+        run: mvn -B package -DskipTests
+
+      - name: Run Unit Tests
+        run: mvn -B test
+
+      - name: Upload Test Reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: analytics-test-reports
+          path: analytics/target/surefire-reports/
+
+  # ============================================================
+  # Go — Edge Proxy Gateway
+  # ============================================================
+  build-gateway:
+    name: Gateway (Go 1.26)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: gateway
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go 1.26
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache: true
+
+      - name: Verify Go modules
+        run: go mod verify
+
+      - name: Run go vet
+        run: go vet ./...
+
+      - name: Run Tests
+        run: go test -v -race ./...
+
+      - name: Build static binary
+        run: CGO_ENABLED=0 GOOS=linux go build -o gateway .
+
+  # ============================================================
+  # Docker Compose — Integration Smoke Test
+  # ============================================================
+  integration-smoke:
+    name: Docker Compose Smoke Test
+    runs-on: ubuntu-latest
+    needs: [build-analytics, build-gateway]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create .env from example
+        run: |
+          cp .env.example .env
+          KEY=$(openssl rand -hex 32)
+          sed -i "s/ENCRYPTION_MASTER_KEY=.*/ENCRYPTION_MASTER_KEY=${KEY}/" .env
+
+      - name: Build and start containers
+        run: docker-compose up --build -d
+
+      - name: Wait for services to be healthy
+        run: |
+          echo "Waiting for services..."
+          sleep 30
+
+      - name: Smoke test — Gateway health
+        run: curl -sf http://localhost:8080/health
+
+      - name: Smoke test — Chat completions endpoint
+        run: |
+          curl -sf -X POST http://localhost:8080/v1/chat/completions \
+            -H "Authorization: Bearer test" \
+            -H "Content-Type: application/json" \
+            -d '{"model":"gpt-4","messages":[{"role":"user","content":"Hello!"}]}' \
+            | jq '.object' | grep "chat.completion"
+
+      - name: Print logs on failure
+        if: failure()
+        run: docker-compose logs
+
+      - name: Tear down
+        if: always()
+        run: docker-compose down -v

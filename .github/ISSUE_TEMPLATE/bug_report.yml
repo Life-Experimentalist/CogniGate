@@ -1,0 +1,87 @@
+name: Bug Report
+description: Report a reproducible defect or unexpected behavior in CogniGate
+title: "[Bug]: "
+labels: ["bug", "needs-triage"]
+assignees: ["VKrishna04"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to fill out this bug report! Please be as detailed as possible to help us resolve it quickly.
+
+  - type: checkboxes
+    id: existing-issue
+    attributes:
+      label: Is there an existing issue for this?
+      description: Please search to see if an issue already exists for the bug you encountered.
+      options:
+        - label: I have searched the existing issues
+          required: true
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Affected Component
+      description: Which part of CogniGate is affected?
+      options:
+        - "Gateway (Go Edge Proxy)"
+        - "Analytics (Spring Boot Domain Engine)"
+        - "Docker / docker-compose"
+        - "Plugin System (Janino / ClassLoader)"
+        - "Billing / EncryptionService"
+        - "Documentation"
+        - "Other"
+    validations:
+      required: true
+
+  - type: textarea
+    id: current-behavior
+    attributes:
+      label: Current Behavior
+      description: A concise description of what actually happened.
+      placeholder: "When I do X, Y happens instead of Z..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected-behavior
+    attributes:
+      label: Expected Behavior
+      description: A concise description of what you expected to happen.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps-to-reproduce
+    attributes:
+      label: Steps to Reproduce
+      description: Minimal, reproducible steps to reliably recreate the bug.
+      placeholder: |
+        1. Run `docker-compose up --build`
+        2. Call `POST /v1/chat/completions` with `...`
+        3. Observe error `...`
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: |
+        Please fill in the details of your environment.
+      value: |
+        - **OS**: [e.g. Ubuntu 24.04, Windows 11, macOS 15]
+        - **Docker Version**: [e.g. 27.x]
+        - **Docker Compose Version**: [e.g. v2.x]
+        - **Java Version (if relevant)**: [e.g. Java 25]
+        - **Go Version (if relevant)**: [e.g. Go 1.26]
+        - **CogniGate Version / Git SHA**: [e.g. v0.1.0-alpha or commit sha]
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant Log Output
+      description: Paste relevant log output from `docker-compose logs` here.
+      render: shell
