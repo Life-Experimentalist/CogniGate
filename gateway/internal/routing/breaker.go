@@ -1,6 +1,7 @@
 package routing
 
 import (
+	"strings"
 	"sync"
 	"time"
 )
@@ -85,8 +86,31 @@ func NewBreaker(threshold int, window, openFor time.Duration, onChange func(key 
 }
 
 // Key is the breaker's unit of isolation: one provider's failure on one model
-// must not take that provider's other models out of rotation.
-func Key(providerName, model string) string { return providerName + "/" + model }
+// must not take that provider's other models out of rotation, and one tenant's
+// outage must not take another tenant's traffic down with it.
+//
+// The tenant is part of the key because provider names are tenant-scoped. Two
+// tenants that each call their provider "primary" are naming different upstreams
+// — possibly different vendors, certainly different credentials — and without
+// the tenant here they would share one breaker entry, so one tenant's bad key
+// would stop the other's requests.
+func Key(tenantID, providerName, model string) string {
+	return tenantID + "/" + providerName + "/" + model
+}
+
+// SplitKey reverses Key.
+//
+// The split is counted from the left and stops after two separators: tenant ids
+// and provider names never contain a slash, but a model id can — the qualified
+// "provider/model" form is a legitimate catalog id — so the model must take
+// whatever remains rather than being assumed to be one segment.
+func SplitKey(key string) (tenantID, providerName, model string) {
+	parts := strings.SplitN(key, "/", 3)
+	if len(parts) != 3 {
+		return "", "", key
+	}
+	return parts[0], parts[1], parts[2]
+}
 
 // Allow reports whether a candidate may be tried. A false result means the
 // candidate is skipped with zero upstream calls, which is what GW-3 requires an

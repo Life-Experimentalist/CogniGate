@@ -394,13 +394,23 @@ func (s *Server) buildHealth(ctx context.Context, tenantID string) healthReport 
 	// Only the breakers that are not closed are reported. Listing every healthy
 	// pair would make the response grow with the catalog and bury the one line
 	// that matters.
+	//
+	// The breaker is process-wide, so its snapshot holds every tenant's entries.
+	// Only this tenant's are reported, and the tenant segment is stripped so the
+	// keys read as "<provider>/<model>" — the same shape as X-CogniGate-Served-By.
+	// Reporting the raw snapshot would tell one tenant the provider names and
+	// current failures of every other tenant on the deployment.
 	if s.Dispatcher != nil {
 		open := map[string]string{}
 		for key, state := range s.Dispatcher.Breaker().Snapshot() {
 			if state == routing.StateClosed {
 				continue
 			}
-			open[key] = state.String()
+			owner, provider, model := routing.SplitKey(key)
+			if owner != tenantID {
+				continue
+			}
+			open[provider+"/"+model] = state.String()
 			report.Status = "degraded"
 		}
 		if len(open) > 0 {
