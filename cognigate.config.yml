@@ -17,10 +17,9 @@ cognigate:
   # =====================================================
   gateway:
     port: 8080
-    # Redis connection address (host:port)
-    redis_url: "redis:6379"
-    # Local in-memory cache TTL when Redis is unreachable (circuit breaker mode)
-    fallback_cache_ttl_seconds: 300
+    # The admin-plane bootstrap credential. Set it via CG_ADMIN_BOOTSTRAP_KEY;
+    # a value written here is a credential in version control.
+    bootstrap_key_env: "GATEWAY_BOOTSTRAP_KEY"
     # Rate limiting defaults per tenant (can be overridden per-tenant)
     rate_limit:
       requests_per_second: 50

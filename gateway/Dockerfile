@@ -1,28 +1,42 @@
-# Stage 1: Build the static Go binary
-FROM golang:1.23-alpine AS builder
+# CogniGate edge gateway.
+#
+# The result is a static binary on a minimal base: CGO_ENABLED=0 is a GW-11
+# requirement, not an optimisation, because a gateway that needs a libc at the
+# version it was linked against is not a single artefact an operator can copy.
+
+FROM golang:1.26-alpine AS builder
 
 WORKDIR /app
-
-# We use Go 1.23 as the stable backend for building, 
-# although the user prompted for Go 1.26 syntax in go.mod, 
-# golang:1.26-alpine image doesn't exist yet in dockerhub.
-# We map it to 1.23 to ensure it builds successfully right now.
 
 COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
 
-# Build statically linked binary
-RUN CGO_ENABLED=0 GOOS=linux go build -o gateway .
+# VERSION is stamped into the binary so /healthz and /v1/meta report something
+# an operator can match to a release. It defaults to "dev" for a local build.
+ARG VERSION=dev
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags "-s -w -X main.version=${VERSION}" -o cognigate .
 
-# Stage 2: Minimal runtime image
-FROM alpine:latest
-RUN apk --no-cache add ca-certificates
+FROM alpine:3.24
+
+# ca-certificates so the gateway can dial provider APIs over TLS; wget is
+# busybox's and is what the container healthcheck below runs.
+RUN apk add --no-cache ca-certificates
+
+# An unprivileged user: nothing the gateway does needs root, and the process
+# writes nothing to disk.
+RUN adduser -D -u 10001 cognigate
+USER cognigate
 
 WORKDIR /app
-COPY --from=builder /app/gateway .
+COPY --from=builder /app/cognigate .
 
 EXPOSE 8080
 
-CMD ["./gateway"]
+# /healthz is dependency-free and starts failing the moment a drain begins, so
+# it is exactly the signal an orchestrator should steer on.
+HEALTHCHECK --interval=5s --timeout=3s --start-period=5s --retries=6 \
+  CMD wget -qO- http://127.0.0.1:8080/healthz || exit 1
+
+ENTRYPOINT ["./cognigate"]

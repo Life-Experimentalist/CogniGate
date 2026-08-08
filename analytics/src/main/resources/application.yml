@@ -9,6 +9,10 @@ spring:
     username: ${SPRING_DATASOURCE_USERNAME:cognigate_user}
     password: ${SPRING_DATASOURCE_PASSWORD:cognigate_pass}
     driver-class-name: org.postgresql.Driver
+  data:
+    redis:
+      host: ${SPRING_DATA_REDIS_HOST:localhost}
+      port: ${SPRING_DATA_REDIS_PORT:6379}
   jpa:
     hibernate:
       ddl-auto: update
@@ -19,3 +23,15 @@ spring:
 
 server:
   port: 8081
+
+# Only the health endpoint is exposed. The rest of the actuator surface —
+# env, beans, mappings, heapdump — describes the process in enough detail
+# that publishing it by default would be a disclosure, not a convenience.
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: never
