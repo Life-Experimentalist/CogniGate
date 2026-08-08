@@ -122,35 +122,86 @@ cd CogniGate
 
 This single command:
 1. ✅ Copies `.env.example` → `.env`
-2. ✅ Auto-generates a secure `ENCRYPTION_MASTER_KEY`
-3. ✅ Builds and starts all 4 services (Gateway, Analytics, PostgreSQL, Redis)
+2. ✅ Auto-generates a secure `ENCRYPTION_MASTER_KEY` and `GATEWAY_BOOTSTRAP_KEY`
+3. ✅ Builds and starts all 4 services (Gateway, Analytics, PostgreSQL, Redis), waiting until each reports healthy
 
 ### Verify It's Running
 
 ```bash
-# Health check
-curl http://localhost:8080/health
-# → OK
+curl -s http://localhost:8080/healthz
+# → {"status":"ok","version":"dev"}
+```
 
-# Create a tenant
-curl -X POST "http://localhost:8081/api/admin/tenants?name=my-org"
-# → {"id":1,"name":"my-org","cognigateApiKey":"cg-..."}
+### Your First API Key
 
-# Add an OpenAI API key for the tenant
-curl -X POST http://localhost:8081/api/admin/tenants/1/keys \
+The admin plane is reached with an `Authorization: Bearer` credential, exactly
+like the data plane. Before any tenant exists there is only one such credential:
+the bootstrap key that setup generated into `.env`.
+
+```bash
+BOOTSTRAP=$(grep '^GATEWAY_BOOTSTRAP_KEY=' .env | cut -d= -f2-)
+
+# 1. Create a tenant.
+curl -s -X POST http://localhost:8080/admin/v1/tenants \
+  -H "Authorization: Bearer $BOOTSTRAP" \
   -H "Content-Type: application/json" \
-  -d '{"providerName":"openai","apiKey":"sk-proj-..."}'
+  -d '{"name":"my-org"}'
+# → {"id":"ten_...","name":"my-org","status":"active",...}
 
-# Add a routing rule
-curl -X POST http://localhost:8081/api/admin/tenants/1/rules \
+# 2. Register an upstream provider for that tenant. `keys` is a pool — CogniGate
+#    rotates within it before it ever falls back to another model.
+curl -s -X POST http://localhost:8080/admin/v1/tenants/ten_.../providers \
+  -H "Authorization: Bearer $BOOTSTRAP" \
   -H "Content-Type: application/json" \
-  -d '{"modelName":"gpt-4","backupModelName":"claude-3-opus","priority":1}'
+  -d '{"name":"openai","kind":"openai","base_url":"https://api.openai.com/v1","keys":["sk-..."]}'
 
-# Make your first AI call through CogniGate
-curl -X POST http://localhost:8080/v1/chat/completions \
+# 3. Mint a data-plane key. The secret is returned once and never again.
+curl -s -X POST http://localhost:8080/admin/v1/tenants/ten_.../keys \
+  -H "Authorization: Bearer $BOOTSTRAP" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"first","plane":"data"}'
+# → {"key":{"id":"key_...","prefix":"cg-mP6XKz-R",...},"secret":"cg-...","warning":"..."}
+```
+
+Only a SHA-256 hash and the displayable prefix are stored, so nothing in
+CogniGate can recover the secret later. If it is lost, revoke the key and mint
+a new one.
+
+These examples assume a POSIX shell. In PowerShell, use `Invoke-RestMethod` —
+PowerShell rewrites the arguments it passes to a native executable, and the
+inner double quotes of a JSON body do not survive that rewrite, so `curl.exe -d
+'{"name":"my-org"}'` sends `{name:my-org}` and the gateway rejects it:
+
+```powershell
+$b = (Select-String -Path .env -Pattern "^GATEWAY_BOOTSTRAP_KEY=").Line.Split("=",2)[1]
+Invoke-RestMethod -Method Post -Uri http://localhost:8080/admin/v1/tenants `
+  -Headers @{ Authorization = "Bearer $b" } -ContentType "application/json" `
+  -Body '{"name":"my-org"}'
+```
+
+### Your First Request
+
+```bash
+curl -s http://localhost:8080/v1/models -H "Authorization: Bearer cg-..."
+
+curl -s -X POST http://localhost:8080/v1/chat/completions \
   -H "Authorization: Bearer cg-..." \
   -H "Content-Type: application/json" \
-  -d '{"model":"gpt-4","messages":[{"role":"user","content":"Hello, CogniGate!"}]}'
+  -d '{"model":"gpt-4o","messages":[{"role":"user","content":"Hello, CogniGate!"}]}'
+```
+
+Every tenant is created with the portable aliases `fast`, `balanced`, `best` and
+`transcribe`. Sending `"model": "balanced"` resolves to whatever currently fits
+that constraint in the tenant's catalog, so a client can be written once and keep
+working as providers ship new models.
+
+An ordered fallback chain is a route:
+
+```bash
+curl -s -X PUT http://localhost:8080/admin/v1/tenants/ten_.../routes \
+  -H "Authorization: Bearer $BOOTSTRAP" \
+  -H "Content-Type: application/json" \
+  -d '{"match":"gpt-4o","chain":["gpt-4o","claude-3-5-sonnet","gpt-4o-mini"]}'
 ```
 
 ---
@@ -165,12 +216,29 @@ All configuration is documented in:
 
 | Variable | Default | Description |
 |---|---|---|
-| `REDIS_URL` | `redis:6379` | Redis host:port |
+| `GATEWAY_BOOTSTRAP_KEY` | *(auto-generated)* | Admin-plane bootstrap credential; min 16 characters, no default |
 | `SPRING_DATASOURCE_URL` | `jdbc:postgresql://postgres-db:5432/cognigate` | PostgreSQL JDBC URL |
 | `SPRING_DATASOURCE_USERNAME` | `cognigate_user` | DB username |
 | `SPRING_DATASOURCE_PASSWORD` | `cognigate_pass` | DB password |
+| `SPRING_DATA_REDIS_HOST` | `redis` | Redis host for the analytics engine's config cache |
 | `ENCRYPTION_MASTER_KEY` | *(auto-generated)* | 64-char hex AES-256 master key |
 | `POSTGRES_DB` | `cognigate` | Database name |
+
+The gateway itself is configured from [`cognigate.config.yml`](cognigate.config.yml),
+and the settings below can additionally be set from the environment. The
+environment always wins over the file, and the file over the defaults. Each is
+also read without the `CG_` prefix, for platforms that inject a bare `PORT`.
+
+| Variable | Sets |
+|---|---|
+| `CG_PORT` | `gateway.port` |
+| `CG_ADMIN_BOOTSTRAP_KEY` | `admin.bootstrap_key` — what `docker-compose.yml` passes |
+| `CG_ANALYTICS_URL` | `analytics.base_url` |
+| `CG_ANALYTICS_TOKEN` | `analytics.token` |
+| `CG_METRICS_TOKEN` | `metrics.token` |
+| `CG_LOG_LEVEL` | `log.level` |
+| `CG_QUOTA_ENFORCEMENT` | `quotas.enforcement` (`on` or `observe`) |
+| `CG_CACHE_ENABLED` | `cache.enabled` |
 
 ---
 
