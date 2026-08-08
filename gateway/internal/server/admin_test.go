@@ -536,6 +536,250 @@ func TestProviderValidation(t *testing.T) {
 	}
 }
 
+// --- GW-1 catalog refresh ---------------------------------------------------
+
+// catalogRefresh is the shape of a POST /admin/v1/catalog/refresh response. Per
+// tenant rather than one verdict for the call, because refreshing ten tenants
+// and reporting only the first failure would hide the other nine results.
+type catalogRefresh struct {
+	Object    string `json:"object"`
+	Refreshed []struct {
+		Tenant string            `json:"tenant"`
+		OK     bool              `json:"ok"`
+		Models int               `json:"models"`
+		Stale  bool              `json:"stale"`
+		Error  string            `json:"error"`
+		Errors map[string]string `json:"errors"`
+	} `json:"refreshed"`
+}
+
+// refreshCatalogAs posts the refresh and decodes it, asserting only what every
+// success has in common so each test below is left saying one thing.
+func refreshCatalogAs(h *harness, key string, body any) catalogRefresh {
+	h.t.Helper()
+
+	res := h.do(http.MethodPost, "/admin/v1/catalog/refresh", key, body)
+	if res.status != http.StatusOK {
+		h.t.Fatalf("refreshing the catalog: status %d, body %s", res.status, res.body)
+	}
+	var out catalogRefresh
+	res.decode(h.t, &out)
+	if out.Object != "catalog_refresh" {
+		h.t.Errorf("object = %q, want %q", out.Object, "catalog_refresh")
+	}
+	return out
+}
+
+// catalogModelIDs is what a data-plane caller can currently address. It is the
+// only honest way to assert a refresh landed: the refresh response reports what
+// the poll found, /v1/models reports what was installed.
+func catalogModelIDs(h *harness, dataKey string) map[string]bool {
+	h.t.Helper()
+
+	var list struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	res := h.do(http.MethodGet, "/v1/models", dataKey, nil)
+	if res.status != http.StatusOK {
+		h.t.Fatalf("listing models: status %d, body %s", res.status, res.body)
+	}
+	res.decode(h.t, &list)
+
+	ids := make(map[string]bool, len(list.Data))
+	for _, m := range list.Data {
+		ids[m.ID] = true
+	}
+	return ids
+}
+
+// TestCatalogRefreshRevealsANewModelBeforeTheTTL is the reason the endpoint
+// exists. The catalog TTL is an hour by default, so without an on-demand poll a
+// model that appeared at the provider is unreachable for up to an hour after it
+// is real — and there is no way to tell the difference between "not yet
+// refreshed" and "the provider does not serve it".
+func TestCatalogRefreshRevealsANewModelBeforeTheTTL(t *testing.T) {
+	h := newHarness(t)
+	tenant := h.newTenant("acme")
+	h.addProvider(tenant.id, "up")
+
+	if !catalogModelIDs(h, tenant.dataKey)["test-small"] {
+		t.Fatal("the catalog did not warm; the rest of this test proves nothing")
+	}
+
+	h.adapter.models = append(append([]store.Model(nil), defaultModels...), store.Model{
+		ID:              "test-brand-new",
+		ContextWindow:   4096,
+		MaxOutputTokens: 1024,
+		Capabilities:    []string{"chat"},
+	})
+
+	if catalogModelIDs(h, tenant.dataKey)["test-brand-new"] {
+		t.Fatal("a new model appeared without a refresh; the TTL is not being honoured")
+	}
+
+	got := refreshCatalogAs(h, testBootstrapKey, map[string]any{"tenant": tenant.id})
+	if len(got.Refreshed) != 1 || !got.Refreshed[0].OK {
+		t.Fatalf("refresh did not report a clean poll: %+v", got.Refreshed)
+	}
+	if !catalogModelIDs(h, tenant.dataKey)["test-brand-new"] {
+		t.Error("the new model is still not addressable after a refresh")
+	}
+}
+
+// TestCatalogRefreshByRootCoversEveryTenant pins the shape that makes the
+// endpoint worth having at the top level: a provider-side change is not a
+// per-tenant event, and an operator should not have to enumerate tenants to
+// react to one.
+func TestCatalogRefreshByRootCoversEveryTenant(t *testing.T) {
+	h := newHarness(t)
+	acme := h.newTenant("acme")
+	other := h.newTenant("other")
+	h.addProvider(acme.id, "up")
+	h.addProvider(other.id, "up")
+
+	got := refreshCatalogAs(h, testBootstrapKey, nil)
+	if len(got.Refreshed) != 2 {
+		t.Fatalf("refreshed %d tenants, want 2: %+v", len(got.Refreshed), got.Refreshed)
+	}
+
+	seen := map[string]bool{}
+	for _, r := range got.Refreshed {
+		seen[r.Tenant] = true
+		if !r.OK {
+			t.Errorf("tenant %s: ok = false (error %q)", r.Tenant, r.Error)
+		}
+		if r.Models != len(defaultModels) {
+			t.Errorf("tenant %s: models = %d, want %d", r.Tenant, r.Models, len(defaultModels))
+		}
+	}
+	for _, id := range []string{acme.id, other.id} {
+		if !seen[id] {
+			t.Errorf("tenant %s was not refreshed", id)
+		}
+	}
+}
+
+// TestCatalogRefreshNarrowsToTheNamedTenant is the other half: an operator
+// fixing one tenant's provider should not pay for every other tenant's poll.
+func TestCatalogRefreshNarrowsToTheNamedTenant(t *testing.T) {
+	h := newHarness(t)
+	acme := h.newTenant("acme")
+	other := h.newTenant("other")
+	h.addProvider(acme.id, "up")
+	h.addProvider(other.id, "up")
+
+	got := refreshCatalogAs(h, testBootstrapKey, map[string]any{"tenant": acme.id})
+	if len(got.Refreshed) != 1 || got.Refreshed[0].Tenant != acme.id {
+		t.Fatalf("refreshed %+v, want only %s", got.Refreshed, acme.id)
+	}
+}
+
+// TestCatalogRefreshByTenantKeyCoversOnlyItsOwn: a tenant administrator asking
+// for "everything" gets everything it is allowed to see, which is one tenant.
+// Refusing the bodyless form would make the endpoint unusable to exactly the
+// caller most likely to need it after registering a provider.
+func TestCatalogRefreshByTenantKeyCoversOnlyItsOwn(t *testing.T) {
+	h := newHarness(t)
+	acme := h.newTenant("acme")
+	h.newTenant("other")
+	h.addProvider(acme.id, "up")
+
+	got := refreshCatalogAs(h, acme.adminKey, nil)
+	if len(got.Refreshed) != 1 || got.Refreshed[0].Tenant != acme.id {
+		t.Fatalf("refreshed %+v, want only %s", got.Refreshed, acme.id)
+	}
+
+	got = refreshCatalogAs(h, acme.adminKey, map[string]any{"tenant": acme.id})
+	if len(got.Refreshed) != 1 || got.Refreshed[0].Tenant != acme.id {
+		t.Fatalf("naming its own tenant refreshed %+v, want only %s", got.Refreshed, acme.id)
+	}
+}
+
+// TestCatalogRefreshRefusesAForeignTenant closes the hole a top-level route
+// opens: the tenant is named in the body rather than the path, so it is not
+// covered by tenantScope and has to be checked here or not at all.
+func TestCatalogRefreshRefusesAForeignTenant(t *testing.T) {
+	h := newHarness(t)
+	acme := h.newTenant("acme")
+	other := h.newTenant("other")
+
+	res := h.do(http.MethodPost, "/admin/v1/catalog/refresh", acme.adminKey,
+		map[string]any{"tenant": other.id})
+	h.expectError(res, http.StatusForbidden, apierr.CodeInsufficientScope)
+}
+
+// TestCatalogRefreshOnAnUnknownTenantIsNotFound: a tenant with no providers and
+// a tenant that does not exist both produce an empty catalog, so without an
+// existence check a typed-wrong id would report success and refresh nothing.
+func TestCatalogRefreshOnAnUnknownTenantIsNotFound(t *testing.T) {
+	h := newHarness(t)
+	h.newTenant("acme")
+
+	res := h.do(http.MethodPost, "/admin/v1/catalog/refresh", testBootstrapKey,
+		map[string]any{"tenant": "tnt_does_not_exist"})
+	h.expectError(res, http.StatusNotFound, apierr.CodeResourceNotFound)
+}
+
+// TestCatalogRefreshKeepsTheLastGoodCatalogWhenTheProviderIsDown is the
+// property that made Refresh a separate method from Invalidate. GW-1 requires
+// that a failed poll not evict the previous snapshot: a provider's listing
+// endpoint being unreachable is not a reason to stop routing traffic that would
+// otherwise succeed, and evicting here would turn one unreachable provider into
+// a cold tenant and a 503 on the data plane.
+func TestCatalogRefreshKeepsTheLastGoodCatalogWhenTheProviderIsDown(t *testing.T) {
+	h := newHarness(t)
+	tenant := h.newTenant("acme")
+	h.addProvider(tenant.id, "up")
+
+	if !catalogModelIDs(h, tenant.dataKey)["test-small"] {
+		t.Fatal("the catalog did not warm; the rest of this test proves nothing")
+	}
+
+	h.adapter.listErr = errTestUpstreamDown
+
+	got := refreshCatalogAs(h, testBootstrapKey, map[string]any{"tenant": tenant.id})
+	if len(got.Refreshed) != 1 {
+		t.Fatalf("refreshed %+v, want one entry", got.Refreshed)
+	}
+	entry := got.Refreshed[0]
+	if entry.OK || !entry.Stale {
+		t.Errorf("ok = %v, stale = %v; want a failed poll reported as stale", entry.OK, entry.Stale)
+	}
+	if entry.Models != len(defaultModels) {
+		t.Errorf("models = %d, want the previous %d retained", entry.Models, len(defaultModels))
+	}
+
+	// The refresh response saying the data was kept is not the same as the data
+	// plane still serving it, and it is the data plane that matters.
+	if !catalogModelIDs(h, tenant.dataKey)["test-small"] {
+		t.Error("a failed refresh evicted the previous catalog")
+	}
+}
+
+// TestCatalogRefreshOnAColdTenantReportsTheProviderFailure: with nothing to fall
+// back to there is no stale data to serve, and the operator has to be told why
+// rather than handed an empty catalog that looks like a misconfiguration.
+func TestCatalogRefreshOnAColdTenantReportsTheProviderFailure(t *testing.T) {
+	h := newHarness(t)
+	tenant := h.newTenant("acme")
+	h.addProvider(tenant.id, "up")
+	h.adapter.listErr = errTestUpstreamDown
+
+	got := refreshCatalogAs(h, testBootstrapKey, map[string]any{"tenant": tenant.id})
+	if len(got.Refreshed) != 1 {
+		t.Fatalf("refreshed %+v, want one entry", got.Refreshed)
+	}
+	entry := got.Refreshed[0]
+	if entry.OK {
+		t.Error("ok = true for a tenant whose only provider is unreachable")
+	}
+	if entry.Error == "" {
+		t.Error("the failure is reported without saying what went wrong")
+	}
+}
+
 // --- GW-4 quota -------------------------------------------------------------
 
 func TestQuotaValidation(t *testing.T) {
