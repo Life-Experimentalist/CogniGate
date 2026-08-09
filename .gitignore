@@ -38,3 +38,7 @@ pgdata/
 .devprune.json
 .devprune-ignore
 ignore.devprune.json
+
+# Conformance suite output (GW-10). The report describes one run against one
+# deployment, so it is an artefact, not a source file.
+conformance-report.json
