@@ -20,16 +20,28 @@ import (
 
 // modelObject is one row of the models list.
 //
-// The first four fields are OpenAI's, so an existing client parses this without
-// a special case. Everything after them is additive: a client that ignores the
-// extensions still sees a valid /v1/models response, and one that reads them
-// gets the context window and pricing it would otherwise have to hard-code.
+// The four top-level fields are OpenAI's, so an existing client parses this
+// without a special case. Everything CogniGate adds sits under a single
+// `cognigate` key rather than beside them: a client that ignores the key still
+// sees a valid /v1/models response, and nesting means OpenAI can add a field of
+// its own tomorrow without colliding with one of ours.
 type modelObject struct {
 	ID      string `json:"id"`
 	Object  string `json:"object"`
 	Created int64  `json:"created"`
 	OwnedBy string `json:"owned_by"`
 
+	CogniGate modelExtensions `json:"cognigate"`
+}
+
+// modelExtensions is what CogniGate knows about a model that OpenAI's schema has
+// nowhere to put — which provider serves it, what it costs, and whether the name
+// is a GW-2 alias rather than a provider model id.
+//
+// Fields the provider does not expose are omitted rather than guessed: a client
+// that reads context_window and gets nothing knows it has to ask the provider,
+// while one that reads a plausible-looking default does not.
+type modelExtensions struct {
 	Provider          string   `json:"provider,omitempty"`
 	ContextWindow     int      `json:"context_window,omitempty"`
 	MaxOutputTokens   int      `json:"max_output_tokens,omitempty"`
@@ -37,13 +49,17 @@ type modelObject struct {
 	InputCostPerMTok  float64  `json:"input_cost_per_mtok,omitempty"`
 	OutputCostPerMTok float64  `json:"output_cost_per_mtok,omitempty"`
 	Deprecated        bool     `json:"deprecated,omitempty"`
+	// DiscoveredAt is when the catalog snapshot carrying this model was fetched,
+	// which is how a caller tells a live listing from a stale one served through
+	// a provider outage.
+	DiscoveredAt string `json:"discovered_at,omitempty"`
 
-	// Alias marks a GW-2 name rather than a provider model id, and AliasOf says
-	// what it currently resolves to. Listing aliases here rather than on a
+	// Alias marks a GW-2 name rather than a provider model id, and ResolvesTo
+	// says what it currently means. Listing aliases here rather than on a
 	// separate route is what makes them discoverable to a caller that is picking
 	// a model from a dropdown.
-	Alias   bool   `json:"alias,omitempty"`
-	AliasOf string `json:"alias_of,omitempty"`
+	Alias      bool   `json:"alias,omitempty"`
+	ResolvesTo string `json:"resolves_to,omitempty"`
 }
 
 type modelList struct {
@@ -102,22 +118,35 @@ func (s *Server) handleGetModel(c *fiber.Ctx) error {
 
 func entryObject(e catalog.Entry, fetchedAt time.Time) modelObject {
 	return modelObject{
-		ID:                e.ID,
-		Object:            "model",
-		Created:           fetchedAt.Unix(),
-		OwnedBy:           e.Provider,
-		Provider:          e.Provider,
-		ContextWindow:     e.ContextWindow,
-		MaxOutputTokens:   e.MaxOutputTokens,
-		Capabilities:      e.Capabilities,
-		InputCostPerMTok:  e.InputCostPerMTok,
-		OutputCostPerMTok: e.OutputCostPerMTok,
-		Deprecated:        e.Deprecated,
+		ID:      e.ID,
+		Object:  "model",
+		Created: fetchedAt.Unix(),
+		OwnedBy: e.Provider,
+		CogniGate: modelExtensions{
+			Provider:          e.Provider,
+			ContextWindow:     e.ContextWindow,
+			MaxOutputTokens:   e.MaxOutputTokens,
+			Capabilities:      e.Capabilities,
+			InputCostPerMTok:  e.InputCostPerMTok,
+			OutputCostPerMTok: e.OutputCostPerMTok,
+			Deprecated:        e.Deprecated,
+			DiscoveredAt:      timestamp(fetchedAt),
+		},
 	}
 }
 
+// timestamp renders a catalog time for the wire, or nothing at all when the
+// gateway has no value to report. A zero time formatted as RFC 3339 is year 1,
+// which reads as data rather than as the absence of it.
+func timestamp(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.UTC().Format(time.RFC3339)
+}
+
 // aliasObjects renders the tenant's aliases, each resolved against the current
-// catalog. An alias that resolves to nothing is still listed — with AliasOf
+// catalog. An alias that resolves to nothing is still listed — with ResolvesTo
 // empty — because hiding it would leave an operator wondering where the alias
 // they configured went.
 func (s *Server) aliasObjects(ctx context.Context, tenantID string, snap *catalog.Snapshot) []modelObject {
@@ -129,21 +158,22 @@ func (s *Server) aliasObjects(ctx context.Context, tenantID string, snap *catalo
 	out := make([]modelObject, 0, len(aliases))
 	for _, a := range aliases {
 		obj := modelObject{
-			ID:      a.Name,
-			Object:  "model",
-			Created: a.CreatedAt.Unix(),
-			OwnedBy: "cognigate",
-			Alias:   true,
+			ID:        a.Name,
+			Object:    "model",
+			Created:   a.CreatedAt.Unix(),
+			OwnedBy:   "cognigate",
+			CogniGate: modelExtensions{Alias: true},
 		}
 		if cands, _, rerr := s.Resolver.Resolve(ctx, tenantID, a.Name); rerr == nil && len(cands) > 0 {
 			e := cands[0].Entry
-			obj.AliasOf = e.ID
-			obj.Provider = e.Provider
-			obj.ContextWindow = e.ContextWindow
-			obj.MaxOutputTokens = e.MaxOutputTokens
-			obj.Capabilities = e.Capabilities
-			obj.InputCostPerMTok = e.InputCostPerMTok
-			obj.OutputCostPerMTok = e.OutputCostPerMTok
+			obj.CogniGate.ResolvesTo = e.ID
+			obj.CogniGate.Provider = e.Provider
+			obj.CogniGate.ContextWindow = e.ContextWindow
+			obj.CogniGate.MaxOutputTokens = e.MaxOutputTokens
+			obj.CogniGate.Capabilities = e.Capabilities
+			obj.CogniGate.InputCostPerMTok = e.InputCostPerMTok
+			obj.CogniGate.OutputCostPerMTok = e.OutputCostPerMTok
+			obj.CogniGate.DiscoveredAt = timestamp(snap.FetchedAt)
 		}
 		out = append(out, obj)
 	}
