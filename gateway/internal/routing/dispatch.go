@@ -150,7 +150,34 @@ func (d *Dispatcher) Dispatch(ctx context.Context, tenantID, requested string, b
 	}
 
 	return nil, apierr.UpstreamExhausted(len(attempts)).
+		WithAttempts(renderAttempts(attempts)).
 		WithCause(fmt.Errorf("no candidate succeeded: %s", summarize(attempts)))
+}
+
+// renderAttempts turns the cascade into the public form GW-3.AC-5 requires the
+// 502 body to carry.
+//
+// Only the classification crosses the boundary. The upstream's own error text
+// stays in Attempt.Err, which goes to the log line and no further: it is the one
+// field here that can quote a request body, and GW-14 puts that out of bounds.
+func renderAttempts(attempts []Attempt) []apierr.Attempt {
+	out := make([]apierr.Attempt, 0, len(attempts))
+	for _, a := range attempts {
+		failure := a.Failure.String()
+		if a.Skipped {
+			// Not a failure the provider reported — the gateway never asked it.
+			// Naming that distinctly is what lets a caller tell "the provider is
+			// down" from "the gateway has already decided it is down".
+			failure = "breaker_open"
+		}
+		out = append(out, apierr.Attempt{
+			Provider: a.Candidate.Provider,
+			Model:    a.Candidate.Model,
+			Failure:  failure,
+			Status:   a.Status,
+		})
+	}
+	return out
 }
 
 // tryCandidate issues one candidate's request, rotating through the provider's

@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cognigate/gateway/internal/apierr"
 	"github.com/cognigate/gateway/internal/catalog"
 	"github.com/cognigate/gateway/internal/config"
 	"github.com/cognigate/gateway/internal/obs"
@@ -203,11 +204,12 @@ func (r reply) decode(t *testing.T, dst any) {
 // errorBody is the GW-7 envelope as a caller sees it.
 type errorBody struct {
 	Error struct {
-		Message   string  `json:"message"`
-		Type      string  `json:"type"`
-		Code      string  `json:"code"`
-		Param     *string `json:"param"`
-		RequestID string  `json:"request_id"`
+		Message   string           `json:"message"`
+		Type      string           `json:"type"`
+		Code      string           `json:"code"`
+		Param     *string          `json:"param"`
+		RequestID string           `json:"request_id"`
+		Attempts  []apierr.Attempt `json:"attempts"`
 	} `json:"error"`
 }
 
