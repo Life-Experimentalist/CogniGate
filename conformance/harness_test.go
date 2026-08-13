@@ -1,6 +1,7 @@
 package conformance
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -264,16 +265,42 @@ func addMockModel(t *testing.T, id string) string {
 	return id
 }
 
+// addPricedMockModel is addMockModel for a model the mock publishes a price for.
+//
+// Cost tiers are the one alias selector that cannot be tested without it: with
+// every candidate at zero, "cheapest" falls through to the deterministic
+// id tie-break, and a test that arranged its model to sort first would pass
+// without the cost comparison ever running.
+func addPricedMockModel(t *testing.T, id string, inputCostPerMTok float64) string {
+	t.Helper()
+	t.Cleanup(func() { refreshCatalog(t) })
+	addMockModelSpec(t, map[string]any{
+		"id":                  id,
+		"context_window":      128000,
+		"max_output_tokens":   4096,
+		"input_cost_per_mtok": inputCostPerMTok,
+	})
+	refreshCatalog(t)
+	return id
+}
+
 // addMockModelRaw registers a model without touching the gateway's catalog.
 func addMockModelRaw(t *testing.T, id string, contextWindow int) string {
 	t.Helper()
-	mockControl(t, http.MethodPost, "/_control/models", map[string]any{
+	addMockModelSpec(t, map[string]any{
 		"id": id, "context_window": contextWindow, "max_output_tokens": 4096,
 	})
+	return id
+}
+
+// addMockModelSpec posts a model verbatim and removes it when the test ends.
+func addMockModelSpec(t *testing.T, spec map[string]any) {
+	t.Helper()
+	id, _ := spec["id"].(string)
+	mockControl(t, http.MethodPost, "/_control/models", spec)
 	t.Cleanup(func() {
 		mockControl(t, http.MethodDelete, "/_control/models/"+id, nil)
 	})
-	return id
 }
 
 // removeMockModel drops a model from the mock and puts it back when the test
@@ -350,11 +377,22 @@ func refreshCatalog(t *testing.T) {
 
 func refreshCatalogFor(t *testing.T, tenantID string) {
 	t.Helper()
-	resp := suite.client.admin(t, http.MethodPost, "/admin/v1/catalog/refresh",
-		map[string]any{"tenant": tenantID})
+	resp := tryRefreshCatalogFor(t, tenantID)
 	if resp.Status >= 300 {
 		t.Fatalf("refreshing the catalog: status %d\n%s", resp.Status, truncate(resp.Body))
 	}
+}
+
+// tryRefreshCatalogFor refreshes without insisting the refresh succeeded.
+//
+// A test that has deliberately taken a provider's listing endpoint down is
+// asking the gateway to fail a poll, and the refresh route may well report that.
+// What is under test there is what the catalog still serves afterwards, not the
+// status of the call that failed.
+func tryRefreshCatalogFor(t *testing.T, tenantID string) *response {
+	t.Helper()
+	return suite.client.admin(t, http.MethodPost, "/admin/v1/catalog/refresh",
+		map[string]any{"tenant": tenantID})
 }
 
 // modelEntry is one row of GET /v1/models. Tests that need to prove a field is
@@ -405,6 +443,82 @@ func chat(t *testing.T, key, model string) *response {
 		"model":    model,
 		"messages": []any{map[string]any{"role": "user", "content": "hi"}},
 	})
+}
+
+// streamResult is what a streaming completion left behind.
+type streamResult struct {
+	Status int
+	Header http.Header
+	// Frames are the payloads of each `data:` line, in order, including the
+	// "[DONE]" sentinel when one arrived.
+	Frames []string
+	// Err is the transport error that ended the read, if any. A stream that was
+	// cut off rather than closed is the distinction GW-3.AC-7 turns on, and it
+	// only survives if the reader declines to treat an unexpected EOF as fatal.
+	Err error
+}
+
+// chatStream sends a streaming completion and reads the frames as they arrive.
+//
+// It deliberately does not fail the test on a read error. A gateway whose
+// upstream dies mid-stream has two ways to behave — emit a terminal error event,
+// or drop the connection — and only one of them conforms; a helper that fataled
+// on the second would report the failure as a broken test rather than as the
+// non-conformance it is.
+func chatStream(t *testing.T, key, model string) streamResult {
+	t.Helper()
+
+	body, err := json.Marshal(map[string]any{
+		"model":    model,
+		"stream":   true,
+		"messages": []any{map[string]any{"role": "user", "content": "hi"}},
+	})
+	if err != nil {
+		t.Fatalf("encoding the request: %v", err)
+	}
+
+	req, err := http.NewRequest(http.MethodPost, suite.client.base+"/v1/chat/completions", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("building the request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	req.Header.Set("Authorization", "Bearer "+key)
+
+	raw, err := suite.client.http.Do(req)
+	if err != nil {
+		return streamResult{Err: err}
+	}
+	defer raw.Body.Close()
+
+	out := streamResult{Status: raw.StatusCode, Header: raw.Header}
+
+	scanner := bufio.NewScanner(raw.Body)
+	// SSE frames are small, but a completion chunk carrying a long delta can
+	// still outgrow the scanner's 64KiB default, and the failure mode there is a
+	// truncated stream that looks exactly like an aborted one.
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if payload, ok := strings.CutPrefix(line, "data:"); ok {
+			out.Frames = append(out.Frames, strings.TrimSpace(payload))
+		}
+	}
+	out.Err = scanner.Err()
+	return out
+}
+
+// hasFrameContaining reports whether any frame mentions the needle. The frames
+// are JSON, but a terminal error event and a content chunk differ by which keys
+// they carry rather than by shape, so tests match on the key rather than
+// decoding into a type that would have to model both.
+func (s streamResult) hasFrameContaining(needle string) bool {
+	for _, f := range s.Frames {
+		if strings.Contains(f, needle) {
+			return true
+		}
+	}
+	return false
 }
 
 // --- polling ----------------------------------------------------------------
