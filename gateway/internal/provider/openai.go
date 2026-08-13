@@ -71,6 +71,14 @@ type modelsResponse struct {
 		ContextWindow   int `json:"context_window"`
 		ContextLength   int `json:"context_length"`
 		MaxOutputTokens int `json:"max_output_tokens"`
+		// Prices in USD per million tokens. There is no cross-provider
+		// convention for these — OpenAI publishes none at all — so the names
+		// are CogniGate's own, and absence is ordinary rather than an error
+		// (GW-1 non-goals). What they buy when a provider does publish them is
+		// GW-2's cost tiers: without prices, "cheapest" and "best" fall through
+		// to the alphabetical tie-break and mean nothing.
+		InputCostPerMTok  float64 `json:"input_cost_per_mtok"`
+		OutputCostPerMTok float64 `json:"output_cost_per_mtok"`
 	} `json:"data"`
 }
 
@@ -110,10 +118,12 @@ func (o *OpenAI) ListModels(ctx context.Context, cred Credential) ([]store.Model
 			window = m.ContextLength
 		}
 		out = append(out, store.Model{
-			ID:              m.ID,
-			ContextWindow:   window,
-			MaxOutputTokens: m.MaxOutputTokens,
-			Capabilities:    inferCapabilities(m.ID),
+			ID:                m.ID,
+			ContextWindow:     window,
+			MaxOutputTokens:   m.MaxOutputTokens,
+			InputCostPerMTok:  m.InputCostPerMTok,
+			OutputCostPerMTok: m.OutputCostPerMTok,
+			Capabilities:      inferCapabilities(m.ID),
 		})
 	}
 	return out, nil
