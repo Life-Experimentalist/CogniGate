@@ -274,16 +274,30 @@ func usageWindow(c *fiber.Ctx) (string, time.Time, time.Time, error) {
 
 // --- GET /v1/health ---------------------------------------------------------
 
-// healthReport is the GW-5 view: what the gateway can currently reach, and how
-// fresh what it knows is.
+// healthReport is the GW-5 view: what the gateway can currently reach, how
+// fresh what it knows is, and which of the tenant's configured names still mean
+// something.
+//
+// Everything here is scoped to the calling tenant. A tenant learning that
+// another tenant exists, or which providers it uses, would be a leak through the
+// one endpoint every dashboard is expected to poll continuously.
 type healthReport struct {
-	Status    string            `json:"status"` // ok | degraded
-	Version   string            `json:"version"`
-	Store     componentHealth   `json:"store"`
-	Catalog   catalogHealth     `json:"catalog"`
-	Providers []providerHealth  `json:"providers"`
-	Breakers  map[string]string `json:"breakers,omitempty"`
-	CheckedAt string            `json:"checked_at"`
+	Status    string           `json:"status"` // ok | degraded | unavailable
+	Gateway   gatewayHealth    `json:"gateway"`
+	Store     componentHealth  `json:"store"`
+	Catalog   catalogHealth    `json:"catalog"`
+	Providers []providerHealth `json:"providers"`
+	// Aliases and Rules are never null: a tenant with none configured gets an
+	// empty array, so a dashboard iterating them needs no special case.
+	Aliases   []routing.NameState `json:"aliases"`
+	Rules     []routing.NameState `json:"rules"`
+	Quota     quotaHealth         `json:"quota"`
+	CheckedAt string              `json:"checked_at"`
+}
+
+type gatewayHealth struct {
+	Version       string `json:"version"`
+	UptimeSeconds int64  `json:"uptime_seconds"`
 }
 
 type componentHealth struct {
@@ -295,15 +309,49 @@ type componentHealth struct {
 type catalogHealth struct {
 	Models     int    `json:"models"`
 	AgeSeconds int64  `json:"age_seconds"`
+	State      string `json:"state"` // fresh | stale
 	Stale      bool   `json:"stale"`
 	FetchedAt  string `json:"fetched_at,omitempty"`
 }
 
+// providerHealth is one provider this tenant has registered, with the breaker
+// position that decides whether traffic is currently reaching it.
 type providerHealth struct {
-	Name    string `json:"name"`
-	Enabled bool   `json:"enabled"`
-	Models  int    `json:"models"`
-	Error   string `json:"error,omitempty"`
+	Provider string `json:"provider"`
+	Enabled  bool   `json:"enabled"`
+	Models   int    `json:"models"`
+	// Breaker is the worst position among the provider's model-scoped breakers,
+	// because an operator scanning provider rows wants to be shown the tripped
+	// model rather than reassured by the healthy one beside it.
+	//
+	// It is deliberately not a usability verdict: a provider reported open may
+	// still be serving every model but one. Breakers reports which, and the
+	// overall status is derived from that rather than from this field.
+	Breaker      string `json:"breaker"` // closed | open | half-open
+	BreakerUntil string `json:"breaker_until,omitempty"`
+	// Breakers carries the per provider/model detail GW-5 asks for wherever the
+	// breaker is model-scoped, which here it always is. Only non-closed entries
+	// appear, so a healthy provider carries none and the common report stays
+	// small.
+	Breakers []modelBreaker   `json:"breakers,omitempty"`
+	Catalog  catalogFreshness `json:"catalog"`
+	Error    string           `json:"error,omitempty"`
+}
+
+// modelBreaker is one provider/model breaker that is not closed.
+type modelBreaker struct {
+	Model        string `json:"model"`
+	Breaker      string `json:"breaker"` // open | half-open
+	BreakerUntil string `json:"breaker_until,omitempty"`
+}
+
+type catalogFreshness struct {
+	AgeSeconds int64  `json:"age_seconds"`
+	State      string `json:"state"` // fresh | stale
+}
+
+type quotaHealth struct {
+	State string `json:"state"` // ok | soft-exceeded | hard-exceeded
 }
 
 // healthCache holds the last report per tenant.
@@ -311,6 +359,11 @@ type providerHealth struct {
 // GW-5 caches because /v1/health is what monitoring polls, and an uncached
 // version would fan every poll out into a store ping plus a catalog read — which
 // is how a health check becomes the load it was installed to detect.
+//
+// A non-positive health.cache_ttl turns the cache off rather than falling back
+// to a default. An operator who writes 0 there is asking for an uncached report,
+// and quietly caching for two seconds anyway would make the setting lie about
+// what it does.
 type healthCache struct {
 	mu      sync.Mutex
 	ttl     time.Duration
@@ -325,6 +378,9 @@ type healthCacheEntry struct {
 func (h *healthCache) get(tenantID string) (healthReport, bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if h.ttl <= 0 {
+		return healthReport{}, false
+	}
 	e, ok := h.entries[tenantID]
 	if !ok || time.Now().After(e.expires) {
 		return healthReport{}, false
@@ -335,14 +391,13 @@ func (h *healthCache) get(tenantID string) (healthReport, bool) {
 func (h *healthCache) put(tenantID string, r healthReport) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if h.ttl <= 0 {
+		return
+	}
 	if h.entries == nil {
 		h.entries = map[string]healthCacheEntry{}
 	}
-	ttl := h.ttl
-	if ttl <= 0 {
-		ttl = 2 * time.Second
-	}
-	h.entries[tenantID] = healthCacheEntry{report: r, expires: time.Now().Add(ttl)}
+	h.entries[tenantID] = healthCacheEntry{report: r, expires: time.Now().Add(h.ttl)}
 }
 
 func (s *Server) handleHealth(c *fiber.Ctx) error {
@@ -359,48 +414,73 @@ func (s *Server) handleHealth(c *fiber.Ctx) error {
 	return s.sendHealth(c, report)
 }
 
-// sendHealth answers 200 even when degraded. A degraded gateway is still
-// serving, and returning 503 here would have every orchestrator restart a
-// process whose only problem is that one provider's catalog is stale.
+// sendHealth answers 200 for ok and degraded and 503 only for unavailable, so
+// the same endpoint serves a dashboard that parses the body and a probe that
+// reads nothing but the status code (GW-5).
+//
+// A degraded gateway is still serving. Returning 503 for it would have every
+// orchestrator restart a process whose only problem is that one provider's
+// catalog is stale — which fixes nothing and drops the traffic that was still
+// succeeding.
 func (s *Server) sendHealth(c *fiber.Ctx, r healthReport) error {
+	if r.Status == healthUnavailable {
+		return c.Status(fiber.StatusServiceUnavailable).JSON(r)
+	}
 	return c.JSON(r)
 }
+
+// GW-5 status values, in increasing order of severity.
+const (
+	healthOK          = "ok"
+	healthDegraded    = "degraded"
+	healthUnavailable = "unavailable"
+)
 
 func (s *Server) buildHealth(ctx context.Context, tenantID string) healthReport {
 	now := time.Now().UTC()
 	report := healthReport{
-		Status:    "ok",
-		Version:   s.version(),
+		Status: healthOK,
+		Gateway: gatewayHealth{
+			Version:       s.version(),
+			UptimeSeconds: int64(now.Sub(s.startedAt).Seconds()),
+		},
 		Store:     componentHealth{Kind: s.Store.Kind(), Reachable: true},
+		Aliases:   []routing.NameState{},
+		Rules:     []routing.NameState{},
+		Quota:     quotaHealth{State: httpx.QuotaOK},
 		CheckedAt: now.Format(time.RFC3339),
 	}
 
+	// The store is the one dependency with no degraded mode. Everything below
+	// reads through it, so if it is unreachable the rest of this report would be
+	// guesses presented as facts.
 	if err := s.Store.Ping(ctx); err != nil {
 		report.Store.Reachable = false
 		report.Store.Error = err.Error()
-		report.Status = "degraded"
+		report.Status = healthUnavailable
 	}
 
 	providers, err := s.Store.ListProviders(ctx, tenantID)
 	if err != nil {
-		report.Status = "degraded"
+		report.Status = healthUnavailable
 	}
 
 	snap, err := s.Catalog.Get(ctx, tenantID)
+	catalogStale := false
 	switch {
 	case err != nil:
-		report.Status = "degraded"
+		degrade(&report, healthDegraded)
 	default:
+		catalogStale = snap.Stale || snap.Age(now) > s.Config.Catalog.StaleWarnAfter
 		report.Catalog = catalogHealth{
 			Models:     len(snap.Models),
 			AgeSeconds: int64(snap.Age(now).Seconds()),
+			State:      freshness(catalogStale),
 			Stale:      snap.Stale,
+			FetchedAt:  timestamp(snap.FetchedAt),
 		}
-		if !snap.FetchedAt.IsZero() {
-			report.Catalog.FetchedAt = snap.FetchedAt.UTC().Format(time.RFC3339)
-		}
-		if snap.Stale || snap.Age(now) > s.Config.Catalog.StaleWarnAfter {
-			report.Status = "degraded"
+		if catalogStale {
+			degrade(&report, healthDegraded)
 		}
 	}
 
@@ -410,45 +490,159 @@ func (s *Server) buildHealth(ctx context.Context, tenantID string) healthReport 
 			modelsByProvider[e.Provider]++
 		}
 	}
+
+	// The breaker is process-wide, so its snapshot holds every tenant's entries.
+	// Only this tenant's are read: reporting the raw snapshot would tell one
+	// tenant the provider names and current failures of every other tenant on
+	// the deployment.
+	//
+	// Two different things come out of this one walk, and conflating them is a
+	// mistake with a 503 on the end of it. The provider row is a worst-of
+	// rollup, for a reader scanning for trouble. Usability is counted per model
+	// instead, because GW-5.AC-4 reserves "unavailable" for a tenant with no
+	// path left at all — and a provider with one model tripped out of twelve
+	// still has eleven.
+	blocked := map[string]map[string]bool{}
+	byProvider := map[string][]modelBreaker{}
+	worst := map[string]routing.Status{}
+	if s.Dispatcher != nil {
+		for key, st := range s.Dispatcher.Breaker().Snapshot() {
+			owner, providerName, model := routing.SplitKey(key)
+			if owner != tenantID {
+				continue
+			}
+			byProvider[providerName] = append(byProvider[providerName], modelBreaker{
+				Model:        model,
+				Breaker:      st.State.Health(),
+				BreakerUntil: timestamp(st.Until),
+			})
+			if st.State == routing.StateOpen {
+				if blocked[providerName] == nil {
+					blocked[providerName] = map[string]bool{}
+				}
+				blocked[providerName][model] = true
+			}
+			prev, seen := worst[providerName]
+			if !seen ||
+				routing.BlockRank(st.State) > routing.BlockRank(prev.State) ||
+				(st.State == prev.State && st.Until.After(prev.Until)) {
+				worst[providerName] = st
+			}
+		}
+	}
+	for name := range byProvider {
+		sort.Slice(byProvider[name], func(i, j int) bool {
+			return byProvider[name][i].Model < byProvider[name][j].Model
+		})
+	}
+
+	usable := 0
 	for _, p := range providers {
-		ph := providerHealth{Name: p.Name, Enabled: p.Enabled, Models: modelsByProvider[p.Name]}
+		st := worst[p.Name] // zero value is a closed breaker, which is the default
+		ph := providerHealth{
+			Provider:     p.Name,
+			Enabled:      p.Enabled,
+			Models:       modelsByProvider[p.Name],
+			Breaker:      st.State.Health(),
+			BreakerUntil: timestamp(st.Until),
+			Breakers:     byProvider[p.Name],
+			Catalog: catalogFreshness{
+				AgeSeconds: report.Catalog.AgeSeconds,
+				State:      report.Catalog.State,
+			},
+		}
+		if st.State != routing.StateClosed {
+			degrade(&report, healthDegraded)
+		}
 		if snap != nil {
 			if msg, ok := snap.Errors[p.Name]; ok {
+				// A provider whose listing failed keeps whatever models the last
+				// good poll found, so this is per provider rather than the
+				// catalog-wide freshness above.
 				ph.Error = msg
-				report.Status = "degraded"
+				ph.Catalog.State = freshness(true)
+				degrade(&report, healthDegraded)
 			}
+		}
+		if p.Enabled && reachable(p.Name, snap, blocked[p.Name]) {
+			usable++
 		}
 		report.Providers = append(report.Providers, ph)
 	}
 
-	// Only the breakers that are not closed are reported. Listing every healthy
-	// pair would make the response grow with the catalog and bury the one line
-	// that matters.
+	// Every path this tenant has is dead.
 	//
-	// The breaker is process-wide, so its snapshot holds every tenant's entries.
-	// Only this tenant's are reported, and the tenant segment is stripped so the
-	// keys read as "<provider>/<model>" — the same shape as X-CogniGate-Served-By.
-	// Reporting the raw snapshot would tell one tenant the provider names and
-	// current failures of every other tenant on the deployment.
-	if s.Dispatcher != nil {
-		open := map[string]string{}
-		for key, state := range s.Dispatcher.Breaker().Snapshot() {
-			if state == routing.StateClosed {
-				continue
-			}
-			owner, provider, model := routing.SplitKey(key)
-			if owner != tenantID {
-				continue
-			}
-			open[provider+"/"+model] = state.String()
-			report.Status = "degraded"
+	// Two guards, for two things that are not outages. A tenant with no enabled
+	// provider is unconfigured rather than down, and answering 503 would tell an
+	// operator setting CogniGate up for the first time that the gateway is
+	// broken. A failed catalog read leaves no model list to count against, and
+	// the providers are not the ones having that problem — it is already
+	// recorded above as a degradation, which is what GW-5 calls it.
+	if snap != nil && len(report.Providers) > 0 && usable == 0 {
+		report.Status = healthUnavailable
+	}
+
+	if diag, err := s.Resolver.Diagnose(ctx, tenantID); err == nil {
+		report.Aliases = diag.Aliases
+		report.Rules = diag.Rules
+		if diag.Degraded() {
+			degrade(&report, healthDegraded)
 		}
-		if len(open) > 0 {
-			report.Breakers = open
+	}
+
+	if verdict, err := s.evaluateQuota(ctx, tenantID); err == nil {
+		report.Quota.State = verdict.State
+		if verdict.State == httpx.QuotaHardExceeded {
+			degrade(&report, healthDegraded)
 		}
 	}
 
 	return report
+}
+
+// degrade lowers the reported status without ever raising it, so the order the
+// checks above happen to run in cannot turn an unavailable gateway back into a
+// merely degraded one.
+func degrade(r *healthReport, to string) {
+	if r.Status == healthOK {
+		r.Status = to
+	}
+}
+
+func freshness(stale bool) string {
+	if stale {
+		return "stale"
+	}
+	return "fresh"
+}
+
+// reachable reports whether any traffic could still reach a provider — whether
+// the catalog lists a model for it whose breaker is not open.
+//
+// This is the question GW-5.AC-4 asks, and it is not the same question the
+// provider row answers. A provider with one tripped model is displayed as open,
+// because that is what an operator needs to see; it is still perfectly reachable
+// for its other models, and calling the tenant unavailable because of it would
+// return 503 from a gateway that is serving.
+//
+// A provider the catalog lists no models for is not reachable, because there is
+// nothing to route to it. The breaker's model segment is the unqualified name
+// entryCandidate builds its key from, so the same split is applied here rather
+// than comparing against the catalog id.
+func reachable(provider string, snap *catalog.Snapshot, open map[string]bool) bool {
+	if snap == nil {
+		return false
+	}
+	for _, e := range snap.Models {
+		if e.Provider != provider {
+			continue
+		}
+		_, model := catalog.ProviderOf(e.ID)
+		if !open[model] {
+			return true
+		}
+	}
+	return false
 }
 
 // --- GET /v1/meta -----------------------------------------------------------

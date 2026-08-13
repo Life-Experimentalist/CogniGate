@@ -81,6 +81,11 @@ type Server struct {
 	health  *healthCache
 	quotas  *quotaCache
 
+	// startedAt is when this process became able to serve, reported as
+	// gateway.uptime_seconds. It answers the first question asked of a gateway
+	// that is behaving oddly: has it just restarted?
+	startedAt time.Time
+
 	// The Prometheus adaptor is built once and reused: constructing it per
 	// scrape allocates a handler chain for no benefit.
 	metricsOnce    sync.Once
@@ -100,10 +105,11 @@ func New(d Deps) *Server {
 	}
 
 	s := &Server{
-		Deps:    d,
-		limiter: newConcurrencyLimiter(d.Config.Limits.MaxConcurrentPerKey),
-		health:  &healthCache{ttl: d.Config.Health.CacheTTL},
-		quotas:  newQuotaCache(quotaCacheTTL),
+		Deps:      d,
+		limiter:   newConcurrencyLimiter(d.Config.Limits.MaxConcurrentPerKey),
+		health:    &healthCache{ttl: d.Config.Health.CacheTTL},
+		quotas:    newQuotaCache(quotaCacheTTL),
+		startedAt: time.Now(),
 	}
 
 	s.app = fiber.New(fiber.Config{
