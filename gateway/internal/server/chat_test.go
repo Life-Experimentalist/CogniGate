@@ -109,6 +109,35 @@ func (s *silentStream) Close() error {
 	return nil
 }
 
+// abortingStream emits its chunks and then fails outright, which is what an
+// upstream that resets the connection mid-completion looks like from here. It
+// differs from silentStream in the one way that matters: the read returns
+// immediately rather than hanging, so this is a relay error rather than a stall,
+// and it takes a different branch.
+type abortingStream struct {
+	chunks [][]byte
+	sent   int
+}
+
+func newAbortingStream(chunks ...string) *abortingStream {
+	s := &abortingStream{}
+	for _, c := range chunks {
+		s.chunks = append(s.chunks, []byte(c))
+	}
+	return s
+}
+
+func (s *abortingStream) Read(p []byte) (int, error) {
+	if s.sent < len(s.chunks) {
+		n := copy(p, s.chunks[s.sent])
+		s.sent++
+		return n, nil
+	}
+	return 0, io.ErrUnexpectedEOF
+}
+
+func (s *abortingStream) Close() error { return nil }
+
 // routeTenant is the standard fixture for the cascade tests: one provider whose
 // catalog holds both default models, and a route that chains them. Resolution
 // dedupes by provider/model, so one provider and a two-element chain give
@@ -717,6 +746,50 @@ func TestStreamedCompletionReportsAStallInBand(t *testing.T) {
 	// instead of hanging on an error it was never told about.
 	if !strings.Contains(body, "data: [DONE]") {
 		t.Errorf("a stalled stream did not end with the sentinel: %s", body)
+	}
+}
+
+// A provider that dies mid-stream leaves the caller holding a truncated answer.
+// Ending the response quietly makes that indistinguishable from a completion
+// that simply finished, so the client would treat half a sentence as the whole
+// one; GW-3.AC-7 requires the stream to say so on its way out. Falling back is
+// not an option this late — the first byte has shipped, and continuing with
+// another model's output would splice two completions into one.
+func TestStreamedCompletionReportsAMidStreamAbortInBand(t *testing.T) {
+	h := newHarness(t)
+	tenant := h.routeTenant("acme")
+
+	var log callLog
+	h.adapter.do = func(_ context.Context, cred provider.Credential, req *provider.Request) (*provider.Response, error) {
+		log.record(req, cred)
+		return &provider.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{},
+			Stream:     newAbortingStream("data: {\"choices\":[{\"delta\":{\"content\":\"pong\"}}]}\n\n"),
+			Failure:    provider.FailNone,
+		}, nil
+	}
+
+	res := h.do(http.MethodPost, "/v1/chat/completions", tenant.dataKey, chatRequest("test-small", true))
+	if res.status != http.StatusOK {
+		t.Fatalf("status = %d, want 200 — the status line went out with the first chunk", res.status)
+	}
+
+	body := string(res.body)
+	if !strings.Contains(body, `"delta"`) {
+		t.Fatalf("the content chunk never reached the client, so this is not a mid-stream abort: %s", body)
+	}
+	if !strings.Contains(body, "event: error") {
+		t.Errorf("no terminal error event after the upstream died: %s", body)
+	}
+	if !strings.Contains(body, apierr.CodeUpstreamError) {
+		t.Errorf("the terminal event does not carry %s: %s", apierr.CodeUpstreamError, body)
+	}
+	if !strings.Contains(body, "data: [DONE]") {
+		t.Errorf("an aborted stream did not end with the sentinel: %s", body)
+	}
+	if n := log.countFor("test-large"); n != 0 {
+		t.Errorf("the fallback candidate was called %d times; a stream cannot fall back after the first byte", n)
 	}
 }
 
