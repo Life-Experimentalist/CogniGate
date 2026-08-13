@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -69,9 +70,20 @@ type suiteState struct {
 	features map[string]bool
 	version  string
 
-	tenantID  string
-	dataKey   string
-	mockCtrl  string
+	// runID distinguishes this run's resources from a concurrent run's against
+	// the same deployment (GW-10.AC-3). Every name the suite invents carries it.
+	runID string
+
+	tenantID string
+	dataKey  string
+
+	// providerURL is the mock's address as the *gateway* dials it, kept so a
+	// test that creates a second tenant can point it at the same mock. mockCtrl
+	// is the same mock as the *suite* dials it; in a container deployment those
+	// two are different strings for the same process.
+	providerURL string
+	mockCtrl    string
+
 	teardown  []func()
 	provision error
 }
@@ -230,19 +242,278 @@ func injectFault(t *testing.T, model, mode string, count int) {
 	})
 }
 
-// addMockModel registers a model that belongs to this test alone and removes it
-// afterwards. Tests that need to fault a model use one of these rather than a
-// seed model, so two concurrent suite runs cannot disturb each other
-// (GW-10.AC-3).
+// addMockModel registers a model that belongs to this test alone, refreshes the
+// suite tenant's catalog so the gateway can see it, and undoes both afterwards.
+//
+// Tests that need to fault a model use one of these rather than a seed model, so
+// two concurrent suite runs cannot disturb each other (GW-10.AC-3). The refresh
+// is here because without it the model stays invisible for up to the catalog TTL
+// — an hour by default — and every test that forgot the refresh would fail for a
+// reason unrelated to what it was testing. The two acceptance criteria that are
+// *about* refresh timing drive the mock directly instead.
 func addMockModel(t *testing.T, id string) string {
 	t.Helper()
+	// Registered before the removal it has to follow. t.Cleanup runs last-in
+	// first-out, so refreshing here and adding the model afterwards is what puts
+	// the refresh *after* the removal — the other order would refresh while the
+	// model still existed and leave the gateway holding a catalog entry for a
+	// model the mock no longer serves.
+	t.Cleanup(func() { refreshCatalog(t) })
+	addMockModelRaw(t, id, 128000)
+	refreshCatalog(t)
+	return id
+}
+
+// addMockModelRaw registers a model without touching the gateway's catalog.
+func addMockModelRaw(t *testing.T, id string, contextWindow int) string {
+	t.Helper()
 	mockControl(t, http.MethodPost, "/_control/models", map[string]any{
-		"id": id, "context_window": 128000, "max_output_tokens": 4096,
+		"id": id, "context_window": contextWindow, "max_output_tokens": 4096,
 	})
 	t.Cleanup(func() {
 		mockControl(t, http.MethodDelete, "/_control/models/"+id, nil)
 	})
 	return id
+}
+
+// removeMockModel drops a model from the mock and puts it back when the test
+// ends, so a test about a model disappearing does not permanently shrink the
+// mock for the tests that run after it. The gateway's catalog is not touched
+// here: the acceptance criteria that remove a model are about what a refresh
+// does, so they post their own.
+func removeMockModel(t *testing.T, id string, contextWindow int) {
+	t.Helper()
+	t.Cleanup(func() { refreshCatalog(t) })
+	mockControl(t, http.MethodDelete, "/_control/models/"+id, nil)
+	t.Cleanup(func() {
+		mockControl(t, http.MethodPost, "/_control/models", map[string]any{
+			"id": id, "context_window": contextWindow, "max_output_tokens": 4096,
+		})
+	})
+}
+
+// uniqueName builds a name that belongs to this run alone. The run id is
+// lowercase base36 and a pid, so the result is also a legal alias name.
+func uniqueName(hint string) string {
+	return hint + "-" + suite.runID
+}
+
+// mockSnapshot is what GET /_control/state reports.
+type mockSnapshot struct {
+	Models   []string       `json:"models"`
+	Requests map[string]int `json:"requests"`
+	Keys     map[string]int `json:"keys"`
+}
+
+func mockState(t *testing.T) mockSnapshot {
+	t.Helper()
+	resp := mockControl(t, http.MethodGet, "/_control/state", nil)
+	var snap mockSnapshot
+	if err := json.Unmarshal(resp.Body, &snap); err != nil {
+		t.Fatalf("mock control state: %v\n%s", err, truncate(resp.Body))
+	}
+	return snap
+}
+
+// upstreamCalls is how many times the gateway has dialled the mock for a model.
+// It counts calls, not successes — a faulted call is still a call — which is the
+// only counter that can separate "the gateway skipped this entry" from "the
+// gateway tried it and it failed".
+func upstreamCalls(t *testing.T, model string) int {
+	t.Helper()
+	return mockState(t).Requests[model]
+}
+
+// keysSince reports how many distinct pooled credentials the mock saw after the
+// snapshot was taken. The counters are cumulative and shared by every model, so
+// a test that wants "this request used two keys" has to diff rather than read.
+func keysSince(t *testing.T, before mockSnapshot) []string {
+	t.Helper()
+
+	var used []string
+	for key, count := range mockState(t).Keys {
+		if count > before.Keys[key] {
+			used = append(used, key)
+		}
+	}
+	sort.Strings(used)
+	return used
+}
+
+// --- gateway helpers --------------------------------------------------------
+
+// refreshCatalog forces the suite tenant to re-poll its providers.
+func refreshCatalog(t *testing.T) {
+	t.Helper()
+	refreshCatalogFor(t, suite.tenantID)
+}
+
+func refreshCatalogFor(t *testing.T, tenantID string) {
+	t.Helper()
+	resp := suite.client.admin(t, http.MethodPost, "/admin/v1/catalog/refresh",
+		map[string]any{"tenant": tenantID})
+	if resp.Status >= 300 {
+		t.Fatalf("refreshing the catalog: status %d\n%s", resp.Status, truncate(resp.Body))
+	}
+}
+
+// modelEntry is one row of GET /v1/models. Tests that need to prove a field is
+// present rather than merely zero read the raw map instead.
+type modelEntry struct {
+	ID        string `json:"id"`
+	OwnedBy   string `json:"owned_by"`
+	CogniGate struct {
+		Provider      string   `json:"provider"`
+		Alias         bool     `json:"alias"`
+		ResolvesTo    string   `json:"resolves_to"`
+		ContextWindow int      `json:"context_window"`
+		Capabilities  []string `json:"capabilities"`
+		DiscoveredAt  string   `json:"discovered_at"`
+	} `json:"cognigate"`
+}
+
+func listModels(t *testing.T, key string) []modelEntry {
+	t.Helper()
+	resp := suite.client.do(t, http.MethodGet, "/v1/models", key, nil)
+	if resp.Status != http.StatusOK {
+		t.Fatalf("GET /v1/models: status %d\n%s", resp.Status, truncate(resp.Body))
+	}
+	var body struct {
+		Data []modelEntry `json:"data"`
+	}
+	if err := json.Unmarshal(resp.Body, &body); err != nil {
+		t.Fatalf("GET /v1/models: %v\n%s", err, truncate(resp.Body))
+	}
+	return body.Data
+}
+
+func findModel(entries []modelEntry, id string) (modelEntry, bool) {
+	for _, e := range entries {
+		if e.ID == id {
+			return e, true
+		}
+	}
+	return modelEntry{}, false
+}
+
+// chat sends a minimal completion. The prompt is deliberately trivial: GW-14
+// forbids the gateway from retaining content, and a distinctive prompt invites
+// someone to satisfy a test by retaining one.
+func chat(t *testing.T, key, model string) *response {
+	t.Helper()
+	return suite.client.do(t, http.MethodPost, "/v1/chat/completions", key, map[string]any{
+		"model":    model,
+		"messages": []any{map[string]any{"role": "user", "content": "hi"}},
+	})
+}
+
+// --- polling ----------------------------------------------------------------
+
+// awaitHealth polls GET /v1/health until the predicate holds.
+//
+// Reading health once is not enough. The report is cached for health.cache_ttl
+// — two seconds by default, and not something the suite can turn off from
+// outside — so a test that arranges a condition and immediately reads health can
+// be answered from a report built before it acted. Polling also covers the
+// second-granularity fields, where "non-zero age" is a claim that only becomes
+// true once a second has passed.
+func awaitHealth(t *testing.T, key string, want func(map[string]any) bool, describe string) map[string]any {
+	t.Helper()
+
+	deadline := time.Now().Add(15 * time.Second)
+	var last map[string]any
+	for {
+		resp := suite.client.do(t, http.MethodGet, "/v1/health", key, nil)
+		last = resp.JSON(t)
+		if want(last) {
+			return last
+		}
+		if time.Now().After(deadline) {
+			encoded, _ := json.MarshalIndent(last, "", "  ")
+			t.Fatalf("GET /v1/health never reported %s\n%s", describe, truncate(encoded))
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+}
+
+// awaitModel polls GET /v1/models until the id appears, or stops appearing.
+func awaitModel(t *testing.T, key, id string, present bool) {
+	t.Helper()
+
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		_, found := findModel(listModels(t, key), id)
+		if found == present {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("GET /v1/models: model %q present=%v, want present=%v", id, found, present)
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+}
+
+// --- extra tenants ----------------------------------------------------------
+
+// tenant is a tenant the suite created beyond the one it provisions for itself.
+type tenant struct {
+	ID  string
+	Key string
+}
+
+// newTenant creates a tenant with a data key and deletes it when the test ends.
+//
+// Several acceptance criteria are statements about isolation — different
+// catalogs, aliases one tenant cannot see — and none of them can be written
+// against a single tenant. The teardown is per test rather than per run so
+// GW-10.AC-4's "the deployment is clean afterwards" stays true of every
+// intermediate moment, not only of the end.
+func newTenant(t *testing.T, hint string) tenant {
+	t.Helper()
+
+	created := suite.client.admin(t, http.MethodPost, "/admin/v1/tenants",
+		map[string]any{"name": uniqueName(hint)})
+	if created.Status != http.StatusCreated {
+		t.Fatalf("creating tenant %q: status %d\n%s", hint, created.Status, truncate(created.Body))
+	}
+	var body struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(created.Body, &body); err != nil || body.ID == "" {
+		t.Fatalf("the created tenant has no id: %s", truncate(created.Body))
+	}
+	t.Cleanup(func() {
+		suite.client.admin(t, http.MethodDelete, "/admin/v1/tenants/"+body.ID, nil)
+	})
+
+	key := suite.client.admin(t, http.MethodPost, "/admin/v1/tenants/"+body.ID+"/keys",
+		map[string]any{"name": "conformance", "plane": "data"})
+	var minted struct {
+		Secret string `json:"secret"`
+	}
+	if err := json.Unmarshal(key.Body, &minted); err != nil || minted.Secret == "" {
+		t.Fatalf("minting a data key for %s: status %d, no secret in %s",
+			body.ID, key.Status, truncate(key.Body))
+	}
+	return tenant{ID: body.ID, Key: minted.Secret}
+}
+
+// addMockProvider points a tenant at the same mock the suite provisioned, so two
+// tenants can be compared on something other than one of them being empty.
+func addMockProvider(t *testing.T, tn tenant) {
+	t.Helper()
+
+	resp := suite.client.admin(t, http.MethodPost, "/admin/v1/tenants/"+tn.ID+"/providers",
+		map[string]any{
+			"name":     "mock",
+			"kind":     "openai",
+			"base_url": suite.providerURL,
+			"keys":     []string{"mock-key-primary", "mock-key-secondary"},
+		})
+	if resp.Status != http.StatusCreated {
+		t.Fatalf("registering the mock for %s: status %d\n%s", tn.ID, resp.Status, truncate(resp.Body))
+	}
+	awaitModel(t, tn.Key, "mock-chat-a", true)
 }
 
 // --- provisioning -----------------------------------------------------------
@@ -285,6 +556,7 @@ func provision(runID string) error {
 	suite.dataKey = minted.Secret
 
 	providerURL := startMock()
+	suite.providerURL = providerURL
 	prov, err := c.try(http.MethodPost, "/admin/v1/tenants/"+created.ID+"/providers", suite.cfg.AdminKey,
 		map[string]any{
 			"name":     "mock",

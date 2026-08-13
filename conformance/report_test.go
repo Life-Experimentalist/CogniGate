@@ -215,8 +215,8 @@ func TestMain(m *testing.M) {
 		http: &http.Client{Timeout: 150 * time.Second},
 	}
 
-	runID := strconv.FormatInt(time.Now().UnixNano(), 36) + "-" + strconv.Itoa(os.Getpid())
-	suite.provision = provision(runID)
+	suite.runID = strconv.FormatInt(time.Now().UnixNano(), 36) + "-" + strconv.Itoa(os.Getpid())
+	suite.provision = provision(suite.runID)
 	if suite.provision == nil {
 		suite.provision = loadCapabilities()
 	}
