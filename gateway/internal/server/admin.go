@@ -55,6 +55,13 @@ func (s *Server) adminRoutes(g fiber.Router) {
 	t.Get("/quota", s.getQuota)
 	t.Delete("/quota", s.deleteQuota)
 
+	// The same three handlers, addressed at one key. A key-level quota narrows
+	// the tenant's; it is evaluated alongside it rather than instead of it, so
+	// it can never widen what the tenant is allowed.
+	t.Put("/keys/:id/quota", s.setQuota)
+	t.Get("/keys/:id/quota", s.getQuota)
+	t.Delete("/keys/:id/quota", s.deleteQuota)
+
 	t.Post("/webhooks", s.createWebhook)
 	t.Get("/webhooks", s.listWebhooks)
 	t.Delete("/webhooks/:id", s.deleteWebhook)
@@ -720,69 +727,122 @@ func (s *Server) deleteRoute(c *fiber.Ctx) error {
 
 // --- quota ------------------------------------------------------------------
 
-func (s *Server) setQuota(c *fiber.Ctx) error {
-	tenantID, err := s.tenantScope(c)
+// quotaTarget resolves which quota a request addresses: the tenant's own, or
+// the one narrowing a single key. The key is looked up rather than trusted, so
+// a quota can never be written against a key id belonging to another tenant.
+func (s *Server) quotaTarget(c *fiber.Ctx) (tenantID, keyID string, err error) {
+	tenantID, err = s.tenantScope(c)
 	if err != nil {
-		return httpx.Fail(c, err)
+		return "", "", err
 	}
-
-	var req struct {
-		Period           string  `json:"period"`
-		TokenLimit       int64   `json:"token_limit"`
-		SpendLimitUSD    float64 `json:"spend_limit_usd"`
-		SoftThresholdPct int     `json:"soft_threshold_pct"`
-	}
-	if err := parse(c, &req); err != nil {
-		return httpx.Fail(c, err)
-	}
-
-	if req.Period == "" {
-		req.Period = "month"
-	}
-	if req.Period != "day" && req.Period != "month" {
-		return httpx.Fail(c, apierr.
-			InvalidRequest(`period must be "day" or "month".`).WithParam("period"))
-	}
-	if req.TokenLimit < 0 || req.SpendLimitUSD < 0 {
-		return httpx.Fail(c, apierr.InvalidRequest("Limits must not be negative."))
-	}
-	if req.SoftThresholdPct == 0 {
-		req.SoftThresholdPct = s.Config.Quotas.DefaultSoftThresholdPct
-	}
-	if req.SoftThresholdPct < 1 || req.SoftThresholdPct > 100 {
-		return httpx.Fail(c, apierr.
-			InvalidRequest("soft_threshold_pct must be between 1 and 100.").
-			WithParam("soft_threshold_pct"))
+	keyID = strings.TrimSpace(param(c, "id"))
+	if keyID == "" {
+		return tenantID, "", nil
 	}
 
 	ctx, cancel := s.opContext(c)
 	defer cancel()
 
-	q, err := s.Store.SetQuota(ctx, &store.Quota{
-		TenantID:         tenantID,
-		Period:           req.Period,
-		TokenLimit:       req.TokenLimit,
-		SpendLimitUSD:    req.SpendLimitUSD,
-		SoftThresholdPct: req.SoftThresholdPct,
-	})
+	keys, listErr := s.Store.ListAPIKeys(ctx, tenantID)
+	if listErr != nil {
+		return "", "", storeErr(listErr, "tenant", tenantID)
+	}
+	for _, k := range keys {
+		if k.ID == keyID {
+			return tenantID, keyID, nil
+		}
+	}
+	return "", "", apierr.ResourceNotFound("key", keyID)
+}
+
+// quotaWindowRequest mirrors store.QuotaWindow on the wire. Both units are
+// pointers so that omitting one leaves it unlimited rather than setting it to
+// zero, which would be a cap nothing could pass.
+type quotaWindowRequest struct {
+	Tokens *store.QuotaLimit `json:"tokens"`
+	Cost   *store.QuotaLimit `json:"cost"`
+}
+
+func (s *Server) setQuota(c *fiber.Ctx) error {
+	tenantID, keyID, err := s.quotaTarget(c)
+	if err != nil {
+		return httpx.Fail(c, err)
+	}
+
+	var req struct {
+		Day   quotaWindowRequest `json:"day"`
+		Month quotaWindowRequest `json:"month"`
+	}
+	if err := parse(c, &req); err != nil {
+		return httpx.Fail(c, err)
+	}
+
+	q := &store.Quota{
+		TenantID: tenantID,
+		KeyID:    keyID,
+		Day:      store.QuotaWindow{Tokens: req.Day.Tokens, Cost: req.Day.Cost},
+		Month:    store.QuotaWindow{Tokens: req.Month.Tokens, Cost: req.Month.Cost},
+	}
+	for _, slot := range []struct {
+		param string
+		limit *store.QuotaLimit
+	}{
+		{"day.tokens", q.Day.Tokens},
+		{"day.cost", q.Day.Cost},
+		{"month.tokens", q.Month.Tokens},
+		{"month.cost", q.Month.Cost},
+	} {
+		if err := s.normaliseQuotaLimit(slot.limit, slot.param); err != nil {
+			return httpx.Fail(c, err)
+		}
+	}
+	if q.Empty() {
+		return httpx.Fail(c, apierr.InvalidRequest(
+			"A quota must configure at least one of day.tokens, day.cost, month.tokens or month.cost."))
+	}
+
+	ctx, cancel := s.opContext(c)
+	defer cancel()
+
+	saved, err := s.Store.SetQuota(ctx, q)
 	if err != nil {
 		return httpx.Fail(c, storeErr(err, "tenant", tenantID))
 	}
 	// Without this, raising a limit to unblock a customer would leave them
 	// rejected for the rest of the cache TTL.
 	s.quotas.invalidate(tenantID)
-	return c.JSON(q)
+	return c.JSON(saved)
+}
+
+// normaliseQuotaLimit validates one slot in place and fills in the configured
+// default threshold when the caller did not name one.
+func (s *Server) normaliseQuotaLimit(limit *store.QuotaLimit, param string) error {
+	if limit == nil {
+		return nil
+	}
+	if limit.Cap < 0 {
+		return apierr.InvalidRequest("A quota cap must not be negative.").
+			WithParam(param + ".cap")
+	}
+	if limit.SoftThresholdPct == 0 {
+		limit.SoftThresholdPct = s.Config.Quotas.DefaultSoftThresholdPct
+	}
+	if limit.SoftThresholdPct < 1 || limit.SoftThresholdPct > 100 {
+		return apierr.InvalidRequest("soft_threshold_pct must be between 1 and 100.").
+			WithParam(param + ".soft_threshold_pct")
+	}
+	return nil
 }
 
 func (s *Server) getQuota(c *fiber.Ctx) error {
-	tenantID, err := s.tenantScope(c)
+	tenantID, keyID, err := s.quotaTarget(c)
 	if err != nil {
 		return httpx.Fail(c, err)
 	}
 	ctx, cancel := s.opContext(c)
 	defer cancel()
 
-	q, err := s.Store.GetQuota(ctx, tenantID)
+	q, err := s.Store.GetQuota(ctx, tenantID, keyID)
 	if err != nil {
 		return httpx.Fail(c, storeErr(err, "quota", tenantID))
 	}
@@ -790,14 +850,14 @@ func (s *Server) getQuota(c *fiber.Ctx) error {
 }
 
 func (s *Server) deleteQuota(c *fiber.Ctx) error {
-	tenantID, err := s.tenantScope(c)
+	tenantID, keyID, err := s.quotaTarget(c)
 	if err != nil {
 		return httpx.Fail(c, err)
 	}
 	ctx, cancel := s.opContext(c)
 	defer cancel()
 
-	if err := s.Store.DeleteQuota(ctx, tenantID); err != nil {
+	if err := s.Store.DeleteQuota(ctx, tenantID, keyID); err != nil {
 		return httpx.Fail(c, storeErr(err, "quota", tenantID))
 	}
 	s.quotas.invalidate(tenantID)

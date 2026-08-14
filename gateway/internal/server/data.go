@@ -182,12 +182,35 @@ func (s *Server) aliasObjects(ctx context.Context, tenantID string, snap *catalo
 
 // --- GET /v1/usage ----------------------------------------------------------
 
+// usageLimit is one configured cap as the caller sees it. Every slot the quota
+// actually constrains appears here; an unset slot is unlimited and has nothing
+// to report, so it is absent rather than present with a cap of zero.
+//
+// Consumed and Remaining are reported in the slot's own unit — whole tokens or
+// US dollars — and always sum to Cap, so a client can render a gauge without
+// having to know which of the two it is looking at.
+type usageLimit struct {
+	Scope            string  `json:"scope"`  // tenant | key
+	Window           string  `json:"window"` // day | month
+	Unit             string  `json:"unit"`   // tokens | cost
+	Cap              float64 `json:"cap"`
+	SoftThresholdPct int     `json:"soft_threshold_pct"`
+	Consumed         float64 `json:"consumed"`
+	Remaining        float64 `json:"remaining"`
+	ResetsAt         string  `json:"resets_at"`
+	State            string  `json:"state"`
+}
+
 type usageResponse struct {
 	Object string `json:"object"`
 	Window string `json:"window"`
 	Since  string `json:"since"`
 	Until  string `json:"until"`
 	store.UsageTotals
+	// State is the caller's overall position, which is the worst of the limits
+	// below — being under budget does not license passing a token cap.
+	State  string       `json:"state"`
+	Limits []usageLimit `json:"limits"`
 }
 
 func (s *Server) handleUsage(c *fiber.Ctx) error {
@@ -203,13 +226,53 @@ func (s *Server) handleUsage(c *fiber.Ctx) error {
 	if err != nil {
 		return httpx.Fail(c, apierr.From(err))
 	}
-	return c.JSON(usageResponse{
+
+	// Read live rather than through the quota cache: this endpoint is what a
+	// caller opens to find out why it was rejected, and answering it from a
+	// position computed up to five seconds ago would show them the wrong
+	// numbers at exactly the moment the numbers matter.
+	slots, err := s.quotaSlots(ctx, requestScope(c))
+	if err != nil {
+		return httpx.Fail(c, apierr.From(err))
+	}
+
+	resp := usageResponse{
 		Object:      "usage",
 		Window:      window,
 		Since:       since.Format(time.RFC3339),
 		Until:       until.Format(time.RFC3339),
 		UsageTotals: totals,
-	})
+		State:       httpx.QuotaOK,
+		// Never null: a caller with no quota configured gets an empty list, not
+		// a field it has to nil-check.
+		Limits: []usageLimit{},
+	}
+	for _, p := range slots {
+		if !p.limited() {
+			continue
+		}
+		scope := "tenant"
+		if p.keyLevel {
+			scope = "key"
+		}
+		remaining := p.cap - p.used
+		if remaining < 0 {
+			remaining = 0
+		}
+		resp.Limits = append(resp.Limits, usageLimit{
+			Scope:            scope,
+			Window:           p.window,
+			Unit:             p.unit,
+			Cap:              p.cap,
+			SoftThresholdPct: p.softPct,
+			Consumed:         p.used,
+			Remaining:        remaining,
+			ResetsAt:         p.resetsAt.Format(time.RFC3339),
+			State:            p.state,
+		})
+		resp.State = worse(resp.State, p.state)
+	}
+	return c.JSON(resp)
 }
 
 type breakdownResponse struct {
@@ -590,7 +653,10 @@ func (s *Server) buildHealth(ctx context.Context, tenantID string) healthReport 
 		}
 	}
 
-	if verdict, err := s.evaluateQuota(ctx, tenantID); err == nil {
+	// Tenant-scoped deliberately: the health cache is keyed by tenant, so a
+	// report that folded in the calling key's own quota would be served to the
+	// tenant's other keys as if it were theirs.
+	if verdict, err := s.evaluateQuota(ctx, quotaScope{tenantID: tenantID}); err == nil {
 		report.Quota.State = verdict.State
 		if verdict.State == httpx.QuotaHardExceeded {
 			degrade(&report, healthDegraded)

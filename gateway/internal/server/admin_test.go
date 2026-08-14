@@ -787,17 +787,47 @@ func TestQuotaValidation(t *testing.T) {
 	tenant := h.newTenant("acme")
 	path := "/admin/v1/tenants/" + tenant.id + "/quota"
 
-	res := h.do(http.MethodPut, path, tenant.adminKey,
-		map[string]any{"period": "week", "token_limit": 1000})
-	expectParam(t, h.expectError(res, http.StatusBadRequest, apierr.CodeInvalidRequest), "period")
-
-	res = h.do(http.MethodPut, path, tenant.adminKey,
-		map[string]any{"period": "month", "token_limit": 1000, "soft_threshold_pct": 150})
-	expectParam(t, h.expectError(res, http.StatusBadRequest, apierr.CodeInvalidRequest), "soft_threshold_pct")
-
-	res = h.do(http.MethodPut, path, tenant.adminKey,
-		map[string]any{"period": "month", "token_limit": -1})
+	// A body that configures no slot at all. Accepting it would store a quota
+	// that constrains nothing while reading as though it constrained everything.
+	res := h.do(http.MethodPut, path, tenant.adminKey, map[string]any{})
 	h.expectError(res, http.StatusBadRequest, apierr.CodeInvalidRequest)
+
+	res = h.do(http.MethodPut, path, tenant.adminKey, map[string]any{
+		"month": map[string]any{"tokens": map[string]any{"cap": 1000, "soft_threshold_pct": 150}},
+	})
+	expectParam(t, h.expectError(res, http.StatusBadRequest, apierr.CodeInvalidRequest),
+		"month.tokens.soft_threshold_pct")
+
+	res = h.do(http.MethodPut, path, tenant.adminKey, map[string]any{
+		"day": map[string]any{"cost": map[string]any{"cap": -1}},
+	})
+	expectParam(t, h.expectError(res, http.StatusBadRequest, apierr.CodeInvalidRequest), "day.cost.cap")
+}
+
+// TestKeyQuotaRejectsAnotherTenantsKey covers the path parameter being looked up
+// rather than trusted: a key id is not a capability, and writing a quota against
+// one that belongs elsewhere would let an admin reach outside its own tenant.
+func TestKeyQuotaRejectsAnotherTenantsKey(t *testing.T) {
+	h := newHarness(t)
+	mine := h.newTenant("acme")
+	theirs := h.newTenant("globex")
+
+	listed := h.do(http.MethodGet, "/admin/v1/tenants/"+theirs.id+"/keys", testBootstrapKey, nil)
+	if listed.status != http.StatusOK {
+		t.Fatalf("listing the other tenant's keys: status %d, body %s", listed.status, listed.body)
+	}
+	var listing struct {
+		Data []store.APIKey `json:"data"`
+	}
+	listed.decode(t, &listing)
+	if len(listing.Data) == 0 {
+		t.Fatal("the other tenant holds no keys, so there is no id here to be refused")
+	}
+
+	res := h.do(http.MethodPut,
+		"/admin/v1/tenants/"+mine.id+"/keys/"+listing.Data[0].ID+"/quota", mine.adminKey,
+		map[string]any{"day": map[string]any{"tokens": map[string]any{"cap": 100}}})
+	h.expectError(res, http.StatusNotFound, apierr.CodeResourceNotFound)
 }
 
 // TestQuotaDefaultsSoftThreshold covers the omitted field taking the configured
@@ -808,14 +838,23 @@ func TestQuotaDefaultsSoftThreshold(t *testing.T) {
 	tenant := h.newTenant("acme")
 
 	res := h.do(http.MethodPut, "/admin/v1/tenants/"+tenant.id+"/quota", tenant.adminKey,
-		map[string]any{"period": "month", "token_limit": 1000})
+		map[string]any{"month": map[string]any{"tokens": map[string]any{"cap": 1000}}})
 	if res.status != http.StatusOK {
 		t.Fatalf("setting quota: status %d, body %s", res.status, res.body)
 	}
 	var q store.Quota
 	res.decode(t, &q)
-	if want := h.srv.Config.Quotas.DefaultSoftThresholdPct; q.SoftThresholdPct != want {
-		t.Errorf("soft_threshold_pct = %d, want the configured default %d", q.SoftThresholdPct, want)
+	if q.Month.Tokens == nil {
+		t.Fatalf("the saved quota has no month.tokens slot: %s", res.body)
+	}
+	if want := h.srv.Config.Quotas.DefaultSoftThresholdPct; q.Month.Tokens.SoftThresholdPct != want {
+		t.Errorf("month.tokens.soft_threshold_pct = %d, want the configured default %d",
+			q.Month.Tokens.SoftThresholdPct, want)
+	}
+	// The slots the caller did not name stay unlimited rather than becoming a
+	// cap of zero, which nothing could pass.
+	if q.Day.Tokens != nil || q.Day.Cost != nil || q.Month.Cost != nil {
+		t.Errorf("setting one slot populated others: %s", res.body)
 	}
 }
 

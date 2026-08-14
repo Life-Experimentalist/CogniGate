@@ -114,15 +114,43 @@ type Route struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
-// Quota bounds a tenant's consumption over a period (GW-4). A zero limit means
-// unlimited for that dimension, so a tenant can be capped on spend without also
-// being capped on tokens.
-type Quota struct {
-	TenantID         string  `json:"tenant_id"`
-	Period           string  `json:"period"` // day | month
-	TokenLimit       int64   `json:"token_limit,omitempty"`
-	SpendLimitUSD    float64 `json:"spend_limit_usd,omitempty"`
+// QuotaLimit is one cap slot: a hard ceiling, and the percentage of it at which
+// the holder is warned before reaching it.
+type QuotaLimit struct {
+	Cap              float64 `json:"cap"`
 	SoftThresholdPct int     `json:"soft_threshold_pct"`
+}
+
+// QuotaWindow carries the two unit limits for one window. Either may be absent,
+// so a tenant can be capped on spend without also being capped on tokens.
+type QuotaWindow struct {
+	Tokens *QuotaLimit `json:"tokens,omitempty"`
+	Cost   *QuotaLimit `json:"cost,omitempty"`
+}
+
+// Quota bounds consumption over two windows in two units (GW-4). The four slots
+// are independent and any of them may be absent, which means unlimited for that
+// slot — a pointer rather than a zero value, because a cap of zero is a
+// meaningful configuration and "unset" has to be distinguishable from it.
+//
+// A quota with a KeyID constrains one key rather than the tenant. It can only
+// narrow what the tenant's own quota already allows: both are evaluated, and a
+// request is rejected if either says so, so a key-level cap can never raise a
+// tenant past its own ceiling.
+type Quota struct {
+	TenantID  string      `json:"tenant_id"`
+	KeyID     string      `json:"key_id,omitempty"`
+	Day       QuotaWindow `json:"day"`
+	Month     QuotaWindow `json:"month"`
+	UpdatedAt time.Time   `json:"updated_at"`
+}
+
+// Empty reports whether a quota constrains nothing, which is indistinguishable
+// from having no quota at all and is treated as such rather than as a cap of
+// zero.
+func (q *Quota) Empty() bool {
+	return q.Day.Tokens == nil && q.Day.Cost == nil &&
+		q.Month.Tokens == nil && q.Month.Cost == nil
 }
 
 // Webhook is one delivery target for the GW-4/GW-1/GW-3 event registry.

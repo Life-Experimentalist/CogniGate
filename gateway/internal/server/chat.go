@@ -50,7 +50,7 @@ func (s *Server) handleChatCompletions(c *fiber.Ctx) error {
 
 	tenantID := httpx.TenantID(c)
 
-	quota, err := s.evaluateQuota(c.UserContext(), tenantID)
+	quota, err := s.evaluateQuota(c.UserContext(), requestScope(c))
 	if err != nil {
 		return httpx.Fail(c, err)
 	}

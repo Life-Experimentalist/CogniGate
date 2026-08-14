@@ -4,6 +4,7 @@
 package httpx
 
 import (
+	"strconv"
 	"strings"
 
 	"github.com/gofiber/fiber/v2"
@@ -139,8 +140,16 @@ func Fail(c *fiber.Ctx, err error) error {
 	if id != "" {
 		c.Set(HeaderRequestID, id)
 	}
+	// Every 429 leaves with a Retry-After, because a client that has to guess
+	// will guess badly. A failure that knows how long the wait actually is says
+	// so; one second is the fallback for the rest, which are the rejections a
+	// caller can retry almost immediately.
 	if e.Status == fiber.StatusTooManyRequests && c.Get(fiber.HeaderRetryAfter) == "" {
-		c.Set(fiber.HeaderRetryAfter, "1")
+		seconds := e.RetryAfterSeconds
+		if seconds < 1 {
+			seconds = 1
+		}
+		c.Set(fiber.HeaderRetryAfter, strconv.Itoa(seconds))
 	}
 	return c.Status(e.Status).JSON(e.Envelope(id))
 }
