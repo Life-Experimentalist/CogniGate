@@ -21,6 +21,7 @@ package mockprovider
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -109,6 +110,23 @@ type fault struct {
 	delay     time.Duration
 }
 
+// Delivery is one webhook the gateway sent to a sink, as the sink saw it.
+//
+// The signature is recorded but never checked here: whether the HMAC is correct
+// is the suite's assertion to make, and a mock that rejected a bad one would
+// turn a signing bug into a missing delivery rather than a failed check.
+type Delivery struct {
+	Type      string          `json:"type"`
+	EventID   string          `json:"event_id"`
+	Signature string          `json:"signature"`
+	Tenant    string          `json:"tenant"`
+	Body      json.RawMessage `json:"body"`
+}
+
+// maxEventBody bounds what a sink will read. Nothing legitimate approaches it;
+// it exists so a misdirected request cannot grow this process without limit.
+const maxEventBody = 1 << 20
+
 // Server is the mock upstream. The zero value is not usable; call New.
 type Server struct {
 	mu       sync.Mutex
@@ -117,6 +135,11 @@ type Server struct {
 	faults   map[string]*fault // by model id; "" is the catch-all
 	requests map[string]int    // completions served, by model id
 	keys     map[string]int    // completions served, by credential
+	// events holds webhook deliveries by sink name. Keyed like faults are, so
+	// two suite runs pointing their webhooks at the same mock cannot count each
+	// other's deliveries — which matters more here than anywhere else, since the
+	// assertion GW-4 asks for is "exactly one".
+	events map[string][]Delivery
 }
 
 func New() *Server {
@@ -124,6 +147,7 @@ func New() *Server {
 		faults:   map[string]*fault{},
 		requests: map[string]int{},
 		keys:     map[string]int{},
+		events:   map[string][]Delivery{},
 	}
 	s.seed()
 	return s
@@ -151,10 +175,17 @@ func (s *Server) Handler() http.Handler {
 		mux.HandleFunc("POST "+prefix+"/chat/completions", s.chatCompletions)
 	}
 
+	// The webhook sink. It lives here rather than in the suite because the
+	// gateway has to be able to dial it, and this process is the one address the
+	// deployment already knows how to reach — a sink the suite hosted itself
+	// would be on a hostname a containerised gateway cannot resolve.
+	mux.HandleFunc("POST /_events/{sink}", s.receiveEvent)
+
 	mux.HandleFunc("GET /_control/state", s.controlState)
 	mux.HandleFunc("POST /_control/models", s.controlAddModel)
 	mux.HandleFunc("DELETE /_control/models/{id}", s.controlRemoveModel)
 	mux.HandleFunc("POST /_control/faults", s.controlSetFault)
+	mux.HandleFunc("GET /_control/events/{sink}", s.controlEvents)
 	mux.HandleFunc("POST /_control/reset", s.controlReset)
 
 	return mux
@@ -370,6 +401,66 @@ func (s *Server) abortMidStream(w http.ResponseWriter, model string) {
 	panic(http.ErrAbortHandler)
 }
 
+// --- webhook sink -----------------------------------------------------------
+
+// receiveEvent records one webhook delivery under the sink named in the path.
+//
+// It answers 204 unconditionally, including for a body it could not parse: a
+// sink that returned 500 would put the delivery back in the gateway's retry
+// queue, and a test counting deliveries would then be counting the gateway's
+// retries of its own failure rather than the events it raised.
+func (s *Server) receiveEvent(w http.ResponseWriter, r *http.Request) {
+	sink := r.PathValue("sink")
+
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxEventBody))
+	if err != nil {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	var envelope struct {
+		ID     string `json:"id"`
+		Type   string `json:"type"`
+		Tenant string `json:"tenant"`
+	}
+	_ = json.Unmarshal(body, &envelope)
+
+	// The header is the gateway's own identifier for the delivery; the body's is
+	// the event's. They agree in a correct implementation, and preferring the
+	// header would hide it when they do not.
+	eventID := envelope.ID
+	if eventID == "" {
+		eventID = r.Header.Get("X-CogniGate-Event-Id")
+	}
+
+	s.mu.Lock()
+	s.events[sink] = append(s.events[sink], Delivery{
+		Type:      envelope.Type,
+		EventID:   eventID,
+		Signature: r.Header.Get("X-CogniGate-Signature"),
+		Tenant:    envelope.Tenant,
+		Body:      json.RawMessage(body),
+	})
+	s.mu.Unlock()
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// controlEvents reports what one sink has received, in arrival order. A sink
+// nothing has been delivered to is an empty list rather than a 404: "no event
+// arrived" is the ordinary reading of an absent sink, and answering 404 would
+// make a test that polls for a delivery fail on its first poll for a reason
+// that has nothing to do with what it is testing.
+func (s *Server) controlEvents(w http.ResponseWriter, r *http.Request) {
+	sink := r.PathValue("sink")
+
+	s.mu.Lock()
+	got := append([]Delivery{}, s.events[sink]...)
+	s.mu.Unlock()
+
+	writeJSON(w, http.StatusOK, map[string]any{"sink": sink, "data": got})
+}
+
 // --- control plane ----------------------------------------------------------
 
 func (s *Server) controlState(w http.ResponseWriter, r *http.Request) {
@@ -496,6 +587,7 @@ func (s *Server) controlReset(w http.ResponseWriter, r *http.Request) {
 	s.faults = map[string]*fault{}
 	s.requests = map[string]int{}
 	s.keys = map[string]int{}
+	s.events = map[string][]Delivery{}
 	s.mu.Unlock()
 
 	w.WriteHeader(http.StatusNoContent)

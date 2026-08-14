@@ -100,6 +100,14 @@ var suite suiteState
 const (
 	headerServedBy      = "X-CogniGate-Served-By"
 	headerFallbackDepth = "X-CogniGate-Fallback-Depth"
+	headerQuotaState    = "X-CogniGate-Quota-State"
+)
+
+// The GW-4 quota states, likewise spelled out rather than imported.
+const (
+	quotaOK           = "ok"
+	quotaSoftExceeded = "soft-exceeded"
+	quotaHardExceeded = "hard-exceeded"
 )
 
 type client struct {
@@ -689,6 +697,280 @@ func awaitModel(t *testing.T, key, id string, present bool) {
 	}
 }
 
+// --- quotas -----------------------------------------------------------------
+
+// tokenCap and costCap build the four-slot body PUT .../quota takes. Every
+// GW-4 test configures exactly the slots it is about: an unset slot is
+// unlimited, and a stray one would let a test be rejected by a cap it did not
+// mean to set.
+func tokenCap(cap float64, softPct int) map[string]any {
+	return map[string]any{"tokens": map[string]any{"cap": cap, "soft_threshold_pct": softPct}}
+}
+
+func costCap(cap float64, softPct int) map[string]any {
+	return map[string]any{"cost": map[string]any{"cap": cap, "soft_threshold_pct": softPct}}
+}
+
+// putQuota writes a tenant's quota. The caller passes the window bodies it
+// wants; nothing is filled in for it.
+func putQuota(t *testing.T, tenantID string, body map[string]any) {
+	t.Helper()
+	resp := suite.client.admin(t, http.MethodPut, "/admin/v1/tenants/"+tenantID+"/quota", body)
+	if resp.Status != http.StatusOK {
+		t.Fatalf("setting the quota for %s: status %d\n%s", tenantID, resp.Status, truncate(resp.Body))
+	}
+}
+
+// putKeyQuota writes one key's quota, which narrows its tenant's rather than
+// replacing it.
+func putKeyQuota(t *testing.T, tenantID, keyID string, body map[string]any) {
+	t.Helper()
+	resp := suite.client.admin(t, http.MethodPut,
+		"/admin/v1/tenants/"+tenantID+"/keys/"+keyID+"/quota", body)
+	if resp.Status != http.StatusOK {
+		t.Fatalf("setting the quota for key %s: status %d\n%s", keyID, resp.Status, truncate(resp.Body))
+	}
+}
+
+// usageLimit is one configured cap as GET /v1/usage reports it.
+type usageLimit struct {
+	Scope            string  `json:"scope"`
+	Window           string  `json:"window"`
+	Unit             string  `json:"unit"`
+	Cap              float64 `json:"cap"`
+	SoftThresholdPct int     `json:"soft_threshold_pct"`
+	Consumed         float64 `json:"consumed"`
+	Remaining        float64 `json:"remaining"`
+	ResetsAt         string  `json:"resets_at"`
+	State            string  `json:"state"`
+}
+
+// usageReport is GET /v1/usage.
+type usageReport struct {
+	Object           string       `json:"object"`
+	Window           string       `json:"window"`
+	Requests         int64        `json:"requests"`
+	PromptTokens     int64        `json:"prompt_tokens"`
+	CompletionTokens int64        `json:"completion_tokens"`
+	TotalTokens      int64        `json:"total_tokens"`
+	CostUSD          float64      `json:"cost_usd"`
+	State            string       `json:"state"`
+	Limits           []usageLimit `json:"limits"`
+}
+
+// slot finds the limit for one window and unit, so an assertion can name what it
+// is about rather than indexing into a list whose order is not contractual.
+func (u usageReport) slot(t *testing.T, scope, window, unit string) usageLimit {
+	t.Helper()
+	for _, l := range u.Limits {
+		if l.Scope == scope && l.Window == window && l.Unit == unit {
+			return l
+		}
+	}
+	t.Fatalf("GET /v1/usage reports no %s %s.%s limit; got %+v", scope, window, unit, u.Limits)
+	return usageLimit{}
+}
+
+func usage(t *testing.T, key, window string) usageReport {
+	t.Helper()
+	resp := suite.client.do(t, http.MethodGet, "/v1/usage?window="+window, key, nil)
+	if resp.Status != http.StatusOK {
+		t.Fatalf("GET /v1/usage: status %d\n%s", resp.Status, truncate(resp.Body))
+	}
+	var out usageReport
+	if err := json.Unmarshal(resp.Body, &out); err != nil {
+		t.Fatalf("GET /v1/usage: %v\n%s", err, truncate(resp.Body))
+	}
+	return out
+}
+
+// breakdownReport is GET /v1/usage/breakdown.
+type breakdownReport struct {
+	Object  string `json:"object"`
+	Window  string `json:"window"`
+	GroupBy string `json:"group_by"`
+	Data    []struct {
+		Key              string  `json:"key"`
+		Requests         int64   `json:"requests"`
+		PromptTokens     int64   `json:"prompt_tokens"`
+		CompletionTokens int64   `json:"completion_tokens"`
+		TotalTokens      int64   `json:"total_tokens"`
+		CostUSD          float64 `json:"cost_usd"`
+	} `json:"data"`
+}
+
+func usageBreakdown(t *testing.T, key, window, groupBy string) breakdownReport {
+	t.Helper()
+	resp := suite.client.do(t, http.MethodGet,
+		"/v1/usage/breakdown?window="+window+"&group_by="+groupBy, key, nil)
+	if resp.Status != http.StatusOK {
+		t.Fatalf("GET /v1/usage/breakdown: status %d\n%s", resp.Status, truncate(resp.Body))
+	}
+	var out breakdownReport
+	if err := json.Unmarshal(resp.Body, &out); err != nil {
+		t.Fatalf("GET /v1/usage/breakdown: %v\n%s", err, truncate(resp.Body))
+	}
+	return out
+}
+
+// awaitUsage polls GET /v1/usage until the predicate holds.
+//
+// Telemetry is written after the response is returned, so a test that completes
+// a request and reads usage in the next statement is reading a total that has
+// not been updated yet. GW-4 allows sixty seconds of staleness; the deadline here
+// is shorter because a gateway that takes a minute would be within its rights and
+// still worth reporting, and the suite would rather say so than hang.
+func awaitUsage(t *testing.T, key, window string, want func(usageReport) bool, describe string) usageReport {
+	t.Helper()
+
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		got := usage(t, key, window)
+		if want(got) {
+			return got
+		}
+		if time.Now().After(deadline) {
+			encoded, _ := json.MarshalIndent(got, "", "  ")
+			t.Fatalf("GET /v1/usage never reported %s\n%s", describe, truncate(encoded))
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+}
+
+// awaitChat polls completions until one satisfies the predicate, and returns it.
+//
+// Unlike awaitUsage this costs tokens: every poll is a real completion, metered
+// against the very quota the caller is waiting on. Tests that use it size their
+// caps so the polling cannot itself reach the cap — a poll loop that exhausted
+// the quota it was watching would fail for its own reason rather than the
+// gateway's.
+func awaitChat(t *testing.T, key, model string, want func(*response) bool, describe string) *response {
+	t.Helper()
+
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		resp := chat(t, key, model)
+		if want(resp) {
+			return resp
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("no completion ever %s; last was status %d with %s: %q\n%s",
+				describe, resp.Status, headerQuotaState, resp.Header.Get(headerQuotaState),
+				truncate(resp.Body))
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+}
+
+// --- webhook sink -----------------------------------------------------------
+
+// delivery is one webhook the mock's sink received.
+type delivery struct {
+	Type      string `json:"type"`
+	EventID   string `json:"event_id"`
+	Signature string `json:"signature"`
+	Tenant    string `json:"tenant"`
+	Body      struct {
+		Data map[string]any `json:"data"`
+	} `json:"body"`
+}
+
+// newSink subscribes a tenant's webhook to the named events and returns a reader
+// for what arrives.
+//
+// The sink is hosted by the mock rather than by this process because the gateway
+// has to dial it: in a container deployment the suite's own address is not
+// reachable from the gateway's network, which is the same problem
+// CONF_MOCK_PROVIDER already solves. Each sink has a path of its own, so two
+// tests — or two concurrent runs — cannot count each other's deliveries.
+func newSink(t *testing.T, tenantID string, eventTypes ...string) func(*testing.T) []delivery {
+	t.Helper()
+
+	name := uniqueName(strings.ToLower(strings.NewReplacer("/", "-", "_", "-").Replace(t.Name())))
+	resp := suite.client.admin(t, http.MethodPost, "/admin/v1/tenants/"+tenantID+"/webhooks",
+		map[string]any{
+			"url": suite.providerURL + "/_events/" + name,
+			// Long enough for the gateway's minimum, and not a credential: the
+			// sink records the signature without checking it.
+			"secret": "conformance-webhook-secret",
+			"events": eventTypes,
+		})
+	if resp.Status != http.StatusCreated {
+		t.Fatalf("subscribing a webhook for %s: status %d\n%s", tenantID, resp.Status, truncate(resp.Body))
+	}
+
+	return func(t *testing.T) []delivery {
+		t.Helper()
+		got := mockControl(t, http.MethodGet, "/_control/events/"+name, nil)
+		var body struct {
+			Data []delivery `json:"data"`
+		}
+		if err := json.Unmarshal(got.Body, &body); err != nil {
+			t.Fatalf("reading the sink: %v\n%s", err, truncate(got.Body))
+		}
+		return body.Data
+	}
+}
+
+// deliveriesOfType filters a sink's deliveries, because a quota that crosses its
+// soft threshold and later its hard cap raises two different event types and only
+// one of them is ever the subject of an assertion.
+func deliveriesOfType(all []delivery, eventType string) []delivery {
+	var out []delivery
+	for _, d := range all {
+		if d.Type == eventType {
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
+// awaitDeliveries waits for want events of a type to arrive, and then keeps
+// waiting.
+//
+// The second wait is the point. "Exactly one" is two claims — that one arrived,
+// and that a second did not — and a test that stopped at the first would prove
+// only the easier half, passing for a gateway that goes on to deliver one webhook
+// per request for the rest of the window. Delivery is asynchronous and retried,
+// so the settling period has to outlast a redelivery rather than merely a
+// round trip.
+func awaitDeliveries(t *testing.T, read func(*testing.T) []delivery, eventType string, want int) []delivery {
+	t.Helper()
+
+	deadline := time.Now().Add(20 * time.Second)
+	var got []delivery
+	for {
+		got = deliveriesOfType(read(t), eventType)
+		if len(got) >= want {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("only %d %s event(s) arrived, want %d", len(got), eventType, want)
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+
+	time.Sleep(2 * time.Second)
+	return deliveriesOfType(read(t), eventType)
+}
+
+// allowSeconds starts a stopwatch and returns the check for it. Several
+// acceptance criteria are bounded in wall-clock time, and a test that waited
+// without measuring would pass a gateway that took a minute over a bound of ten
+// seconds. The failure is reported rather than fatal: what the gateway
+// eventually did is still worth asserting on.
+func allowSeconds(t *testing.T, limit time.Duration) func(what string) {
+	t.Helper()
+	started := time.Now()
+	return func(what string) {
+		t.Helper()
+		if elapsed := time.Since(started); elapsed > limit {
+			t.Errorf("%s after %s, past the %s the specification allows",
+				what, elapsed.Round(time.Millisecond), limit)
+		}
+	}
+}
+
 // --- extra tenants ----------------------------------------------------------
 
 // tenant is a tenant the suite created beyond the one it provisions for itself.
@@ -734,6 +1016,41 @@ func newTenant(t *testing.T, hint string) tenant {
 	return tenant{ID: body.ID, Key: minted.Secret}
 }
 
+// dataKey is a minted data credential, kept with its id because a key-level
+// quota is addressed by id while the requests it governs are made with the
+// secret. newTenant returns only the secret, which is all every other
+// requirement needs.
+type dataKey struct {
+	ID     string
+	Secret string
+}
+
+// newDataKey mints an additional data key on a tenant.
+//
+// GW-4.AC-3 is the reason it exists: "a sibling key continues to work" cannot be
+// written with one key, and the id has to survive the mint because the plaintext
+// is shown exactly once and the id is never derivable from it.
+func newDataKey(t *testing.T, tenantID, name string) dataKey {
+	t.Helper()
+
+	created := suite.client.admin(t, http.MethodPost, "/admin/v1/tenants/"+tenantID+"/keys",
+		map[string]any{"name": name, "plane": "data"})
+	if created.Status != http.StatusCreated {
+		t.Fatalf("minting %q for %s: status %d\n%s", name, tenantID, created.Status, truncate(created.Body))
+	}
+	var minted struct {
+		Key struct {
+			ID string `json:"id"`
+		} `json:"key"`
+		Secret string `json:"secret"`
+	}
+	if err := json.Unmarshal(created.Body, &minted); err != nil ||
+		minted.Secret == "" || minted.Key.ID == "" {
+		t.Fatalf("minting %q for %s: no id and secret in %s", name, tenantID, truncate(created.Body))
+	}
+	return dataKey{ID: minted.Key.ID, Secret: minted.Secret}
+}
+
 // addMockProvider points a tenant at the same mock the suite provisioned, so two
 // tenants can be compared on something other than one of them being empty.
 func addMockProvider(t *testing.T, tn tenant) {
@@ -768,7 +1085,7 @@ func provision(runID string) error {
 	if tenant.Status != http.StatusCreated {
 		return fmt.Errorf("creating the tenant: status %d\n%s\n"+
 			"CONF_ADMIN_KEY must be a root-scoped admin credential; in the reference "+
-			"deployment that is the value of GATEWAY_BOOTSTRAP_KEY", tenant.Status, truncate(tenant.Body))
+			"deployment that is the value of ADMIN_BOOTSTRAP_KEY", tenant.Status, truncate(tenant.Body))
 	}
 	var created struct {
 		ID string `json:"id"`
