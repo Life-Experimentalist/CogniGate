@@ -36,3 +36,11 @@ func query(c *fiber.Ctx, name string, def ...string) string {
 func header(c *fiber.Ctx, name string) string {
 	return utils.CopyString(c.Get(name))
 }
+
+// path returns the request path the caller owns. It has the same pooled-buffer
+// problem as the accessors above, and it bites hardest in the audit log, where
+// the value outlives the request by design: an entry recorded uncopied reads
+// back later as its own prefix spliced onto a fragment of some subsequent URL.
+func path(c *fiber.Ctx) string {
+	return utils.CopyString(c.Path())
+}

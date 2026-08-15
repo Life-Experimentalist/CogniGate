@@ -30,6 +30,7 @@ type Store interface {
 	CreateTenant(ctx context.Context, name string) (*Tenant, error)
 	GetTenant(ctx context.Context, id string) (*Tenant, error)
 	ListTenants(ctx context.Context) ([]*Tenant, error)
+	UpdateTenant(ctx context.Context, id string, patch TenantPatch) (*Tenant, error)
 	DeleteTenant(ctx context.Context, id string) error
 
 	// CreateAPIKey returns the record and the plaintext credential. The
@@ -41,6 +42,7 @@ type Store interface {
 	CreateProvider(ctx context.Context, p *Provider) (*Provider, error)
 	ListProviders(ctx context.Context, tenantID string) ([]*Provider, error)
 	GetProvider(ctx context.Context, tenantID, id string) (*Provider, error)
+	UpdateProvider(ctx context.Context, tenantID, id string, patch ProviderPatch) (*Provider, error)
 	DeleteProvider(ctx context.Context, tenantID, id string) error
 
 	UpsertAlias(ctx context.Context, a *Alias) (*Alias, error)
@@ -71,6 +73,15 @@ type Store interface {
 	// is what a usage record carries: the key material never reaches the store.
 	KeyUsage(ctx context.Context, tenantID, keyPrefix string, since, until time.Time) (UsageTotals, error)
 	UsageBreakdown(ctx context.Context, tenantID string, since, until time.Time, groupBy string) ([]UsageBucket, error)
+
+	// RecordAudit appends one entry to the admin audit log. The log is
+	// append-only by contract: there is deliberately no update or delete, since
+	// a log an administrator can edit cannot answer the question it exists to
+	// answer.
+	RecordAudit(ctx context.Context, e *AuditEntry) error
+	// ListAudit returns entries newest first. It takes no filter: the log is
+	// root-scope-only, small, and read by a human looking for what changed.
+	ListAudit(ctx context.Context) ([]*AuditEntry, error)
 
 	// Ping reports whether the backing store is reachable, for GET /v1/health.
 	Ping(ctx context.Context) error

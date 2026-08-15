@@ -28,9 +28,20 @@ func (s *Server) adminRoutes(g fiber.Router) {
 
 	g.Post("/catalog/refresh", s.refreshCatalog)
 
+	g.Get("/audit", s.listAudit)
+
+	// Root admin keys are not under /tenants because a root key belongs to no
+	// tenant. Minting one through a tenant's collection would tie the only
+	// credential that outranks every tenant to the lifetime of one of them —
+	// deleting that tenant would take the operator's own access with it.
+	g.Post("/admin-keys", s.createAdminKey)
+	g.Get("/admin-keys", s.listAdminKeys)
+	g.Delete("/admin-keys/:id", s.revokeAdminKey)
+
 	g.Post("/tenants", s.createTenant)
 	g.Get("/tenants", s.listTenants)
 	g.Get("/tenants/:tenant", s.getTenant)
+	g.Patch("/tenants/:tenant", s.updateTenant)
 	g.Delete("/tenants/:tenant", s.deleteTenant)
 
 	t := g.Group("/tenants/:tenant")
@@ -41,6 +52,7 @@ func (s *Server) adminRoutes(g fiber.Router) {
 
 	t.Post("/providers", s.createProvider)
 	t.Get("/providers", s.listProviders)
+	t.Patch("/providers/:id", s.updateProvider)
 	t.Delete("/providers/:id", s.deleteProvider)
 
 	t.Put("/aliases/:name", s.upsertAlias)
@@ -73,6 +85,15 @@ func (s *Server) adminRoutes(g fiber.Router) {
 // --- authorisation ----------------------------------------------------------
 
 // tenantScope resolves the path's tenant and checks the key may reach it.
+//
+// Reaching another tenant is 404, not 403. GW-6 requires it, and the reason is
+// that 403 answers a question the caller was not entitled to ask: it confirms
+// the tenant exists. Anyone holding one tenant's key could then enumerate the
+// deployment's whole customer list by guessing ids and reading the status code.
+//
+// The refusal is built from the same constructor a genuinely missing tenant
+// uses, so the two responses are identical down to the message. Distinguishing
+// them by wording would restore the leak this closes.
 func (s *Server) tenantScope(c *fiber.Ctx) (string, error) {
 	id := strings.TrimSpace(param(c, "tenant"))
 	if id == "" {
@@ -88,7 +109,7 @@ func (s *Server) tenantScope(c *fiber.Ctx) (string, error) {
 	if strings.TrimPrefix(key.Scope, "tenant:") == id {
 		return id, nil
 	}
-	return "", apierr.InsufficientScope()
+	return "", apierr.ResourceNotFound("tenant", id)
 }
 
 // requireRoot guards the routes that create or destroy tenants themselves. A
@@ -192,7 +213,9 @@ func (s *Server) refreshCatalog(c *fiber.Ctx) error {
 	} else {
 		own := strings.TrimPrefix(key.Scope, "tenant:")
 		if req.Tenant != "" && req.Tenant != own {
-			return httpx.Fail(c, apierr.InsufficientScope())
+			// 404 for the same reason tenantScope answers 404: naming another
+			// tenant must not reveal whether it exists.
+			return httpx.Fail(c, apierr.ResourceNotFound("tenant", req.Tenant))
 		}
 		targets = []string{own}
 	}
@@ -287,7 +310,7 @@ func (s *Server) listTenants(c *fiber.Ctx) error {
 	if err != nil {
 		return httpx.Fail(c, apierr.From(err))
 	}
-	return c.JSON(fiber.Map{"object": "list", "data": tenants})
+	return sendPage(c, tenants, func(t *store.Tenant) string { return t.ID })
 }
 
 func (s *Server) getTenant(c *fiber.Ctx) error {
@@ -299,6 +322,51 @@ func (s *Server) getTenant(c *fiber.Ctx) error {
 	defer cancel()
 
 	tenant, err := s.Store.GetTenant(ctx, id)
+	if err != nil {
+		return httpx.Fail(c, storeErr(err, "tenant", id))
+	}
+	return c.JSON(tenant)
+}
+
+// updateTenant renames a tenant or suspends it.
+//
+// Suspension is not new enforcement: authentication already refuses every key
+// belonging to a suspended tenant. Until now nothing could set the field, so
+// the check could never fire — this is the half of that feature that was
+// missing, not a new one.
+//
+// Root only. A tenant able to un-suspend itself would make suspension
+// advisory, which is not what an operator reaching for it wants.
+func (s *Server) updateTenant(c *fiber.Ctx) error {
+	if err := requireRoot(c); err != nil {
+		return httpx.Fail(c, err)
+	}
+	id := param(c, "tenant")
+
+	var req struct {
+		Name   *string `json:"name"`
+		Status *string `json:"status"`
+	}
+	if err := parse(c, &req); err != nil {
+		return httpx.Fail(c, err)
+	}
+	if req.Name == nil && req.Status == nil {
+		return httpx.Fail(c, apierr.
+			InvalidRequest("A tenant update must change name or status."))
+	}
+	if req.Status != nil {
+		switch *req.Status {
+		case "active", "suspended":
+		default:
+			return httpx.Fail(c, apierr.
+				InvalidRequest(`status must be "active" or "suspended".`).WithParam("status"))
+		}
+	}
+
+	ctx, cancel := s.opContext(c)
+	defer cancel()
+
+	tenant, err := s.Store.UpdateTenant(ctx, id, store.TenantPatch{Name: req.Name, Status: req.Status})
 	if err != nil {
 		return httpx.Fail(c, storeErr(err, "tenant", id))
 	}
@@ -390,15 +458,100 @@ func (s *Server) createKey(c *fiber.Ctx) error {
 		return httpx.Fail(c, storeErr(err, "tenant", tenantID))
 	}
 
-	// The plaintext is returned exactly once, here. The store keeps only a hash,
-	// so there is no second chance to read it and no way for a database
-	// compromise to yield a working credential.
+	return mintedKey(c, key, plaintext)
+}
+
+// mintedKey is the show-once response shared by both key-creation routes.
+//
+// The plaintext is returned exactly once, here. The store keeps only a hash, so
+// there is no second chance to read it and no way for a database compromise to
+// yield a working credential. Both routes answer in one shape so a caller
+// cannot come to depend on one of them being readable later.
+func mintedKey(c *fiber.Ctx, key *store.APIKey, plaintext string) error {
 	return c.Status(fiber.StatusCreated).JSON(fiber.Map{
 		"key":    key,
 		"secret": plaintext,
 		"warning": "This is the only time the secret is shown. Store it now; " +
 			"it cannot be retrieved again.",
 	})
+}
+
+// --- root admin keys --------------------------------------------------------
+
+// createAdminKey mints a root admin credential, which belongs to no tenant.
+//
+// This is how a deployment rotates away from its bootstrap key. Without it the
+// only root credential is the one in the environment, which cannot be revoked
+// and cannot be replaced without a restart.
+func (s *Server) createAdminKey(c *fiber.Ctx) error {
+	if err := requireRoot(c); err != nil {
+		return httpx.Fail(c, err)
+	}
+
+	var req struct {
+		Name      string     `json:"name"`
+		ExpiresAt *time.Time `json:"expires_at"`
+	}
+	if err := parse(c, &req); err != nil {
+		return httpx.Fail(c, err)
+	}
+	req.Name = strings.TrimSpace(req.Name)
+	if req.Name == "" {
+		return httpx.Fail(c, apierr.InvalidRequest("A key name is required.").WithParam("name"))
+	}
+	if req.ExpiresAt != nil && !req.ExpiresAt.After(time.Now()) {
+		return httpx.Fail(c, apierr.
+			InvalidRequest("expires_at must be in the future.").WithParam("expires_at"))
+	}
+
+	ctx, cancel := s.opContext(c)
+	defer cancel()
+
+	// The plane and scope are not caller-supplied. This route exists only to
+	// mint root credentials; a scope parameter here would be a second, less
+	// guarded path to the privilege escalation createKey is careful to refuse.
+	key, plaintext, err := s.Store.CreateAPIKey(ctx, "", store.PlaneAdmin, req.Name, store.ScopeRoot, req.ExpiresAt)
+	if err != nil {
+		return httpx.Fail(c, apierr.From(err))
+	}
+	return mintedKey(c, key, plaintext)
+}
+
+func (s *Server) listAdminKeys(c *fiber.Ctx) error {
+	if err := requireRoot(c); err != nil {
+		return httpx.Fail(c, err)
+	}
+	ctx, cancel := s.opContext(c)
+	defer cancel()
+
+	// The empty tenant id is what a root key is stored under, so this lists
+	// exactly the tenant-less credentials and nothing else.
+	keys, err := s.Store.ListAPIKeys(ctx, "")
+	if err != nil {
+		return httpx.Fail(c, apierr.From(err))
+	}
+	return sendPage(c, keys, func(k *store.APIKey) string { return k.ID })
+}
+
+// revokeAdminKey retires a root credential.
+//
+// There is deliberately no guard against revoking the last one. The bootstrap
+// key is checked at authentication time against the process environment rather
+// than resolved through the store, so it survives any revocation here and
+// remains the documented way back in.
+func (s *Server) revokeAdminKey(c *fiber.Ctx) error {
+	if err := requireRoot(c); err != nil {
+		return httpx.Fail(c, err)
+	}
+	id := param(c, "id")
+
+	ctx, cancel := s.opContext(c)
+	defer cancel()
+
+	if err := s.Store.RevokeAPIKey(ctx, "", id); err != nil {
+		return httpx.Fail(c, storeErr(err, "key", id))
+	}
+	return c.SendStatus(fiber.StatusNoContent)
 }
 
 func (s *Server) listKeys(c *fiber.Ctx) error {
@@ -413,7 +566,7 @@ func (s *Server) listKeys(c *fiber.Ctx) error {
 	if err != nil {
 		return httpx.Fail(c, apierr.From(err))
 	}
-	return c.JSON(fiber.Map{"object": "list", "data": keys})
+	return sendPage(c, keys, func(k *store.APIKey) string { return k.ID })
 }
 
 func (s *Server) revokeKey(c *fiber.Ctx) error {
@@ -506,7 +659,72 @@ func (s *Server) listProviders(c *fiber.Ctx) error {
 	if err != nil {
 		return httpx.Fail(c, apierr.From(err))
 	}
-	return c.JSON(fiber.Map{"object": "list", "data": providers})
+	return sendPage(c, providers, func(p *store.Provider) string { return p.ID })
+}
+
+// updateProvider rotates a key pool, moves a base URL, or takes a provider out
+// of rotation.
+//
+// Rotation has to be an update rather than a delete-and-recreate: the provider
+// id is what routing rules and fallback chains name, so recreating it would
+// silently break every chain that referenced it at the exact moment an operator
+// was responding to a leaked credential.
+//
+// An explicitly empty keys array is refused. A provider with no credentials
+// cannot serve anything, so accepting the write would only defer the failure to
+// the next completion, where it surfaces as an upstream error rather than as
+// the mistake it is.
+func (s *Server) updateProvider(c *fiber.Ctx) error {
+	tenantID, err := s.tenantScope(c)
+	if err != nil {
+		return httpx.Fail(c, err)
+	}
+	id := param(c, "id")
+
+	var req struct {
+		BaseURL *string   `json:"base_url"`
+		Enabled *bool     `json:"enabled"`
+		Keys    *[]string `json:"keys"`
+	}
+	if err := parse(c, &req); err != nil {
+		return httpx.Fail(c, err)
+	}
+	if req.BaseURL == nil && req.Enabled == nil && req.Keys == nil {
+		return httpx.Fail(c, apierr.
+			InvalidRequest("A provider update must change base_url, enabled or keys."))
+	}
+
+	patch := store.ProviderPatch{Enabled: req.Enabled}
+	if req.BaseURL != nil {
+		if err := validateBaseURL(*req.BaseURL); err != nil {
+			return httpx.Fail(c, err)
+		}
+		patch.BaseURL = req.BaseURL
+	}
+	if req.Keys != nil {
+		keys := nonEmpty(*req.Keys)
+		if len(keys) == 0 {
+			return httpx.Fail(c, apierr.
+				InvalidRequest("At least one provider API key is required.").WithParam("keys"))
+		}
+		patch.Keys = keys
+	}
+
+	ctx, cancel := s.opContext(c)
+	defer cancel()
+
+	p, err := s.Store.UpdateProvider(ctx, tenantID, id, patch)
+	if err != nil {
+		return httpx.Fail(c, storeErr(err, "provider", id))
+	}
+
+	// The catalog is keyed by what the provider was when it was last polled, so
+	// a moved base URL or a rotated key has to invalidate it — otherwise the
+	// gateway keeps dispatching against the old configuration until the TTL
+	// expires, which is the opposite of what someone rotating a leaked key
+	// needs.
+	s.Catalog.Invalidate(tenantID)
+	return c.JSON(p)
 }
 
 func (s *Server) deleteProvider(c *fiber.Ctx) error {
@@ -627,7 +845,7 @@ func (s *Server) listAliases(c *fiber.Ctx) error {
 	if err != nil {
 		return httpx.Fail(c, apierr.From(err))
 	}
-	return c.JSON(fiber.Map{"object": "list", "data": aliases})
+	return sendPage(c, aliases, func(a *store.Alias) string { return a.ID })
 }
 
 func (s *Server) deleteAlias(c *fiber.Ctx) error {
@@ -706,7 +924,7 @@ func (s *Server) listRoutes(c *fiber.Ctx) error {
 	if err != nil {
 		return httpx.Fail(c, apierr.From(err))
 	}
-	return c.JSON(fiber.Map{"object": "list", "data": routes})
+	return sendPage(c, routes, func(r *store.Route) string { return r.ID })
 }
 
 func (s *Server) deleteRoute(c *fiber.Ctx) error {
@@ -934,7 +1152,7 @@ func (s *Server) listWebhooks(c *fiber.Ctx) error {
 	if err != nil {
 		return httpx.Fail(c, apierr.From(err))
 	}
-	return c.JSON(fiber.Map{"object": "list", "data": hooks})
+	return sendPage(c, hooks, func(w *store.Webhook) string { return w.ID })
 }
 
 func (s *Server) deleteWebhook(c *fiber.Ctx) error {
