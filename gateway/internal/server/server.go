@@ -215,12 +215,19 @@ func (s *Server) Draining() bool { return s.draining.Load() }
 // handleHealthz is the liveness probe. It is deliberately unauthenticated and
 // dependency-free: a probe that checks the database turns a database blip into a
 // rolling restart of every healthy gateway.
+//
+// The body carries the status and nothing else. GW-5 pins it to that, and the
+// reason is the same one that keeps tenant ids out of it: anyone who can open a
+// socket can read this, and a build version is exactly what someone deciding
+// whether a published vulnerability applies to this deployment would want. The
+// version is still reported by GET /v1/health and GET /v1/meta, both of which
+// require a credential.
 func (s *Server) handleHealthz(c *fiber.Ctx) error {
 	if s.draining.Load() {
 		return c.Status(fiber.StatusServiceUnavailable).
 			JSON(fiber.Map{"status": "draining"})
 	}
-	return c.JSON(fiber.Map{"status": "ok", "version": s.version()})
+	return c.JSON(fiber.Map{"status": "ok"})
 }
 
 func (s *Server) handleMetrics(c *fiber.Ctx) error {

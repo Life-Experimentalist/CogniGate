@@ -135,6 +135,11 @@ type Server struct {
 	faults   map[string]*fault // by model id; "" is the catch-all
 	requests map[string]int    // completions served, by model id
 	keys     map[string]int    // completions served, by credential
+	// listings counts catalogue reads. GW-5 requires a health endpoint to answer
+	// from gateway-local state without dialling anyone, and a listing is the only
+	// call it could plausibly make — a health check cannot issue a completion, so
+	// counting completions alone would make that assertion true by construction.
+	listings int
 	// events holds webhook deliveries by sink name. Keyed like faults are, so
 	// two suite runs pointing their webhooks at the same mock cannot count each
 	// other's deliveries — which matters more here than anywhere else, since the
@@ -173,6 +178,20 @@ func (s *Server) Handler() http.Handler {
 	for _, prefix := range []string{"", "/v1"} {
 		mux.HandleFunc("GET "+prefix+"/models", s.listModels)
 		mux.HandleFunc("POST "+prefix+"/chat/completions", s.chatCompletions)
+
+		// The restricted view. /_only/a,b behaves exactly like the root, except
+		// that it serves and accepts only the models named in the path.
+		//
+		// GW-5.AC-4 is why it exists: "every provider this tenant can use has an
+		// open breaker" is only reachable for a tenant whose catalogue is small
+		// enough to trip entirely, and this mock's catalogue is global and grows
+		// as tests add to it. The alternative — a catch-all fault — would break
+		// every other test in the run and every concurrent run besides, which is
+		// precisely what GW-10 forbids. Registering a provider whose base URL is
+		// <mock>/_only/<id> gives one tenant a one-model provider and changes
+		// nothing for anybody else.
+		mux.HandleFunc("GET /_only/{ids}"+prefix+"/models", s.listModelsOnly)
+		mux.HandleFunc("POST /_only/{ids}"+prefix+"/chat/completions", s.chatCompletionsOnly)
 	}
 
 	// The webhook sink. It lives here rather than in the suite because the
@@ -193,11 +212,37 @@ func (s *Server) Handler() http.Handler {
 
 // --- data plane -------------------------------------------------------------
 
-func (s *Server) listModels(w http.ResponseWriter, r *http.Request) {
+// only parses the comma-separated model ids out of a restricted view's path. A
+// nil result means "no restriction", which is what the root paths pass.
+func only(r *http.Request) map[string]bool {
+	raw := r.PathValue("ids")
+	if raw == "" {
+		return nil
+	}
+	allowed := map[string]bool{}
+	for _, id := range strings.Split(raw, ",") {
+		if id = strings.TrimSpace(id); id != "" {
+			allowed[id] = true
+		}
+	}
+	return allowed
+}
+
+func (s *Server) listModels(w http.ResponseWriter, r *http.Request)     { s.serveModels(w, r, nil) }
+func (s *Server) listModelsOnly(w http.ResponseWriter, r *http.Request) { s.serveModels(w, r, only(r)) }
+
+func (s *Server) serveModels(w http.ResponseWriter, r *http.Request, allowed map[string]bool) {
 	// GW-1 requires a gateway to keep serving the last good catalog when a
 	// provider's listing endpoint goes away, which cannot be arranged unless the
 	// listing endpoint can be made to fail on its own — separately from
 	// completions, since the point of the test is that completions still work.
+	//
+	// Counted first, and for the same reason completions are: a faulted listing
+	// is still a dial, and GW-5.AC-7 asks whether the gateway dialled at all.
+	s.mu.Lock()
+	s.listings++
+	s.mu.Unlock()
+
 	if mode, delay := s.takeFaultExact(ListingTarget); mode != FaultNone {
 		switch mode {
 		case FaultRateLimit:
@@ -219,6 +264,9 @@ func (s *Server) listModels(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	data := make([]Model, 0, len(s.order))
 	for _, id := range s.order {
+		if allowed != nil && !allowed[id] {
+			continue
+		}
 		if m, ok := s.models[id]; ok {
 			data = append(data, m)
 		}
@@ -237,6 +285,14 @@ type completionRequest struct {
 }
 
 func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
+	s.serveCompletion(w, r, nil)
+}
+
+func (s *Server) chatCompletionsOnly(w http.ResponseWriter, r *http.Request) {
+	s.serveCompletion(w, r, only(r))
+}
+
+func (s *Server) serveCompletion(w http.ResponseWriter, r *http.Request, allowed map[string]bool) {
 	var req completionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeProviderError(w, http.StatusBadRequest, "invalid_request_error", "malformed request body")
@@ -256,6 +312,13 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 	_, known := s.models[req.Model]
 	s.mu.Unlock()
+
+	// A restricted view answers for its own models and nothing else. Without
+	// this, a gateway that routed past the view — sending a model the view never
+	// advertised — would be quietly served instead of caught.
+	if allowed != nil && !allowed[req.Model] {
+		known = false
+	}
 
 	if !known {
 		// The shape a real OpenAI-compatible upstream returns for an unknown
@@ -482,6 +545,7 @@ func (s *Server) controlState(w http.ResponseWriter, r *http.Request) {
 		"faults":   faults,
 		"requests": s.requests,
 		"keys":     s.keys,
+		"listings": s.listings,
 	})
 }
 
@@ -587,6 +651,7 @@ func (s *Server) controlReset(w http.ResponseWriter, r *http.Request) {
 	s.faults = map[string]*fault{}
 	s.requests = map[string]int{}
 	s.keys = map[string]int{}
+	s.listings = 0
 	s.events = map[string][]Delivery{}
 	s.mu.Unlock()
 

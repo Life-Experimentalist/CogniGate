@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
@@ -174,6 +175,18 @@ func TestHealthzIsUnauthenticatedAndFailsWhileDraining(t *testing.T) {
 	res := h.do(http.MethodGet, "/healthz", "", nil)
 	if res.status != http.StatusOK {
 		t.Fatalf("/healthz status = %d, want 200 (body %s)", res.status, res.body)
+	}
+
+	// GW-5 pins the body to the status alone. Checked as a field count rather
+	// than by naming what must not be there, because the point is that nothing
+	// about this deployment leaks — including the build version, which is what
+	// someone matching a published vulnerability against a host would read first.
+	var probe map[string]any
+	if err := json.Unmarshal(res.body, &probe); err != nil {
+		t.Fatalf("/healthz body is not an object: %v (%s)", err, res.body)
+	}
+	if len(probe) != 1 || probe["status"] != "ok" {
+		t.Errorf(`/healthz body = %s, want {"status":"ok"} and nothing else`, res.body)
 	}
 
 	// GW-5.AC-2: the unauthenticated probe must say nothing about who is on the

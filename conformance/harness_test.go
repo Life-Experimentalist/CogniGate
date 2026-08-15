@@ -363,6 +363,7 @@ type mockSnapshot struct {
 	Models   []string       `json:"models"`
 	Requests map[string]int `json:"requests"`
 	Keys     map[string]int `json:"keys"`
+	Listings int            `json:"listings"`
 }
 
 func mockState(t *testing.T) mockSnapshot {
