@@ -129,7 +129,17 @@ func (s *Server) auth(want store.Plane) fiber.Handler {
 		// it is the credential that exists before the store has anything in it,
 		// so it cannot be resolved through the store and cannot be assumed to
 		// have been minted by it.
-		if want == store.PlaneAdmin && s.bootstrapMatches(raw) {
+		//
+		// It is matched on both planes, not only the one it is good for. An
+		// operator picks its value, so it carries no prefix for PlaneOf to
+		// read, and a bootstrap key sent to the data plane would otherwise be
+		// answered as an invalid credential — the flat rejection this whole
+		// function exists to avoid, aimed at the one key whose holder is most
+		// likely to be an operator midway through setting the deployment up.
+		if s.bootstrapMatches(raw) {
+			if want != store.PlaneAdmin {
+				return httpx.Fail(c, apierr.WrongPlane(string(want)))
+			}
 			httpx.SetAuth(c, &store.APIKey{
 				ID:     "bootstrap",
 				Plane:  store.PlaneAdmin,
