@@ -103,8 +103,8 @@ type ProviderPatch struct {
 // captured them would hand an auditor a second copy of every secret the key
 // vault exists to protect. GW-14 applies here like anywhere else.
 type AuditEntry struct {
-	ID   string    `json:"id"`
-	At   time.Time `json:"at"`
+	ID string    `json:"id"`
+	At time.Time `json:"at"`
 	// Actor is the credential's display prefix, not its id: the prefix is what
 	// an operator sees when listing keys, so it is what makes the log legible.
 	Actor      string `json:"actor"`
