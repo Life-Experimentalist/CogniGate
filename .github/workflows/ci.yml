@@ -102,8 +102,10 @@ jobs:
       - name: Smoke — the gateway is live
         run: curl -fsS http://localhost:8080/healthz | jq -e '.status == "ok"'
 
-      # There is no upstream provider in this stack, so a completion cannot be
-      # asserted end to end yet. What can be asserted is that the data plane
+      # There is no upstream provider in this stack — the conformance job adds
+      # one through docker-compose.conformance.yml and asserts completions end
+      # to end, which is where that coverage lives. What this job can assert
+      # without an upstream is that the data plane
       # refuses an unauthenticated caller in the documented envelope — which is
       # a stronger check than the mock response this replaced, because nothing
       # about it can pass unless authentication and error rendering are both
@@ -169,3 +171,154 @@ jobs:
       - name: Tear down
         if: always()
         run: docker compose down -v
+
+  # ============================================================
+  # GW-10 — the conformance suite against the reference deployment
+  # ============================================================
+  #
+  # GW-10 gives this job two duties. It is the suite's own regression test —
+  # "CogniGate's own CI MUST run the full suite against a fresh docker-compose
+  # deployment on every merge to main" — and it is the evidence behind every
+  # capability /v1/meta claims, because a release must not ship with failures in
+  # a claimed one.
+  #
+  # Four of GW-10's six criteria are properties of this job rather than of any
+  # assertion inside the suite, and conformance/gw10_test.go asserts that the
+  # steps below still exist. Renaming a step is free; deleting one is not.
+  conformance:
+    name: Conformance (GW-10)
+    runs-on: ubuntu-latest
+    needs: [build-gateway]
+
+    env:
+      # Fixed so the compose network has a name the containerised run can be
+      # given. Left to default it would be the checkout directory's name, which
+      # is a property of the runner rather than of this repository.
+      COMPOSE_PROJECT_NAME: cognigate
+      COMPOSE_FILES: -f docker-compose.yml -f docker-compose.conformance.yml
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go 1.26
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      # Pinned rather than @latest: this produces the JUnit XML GW-10 requires a
+      # run to be able to emit, and a test reporter that changes underneath the
+      # workflow changes what the evidence looks like without anyone asking.
+      - name: Install gotestsum
+        run: go install gotest.tools/gotestsum@v1.12.0
+
+      - name: Create .env from example
+        run: |
+          cp .env.example .env
+          sed -i "s|^ENCRYPTION_MASTER_KEY=.*|ENCRYPTION_MASTER_KEY=$(openssl rand -hex 32)|" .env
+          sed -i "s|^GATEWAY_BOOTSTRAP_KEY=.*|GATEWAY_BOOTSTRAP_KEY=$(openssl rand -hex 24)|" .env
+
+      # The reference deployment plus the two mock upstreams the overlay adds.
+      # The whole stack, not just the gateway: the criterion is about what an
+      # operator would actually run.
+      - name: Build and start the reference deployment
+        run: docker compose ${COMPOSE_FILES} up --build -d --wait --wait-timeout 300
+
+      # GW-8.AC-1 and GW-8.AC-2 assert the shape of the gateway's request log,
+      # which the suite can only check if it can read one. --no-log-prefix keeps
+      # the JSON records intact; compose's usual "gateway  | " prefix would make
+      # every line unparseable.
+      - name: Follow the gateway's log
+        run: |
+          nohup docker compose ${COMPOSE_FILES} logs -f --no-color --no-log-prefix gateway \
+            > "${GITHUB_WORKSPACE}/gateway.log" 2>&1 &
+          echo "CONF_LOG_PATH=${GITHUB_WORKSPACE}/gateway.log" >> "${GITHUB_ENV}"
+
+      # Masked before it is exported: the key is generated for this run and dies
+      # with the stack, but every later step inherits it and a masked value is
+      # not the thing that ends up in a log the workflow uploads.
+      - name: Read the bootstrap credential
+        run: |
+          KEY=$(grep '^GATEWAY_BOOTSTRAP_KEY=' .env | cut -d= -f2-)
+          echo "::add-mask::${KEY}"
+          echo "CONF_ADMIN_KEY=${KEY}" >> "${GITHUB_ENV}"
+
+      # GW-10.AC-1. -count=1 because Go caches test results by package and flags,
+      # and a rerun whose only change is the deployment's configuration would
+      # otherwise report the previous deployment's verdict.
+      - name: GW-10.AC-1 — the suite passes against the reference deployment
+        env:
+          CONF_BASE_URL: http://localhost:8080
+          CONF_MOCK_PROVIDER: http://mock-provider-a:9900
+          CONF_MOCK_CONTROL_URL: http://localhost:19900
+          CONF_REPORT: ${{ github.workspace }}/conformance-report.json
+        run: |
+          gotestsum --format testname --junitfile conformance-junit.xml \
+            -- -count=1 -timeout 25m ./conformance/...
+
+      # GW-10.AC-3. Each run gets a mock of its own: the suite isolates itself on
+      # the gateway by naming everything after its run id, but a mock's listing
+      # fault and its seed models' call counters are process-global, so two runs
+      # sharing one would interfere over something neither of them named.
+      # Separate reports for the same reason — one path would leave one run's
+      # artefact on disk describing both.
+      - name: GW-10.AC-3 — two suite runs pass concurrently
+        env:
+          CONF_BASE_URL: http://localhost:8080
+        run: |
+          run_suite() {
+            CONF_MOCK_PROVIDER="$2" CONF_MOCK_CONTROL_URL="$3" \
+            CONF_REPORT="${GITHUB_WORKSPACE}/conformance-report-$1.json" \
+              go test -count=1 -timeout 25m ./conformance/... > "suite-$1.log" 2>&1
+          }
+          run_suite a http://mock-provider-a:9900 http://localhost:19900 &
+          a=$!
+          run_suite b http://mock-provider-b:9900 http://localhost:19901 &
+          b=$!
+          status=0
+          wait $a || status=1
+          wait $b || status=1
+          echo '--- concurrent run a ---'; cat suite-a.log
+          echo '--- concurrent run b ---'; cat suite-b.log
+          exit $status
+
+      - name: Build the conformance image
+        run: docker build -f conformance/Dockerfile --target suite -t cognigate-conformance:ci .
+
+      # GW-10.AC-6. Exactly three -e flags: the image's contract is
+      # CONF_BASE_URL, CONF_ADMIN_KEY and CONF_MOCK_PROVIDER, and a fourth here
+      # would mean the documented contract is not the one CI exercises. The
+      # report directory is world-writable because the image runs unprivileged
+      # and the bind mount carries the host's ownership, not the image's.
+      - name: GW-10.AC-6 — the image runs from the three documented variables
+        run: |
+          mkdir -p container-report && chmod 0777 container-report
+          docker run --rm \
+            --network ${COMPOSE_PROJECT_NAME}_cogni-net \
+            -v "${GITHUB_WORKSPACE}/container-report:/work" \
+            -e CONF_BASE_URL=http://gateway:8080 \
+            -e CONF_ADMIN_KEY="${CONF_ADMIN_KEY}" \
+            -e CONF_MOCK_PROVIDER=http://mock-provider-a:9900 \
+            cognigate-conformance:ci
+
+          jq -e '.summary.fail == 0 and (.results | length) > 0' \
+            container-report/conformance-report.json
+
+      - name: Upload the conformance reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: conformance-reports
+          path: |
+            conformance-report*.json
+            conformance-junit.xml
+            container-report/conformance-report.json
+            gateway.log
+          if-no-files-found: warn
+
+      - name: Print logs on failure
+        if: failure()
+        run: docker compose ${COMPOSE_FILES} logs --no-color
+
+      - name: Tear down
+        if: always()
+        run: docker compose ${COMPOSE_FILES} down -v
