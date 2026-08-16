@@ -59,9 +59,9 @@ func (s *Server) adminRoutes(g fiber.Router) {
 	t.Get("/aliases", s.listAliases)
 	t.Delete("/aliases/:name", s.deleteAlias)
 
-	t.Put("/routes", s.upsertRoute)
-	t.Get("/routes", s.listRoutes)
-	t.Delete("/routes/:id", s.deleteRoute)
+	t.Put("/routing-rules", s.upsertRoute)
+	t.Get("/routing-rules", s.listRoutes)
+	t.Delete("/routing-rules/:id", s.deleteRoute)
 
 	t.Put("/quota", s.setQuota)
 	t.Get("/quota", s.getQuota)
@@ -373,11 +373,24 @@ func (s *Server) updateTenant(c *fiber.Ctx) error {
 	return c.JSON(tenant)
 }
 
+// deleteTenant destroys a tenant and everything under it.
+//
+// GW-6 requires ?confirm=<id> to match the path. This is the one admin route
+// whose damage cannot be undone from the API — keys, providers, aliases, rules
+// and quotas all go with it — and the id is long and opaque enough that no one
+// types it twice by accident. The check is deliberately the whole id rather
+// than a bare ?confirm=true, which would be satisfied by a mis-pasted URL.
 func (s *Server) deleteTenant(c *fiber.Ctx) error {
 	if err := requireRoot(c); err != nil {
 		return httpx.Fail(c, err)
 	}
 	id := param(c, "tenant")
+
+	if query(c, "confirm") != id {
+		return httpx.Fail(c, apierr.
+			InvalidRequest("deleting a tenant requires ?confirm=<id> matching the tenant in the path.").
+			WithParam("confirm"))
+	}
 
 	ctx, cancel := s.opContext(c)
 	defer cancel()

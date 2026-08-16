@@ -4,9 +4,9 @@
 
 ## Motivation
 
-Downstream products want to ship their *own* admin consoles (a hospital
-IT screen, a SaaS billing page) on top of CogniGate. That is impossible
-if configuration lives in YAML files edited over SSH. Everything an
+Downstream products want to ship their *own* admin consoles (an internal
+operations screen, a per-customer billing page) on top of CogniGate. That
+is impossible if configuration lives in YAML files edited over SSH. Everything an
 operator can configure MUST be reachable as an authenticated HTTP API, so
 config files remain a bootstrap convenience, never the only interface.
 
@@ -44,10 +44,10 @@ Full CRUD (JSON bodies, standard verbs — `GET` list/read, `POST` create,
 | Tenants | `/admin/v1/tenants` | create returns tenant id; delete requires `?confirm=<id>` |
 | API keys (data plane) | `/admin/v1/tenants/{id}/keys` | create returns the `cg-*` secret **once**; thereafter only prefix + metadata; revocation is immediate (≤10 s propagation) |
 | Admin keys | `/admin/v1/admin-keys` | root scope only; same show-once rule |
-| Provider keys (vault) | `/admin/v1/tenants/{id}/provider-keys` | write-only secrets: stored AES-256-GCM, never returned — reads yield fingerprint + status |
+| Providers | `/admin/v1/tenants/{id}/providers` | upstream name, kind, base URL, and a write-only key pool: secrets are accepted on write and never returned, reads yield prefixes + status |
 | Routing rules | `/admin/v1/tenants/{id}/routing-rules` | validated per GW-3 at save time |
 | Aliases | `/admin/v1/tenants/{id}/aliases` | validated per GW-2 at save time |
-| Quotas | `/admin/v1/tenants/{id}/quotas` and `.../keys/{kid}/quota` | per GW-4 |
+| Quota | `/admin/v1/tenants/{id}/quota` and `.../keys/{kid}/quota` | per GW-4; one quota object per subject, so both are singletons |
 | Usage (read) | `/admin/v1/tenants/{id}/usage[...]` | mirror of GW-4 query API |
 | Catalog refresh | `POST /admin/v1/catalog/refresh` | per GW-1 |
 | Webhooks | `/admin/v1/tenants/{id}/webhooks` | per GW-8 |
@@ -57,21 +57,39 @@ Full CRUD (JSON bodies, standard verbs — `GET` list/read, `POST` create,
 - Validation failures return 400/409 with the shared error envelope and
   a machine-readable `error.code`; save-time validation for rules and
   aliases is exactly the GW-2/GW-3 rules.
+- Secrets — data-plane keys, admin keys, upstream provider keys — MUST
+  never be readable back through the API in any form longer than their
+  prefix. **Encryption at rest is a property of the store**, not of this
+  API: a deployment backed by a durable store MUST encrypt them there
+  (the reference persistence layer uses AES-256-GCM); the gateway's
+  built-in in-memory store holds them only for the life of the process.
 - Every mutation MUST take effect on the data plane within **10
-  seconds** without restart (Redis `cognigate:cache:invalidate`
-  propagation), and MUST be recorded in an append-only admin audit log
-  (actor key prefix, action, resource, timestamp) readable at
-  `GET /admin/v1/audit` (root scope).
+  seconds** without restart, by whatever means the deployment's store
+  propagates — the deadline is the contract, the mechanism is not. It
+  MUST also be recorded in an append-only admin audit log (actor key
+  prefix, action, resource, timestamp, outcome) readable at
+  `GET /admin/v1/audit` (root scope). Refused mutations are recorded
+  too: an attempt to reach another tenant is precisely what this log is
+  read to find.
+- The audit log MUST NOT contain request bodies. A provider registration
+  carries plaintext upstream credentials, and GW-14 governs this store
+  like every other.
 - Mutations SHOULD honor idempotency: a repeated `POST` with the same
   `Idempotency-Key` header within 24 h returns the original result.
+  *Not implemented in this revision — no acceptance criterion covers it,
+  and no conformance test asserts it.*
 
 ## Configuration surface
 
 | Key                          | Default | Meaning |
 | ---------------------------- | ------- | ------- |
 | `ADMIN_BOOTSTRAP_KEY`        | unset   | If set, accepted as a root `cga-*` key at boot (dev/bootstrap) |
-| `admin.listen`               | same listener, `/admin/v1` path | Optional separate bind address |
-| `admin.audit_retention`      | `365d`  | Admin audit log retention |
+| `admin.listen`               | same listener, `/admin/v1` path | Optional separate bind address. *Not implemented — the path split is the normative contract and is what conformance tests.* |
+
+Audit retention is the store's concern, not this API's. A durable store
+SHOULD retain entries for at least a year; the built-in in-memory store
+bounds the log at its most recent 5,000 entries, because a process that
+never restarts would otherwise grow one unboundedly.
 
 File-based config (`cognigate.config.yml`) remains valid as a *seed*: it
 is applied at boot as if issued through the API, then the API is the
@@ -92,7 +110,8 @@ source of truth.
   secret exactly once; subsequent reads return only its prefix; a request
   with a revoked key fails with 401 within 10 seconds of revocation.
 - **GW-6.AC-5** — A stored provider key is never returned by any read
-  endpoint in any form longer than its fingerprint.
+  endpoint in any form longer than its prefix — not by the provider
+  read, not by the audit log, not in an error message.
 - **GW-6.AC-6** — A routing-rule save violating GW-3's different-model
   rule is rejected here with 400 `fallback_duplicate_model` (same code as
   GW-3.AC-1 — one validator, two entry points).
