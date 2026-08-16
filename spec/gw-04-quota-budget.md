@@ -55,10 +55,19 @@ the admin plane (any tenant):
   active window: consumed tokens, consumed cost, configured caps and
   thresholds, remaining amounts, `resets_at` (RFC 3339), and current
   state (`ok | soft-exceeded | hard-exceeded`).
-- `GET /v1/usage/breakdown?window=day|month&group_by=model|provider|key`
+- `GET /v1/usage/breakdown?window=day|month&group_by=model|provider|key|client_request_id`
   MUST return per-group consumed tokens and cost for the window. This is
   the endpoint a downstream admin dashboard renders directly — it MUST
-  be servable without log access.
+  be servable without log access. Grouping by `client_request_id` is what
+  makes GW-7's correlation id worth sending: a caller can look up what
+  its own label cost. Records the caller never labelled are omitted
+  rather than collected into an empty-string group.
+- Rows are ordered by cost descending, and the response MAY be bounded —
+  grouping by a caller-supplied id has one group per request, so an
+  unbounded body is a denial of service the caller writes itself. A
+  bounded response MUST say so with `"truncated": true`, because a
+  silently-cut list reads as a complete bill. The reference gateway
+  returns at most 200 groups.
 - Admin-plane equivalents: `GET /admin/v1/tenants/{id}/usage[...]`
   (GW-6).
 - Usage figures MUST be no more than 60 seconds stale relative to

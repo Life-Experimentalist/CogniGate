@@ -282,7 +282,19 @@ type breakdownResponse struct {
 	Since   string              `json:"since"`
 	Until   string              `json:"until"`
 	Data    []store.UsageBucket `json:"data"`
+	// Truncated says the window held more groups than maxBreakdownBuckets, so
+	// this is the top of the list and not all of it. A caller billing from these
+	// rows needs to know the difference.
+	Truncated bool `json:"truncated"`
 }
+
+// maxBreakdownBuckets bounds the response. Grouping by client_request_id is
+// what makes this necessary — a tenant that labels every request with a
+// distinct id has one group per request, and a month of traffic serialised in
+// one body would exhaust the gateway rather than the client. The bound is
+// applied to every grouping, because a rule with an exception is a rule nobody
+// can predict, and the rows are spend-sorted so the cut falls on the cheapest.
+const maxBreakdownBuckets = 200
 
 func (s *Server) handleUsageBreakdown(c *fiber.Ctx) error {
 	window, since, until, err := usageWindow(c)
@@ -292,10 +304,10 @@ func (s *Server) handleUsageBreakdown(c *fiber.Ctx) error {
 
 	groupBy := strings.TrimSpace(query(c, "group_by", "model"))
 	switch groupBy {
-	case "model", "provider", "key":
+	case "model", "provider", "key", "client_request_id":
 	default:
 		return httpx.Fail(c, apierr.
-			InvalidRequest(`group_by must be one of "model", "provider", "key".`).
+			InvalidRequest(`group_by must be one of "model", "provider", "key", "client_request_id".`).
 			WithParam("group_by"))
 	}
 
@@ -309,13 +321,18 @@ func (s *Server) handleUsageBreakdown(c *fiber.Ctx) error {
 	if buckets == nil {
 		buckets = []store.UsageBucket{}
 	}
+	truncated := len(buckets) > maxBreakdownBuckets
+	if truncated {
+		buckets = buckets[:maxBreakdownBuckets]
+	}
 	return c.JSON(breakdownResponse{
-		Object:  "usage_breakdown",
-		Window:  window,
-		GroupBy: groupBy,
-		Since:   since.Format(time.RFC3339),
-		Until:   until.Format(time.RFC3339),
-		Data:    buckets,
+		Object:    "usage_breakdown",
+		Window:    window,
+		GroupBy:   groupBy,
+		Since:     since.Format(time.RFC3339),
+		Until:     until.Format(time.RFC3339),
+		Data:      buckets,
+		Truncated: truncated,
 	})
 }
 

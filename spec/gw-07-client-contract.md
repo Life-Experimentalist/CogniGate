@@ -52,16 +52,28 @@ error) unless noted:
 
 Clients MAY log these; they MUST NOT need them for correct operation.
 A client-supplied `X-Client-Request-Id` header (≤128 chars) is echoed
-back verbatim and attached to logs/usage records for correlation.
+back verbatim and attached to logs/usage records for correlation. Longer
+values are truncated to the bound and control characters are stripped
+before the id is echoed or stored, so a caller cannot inject into the
+logs it appears in. The stored id is readable back at
+`GET /v1/usage/breakdown?group_by=client_request_id` (GW-4) — a
+correlation id that could only be written would correlate nothing.
 
 ### Error contract
 
 - Every error is the shared envelope (see the index):
-  `{"error": {"message", "type", "code", "param"}}` — OpenAI-shaped, so
-  stock SDK error handling works, with `code` machine-readable per the
-  registry in the index.
+  `{"error": {"message", "type", "code", "param", "request_id"}}` —
+  OpenAI-shaped, so stock SDK error handling works, with `code`
+  machine-readable per the registry in the index. `request_id` is
+  CogniGate's addition and the same value as the
+  `X-CogniGate-Request-Id` header; a stock SDK ignores the extra key.
+- `upstream_exhausted` carries one further key, `attempts`: the ordered
+  list of what was tried and how each try ended (GW-3.AC-5). It is the
+  only code that does, and it is additive for the same reason.
 - Streaming errors after headers are sent arrive as a terminal SSE event
-  `data: {"error": {...}}` followed by stream close.
+  `data: {"error": {...}}` followed by stream close — the same envelope,
+  with `upstream_error` and `upstream_stream_stalled` as the codes a
+  client only ever sees this way.
 
 ### Retry semantics clients may rely on
 
