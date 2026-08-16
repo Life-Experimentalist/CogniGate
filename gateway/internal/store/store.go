@@ -64,6 +64,16 @@ type Store interface {
 	ListWebhooks(ctx context.Context, tenantID string) ([]*Webhook, error)
 	DeleteWebhook(ctx context.Context, tenantID, id string) error
 
+	// RecordEvent stores one raised event so it can be read back. It is called
+	// for every event, including those no webhook is subscribed to: the reason
+	// the endpoint exists is to answer for the ones that were never delivered.
+	RecordEvent(ctx context.Context, e *Event) error
+	// ListEvents returns a tenant's recent events, newest first. GW-8 bounds
+	// the history at the last 1000 per tenant; older events are dropped rather
+	// than retained, because this is a notification backstop and not an audit
+	// log — RecordAudit is the one with a retention promise.
+	ListEvents(ctx context.Context, tenantID string) ([]*Event, error)
+
 	// RecordUsage is called on the metering path, off the request's critical
 	// path. It must not block: a slow store degrades the data plane.
 	RecordUsage(ctx context.Context, rec *UsageRecord) error

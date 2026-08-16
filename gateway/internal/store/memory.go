@@ -22,6 +22,13 @@ const maxMemoryUsageRecords = 50_000
 // in both cases the oldest entries are the least useful.
 const maxMemoryAuditEntries = 5_000
 
+// MaxTenantEvents is the depth of the per-tenant event history GW-8 requires be
+// queryable. It is exported because it is a contract figure rather than an
+// implementation detail: a caller polling the endpoint needs to know how far
+// behind it may fall before it starts missing events, and every Store
+// implementation owes the same bound.
+const MaxTenantEvents = 1_000
+
 // Memory is the dependency-free Store. It backs `cognigate --dev` (GW-11) and
 // the conformance suite's embedded mode, so the full admin plane works with no
 // Postgres and no Redis.
@@ -39,6 +46,7 @@ type Memory struct {
 	routes     map[string][]*Route
 	quotas     map[string]*Quota
 	webhooks   map[string][]*Webhook
+	events     map[string][]*Event
 	usage      map[string][]*UsageRecord
 	audit      []*AuditEntry
 
@@ -59,6 +67,7 @@ func NewMemory(dev bool) *Memory {
 		routes:     map[string][]*Route{},
 		quotas:     map[string]*Quota{},
 		webhooks:   map[string][]*Webhook{},
+		events:     map[string][]*Event{},
 		usage:      map[string][]*UsageRecord{},
 		dev:        dev,
 		now:        time.Now,
@@ -547,6 +556,51 @@ func (m *Memory) DeleteWebhook(_ context.Context, tenantID, id string) error {
 		}
 	}
 	return ErrNotFound
+}
+
+// --- events ----------------------------------------------------------------
+
+func (m *Memory) RecordEvent(_ context.Context, e *Event) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	saved := *e
+	saved.Data = cloneData(e.Data)
+	list := append(m.events[e.TenantID], &saved)
+	if len(list) > MaxTenantEvents {
+		list = list[len(list)-MaxTenantEvents:]
+	}
+	m.events[e.TenantID] = list
+	return nil
+}
+
+// ListEvents returns the tenant's history newest first, for the same reason the
+// audit log is read that way: the question is what just happened.
+func (m *Memory) ListEvents(_ context.Context, tenantID string) ([]*Event, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	list := m.events[tenantID]
+	out := make([]*Event, 0, len(list))
+	for i := len(list) - 1; i >= 0; i-- {
+		e := *list[i]
+		e.Data = cloneData(list[i].Data)
+		out = append(out, &e)
+	}
+	return out, nil
+}
+
+// cloneData copies an event payload so a stored event cannot be mutated through
+// the map its emitter still holds.
+func cloneData(in map[string]any) map[string]any {
+	if in == nil {
+		return nil
+	}
+	out := make(map[string]any, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
 }
 
 // --- audit -----------------------------------------------------------------

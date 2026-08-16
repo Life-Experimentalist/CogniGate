@@ -68,26 +68,45 @@ func (s *Server) observe() fiber.Handler {
 			route = "unmatched"
 		}
 		tenant := httpx.TenantID(c)
+		status := c.Response().StatusCode()
+		out := httpx.GetOutcome(c)
 
 		if s.Metrics != nil {
-			s.Metrics.Requests.WithLabelValues(tenant, route, statusClass(c.Response().StatusCode())).Inc()
-			s.Metrics.RequestDuration.WithLabelValues(tenant, route).Observe(elapsed.Seconds())
+			s.Metrics.Requests.
+				WithLabelValues(tenant, out.Provider, out.Model, route, strconv.Itoa(status)).
+				Inc()
+			s.Metrics.RequestDuration.
+				WithLabelValues(tenant, out.Provider, route).
+				Observe(elapsed.Seconds())
 		}
 
 		level := slog.LevelInfo
-		if c.Response().StatusCode() >= 500 {
+		if status >= 500 {
 			level = slog.LevelError
 		}
-		// Nothing derived from the body is logged — not the model, not a
-		// parameter, and certainly not a message. Route, status and timing are
-		// what an operator needs, and they are all GW-14 permits.
+		// One line per request, carrying GW-8's full field list. Every field is
+		// gateway metadata: the route, the identities, the model that was
+		// routed to, and the counts. Nothing here is derived from the request or
+		// response body — not a parameter, and certainly not a message — which
+		// is the distinction GW-14 draws. A model id is a routing decision, and
+		// an operator who cannot see which model served cannot answer the first
+		// question anyone asks about a slow or failed request.
 		s.Logger.Log(c.UserContext(), level, "request",
 			slog.String("request_id", httpx.RequestID(c)),
 			slog.String("client_request_id", httpx.ClientRequestID(c)),
 			slog.String("tenant", tenant),
+			slog.String("key_prefix", keyPrefix(c)),
 			slog.String("method", c.Method()),
 			slog.String("route", route),
-			slog.Int("status", c.Response().StatusCode()),
+			slog.Int("status", status),
+			slog.String("error_code", out.ErrorCode),
+			slog.String("provider", out.Provider),
+			slog.String("model", out.Model),
+			slog.String("alias", out.Alias),
+			slog.Int("fallback_depth", out.FallbackDepth),
+			slog.Int("prompt_tokens", out.PromptTokens),
+			slog.Int("completion_tokens", out.CompletionTokens),
+			slog.Int64("upstream_duration_ms", out.UpstreamMS),
 			slog.Int64("duration_ms", elapsed.Milliseconds()))
 
 		return err
@@ -234,22 +253,6 @@ func bearer(c *fiber.Ctx) string {
 	// rejecting it would fail the request with an authentication error that
 	// tells the caller nothing about the real problem.
 	return strings.TrimSpace(h)
-}
-
-// statusClass buckets a status for the metrics label. The class rather than the
-// code keeps cardinality flat while still separating the three cases anyone
-// alerts on.
-func statusClass(code int) string {
-	switch {
-	case code >= 500:
-		return "5xx"
-	case code >= 400:
-		return "4xx"
-	case code >= 300:
-		return "3xx"
-	default:
-		return "2xx"
-	}
 }
 
 // --- concurrency limiter ----------------------------------------------------

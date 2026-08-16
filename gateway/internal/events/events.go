@@ -161,6 +161,36 @@ func New(st store.Store, opts Options) *Dispatcher {
 // a refresh goroutine, and neither has anywhere useful to report a webhook
 // failure to. What it cannot deliver, it logs.
 func (d *Dispatcher) Emit(ctx context.Context, tenantID, eventType string, data map[string]any) {
+	// One id for the event, shared by the stored copy, every endpoint and every
+	// retry. That is what makes the at-least-once guarantee usable: a receiver
+	// seeing the same id twice knows it is a redelivery and not a second
+	// occurrence, and a poller can match what it reads against what it was sent.
+	envelope := Envelope{
+		ID:      store.NewID(store.IDEvent),
+		Type:    eventType,
+		Created: d.opts.Now().UTC(),
+		Tenant:  tenantID,
+		Data:    data,
+	}
+
+	// Recorded before anything is delivered, and before the webhook list is even
+	// read. The stored history is what a tenant with no subscription — or one
+	// whose endpoint was down for all five attempts — has instead of a
+	// delivery, so it must not be conditional on the delivery path working.
+	if err := d.store.RecordEvent(ctx, &store.Event{
+		ID:       envelope.ID,
+		Type:     envelope.Type,
+		Created:  envelope.Created,
+		TenantID: tenantID,
+		Data:     data,
+	}); err != nil {
+		d.opts.Logger.Warn("cannot record an event",
+			slog.String("event_id", envelope.ID),
+			slog.String("event_type", eventType),
+			slog.String("tenant", tenantID),
+			slog.String("error", err.Error()))
+	}
+
 	hooks, err := d.store.ListWebhooks(ctx, tenantID)
 	if err != nil {
 		d.opts.Logger.Warn("cannot list webhooks for an event",
@@ -170,16 +200,6 @@ func (d *Dispatcher) Emit(ctx context.Context, tenantID, eventType string, data 
 		return
 	}
 
-	// One id for the event, shared by every endpoint and every retry. That is
-	// what makes the at-least-once guarantee usable: a receiver seeing the same
-	// id twice knows it is a redelivery and not a second occurrence.
-	envelope := Envelope{
-		ID:      store.NewID(store.IDEvent),
-		Type:    eventType,
-		Created: d.opts.Now().UTC(),
-		Tenant:  tenantID,
-		Data:    data,
-	}
 	body, err := json.Marshal(envelope)
 	if err != nil {
 		d.opts.Logger.Error("cannot encode an event",

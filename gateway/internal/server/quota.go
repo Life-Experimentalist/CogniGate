@@ -267,8 +267,16 @@ func (s *Server) computeQuota(ctx context.Context, scope quotaScope) (*quotaEntr
 		}
 	}
 
+	// One series per slot, not one per tenant. Collapsing four independent
+	// limits into a single gauge means a tenant at its monthly cost cap and
+	// nowhere near its daily token cap reports one number that describes
+	// neither, and an alert on it cannot say which budget to raise.
 	if s.Metrics != nil {
-		s.Metrics.QuotaState.WithLabelValues(scope.tenantID).Set(float64(quotaGauge(entry.state)))
+		for _, p := range slots {
+			s.Metrics.QuotaState.
+				WithLabelValues(scope.tenantID, p.window, p.unit).
+				Set(float64(quotaGauge(p.state)))
+		}
 	}
 
 	for _, p := range slots {

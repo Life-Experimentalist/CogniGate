@@ -6,9 +6,13 @@ import (
 	"time"
 )
 
-// State is a circuit breaker's position. The numeric values are the ones the
-// cognigate_breaker_state gauge exports, so they are part of the metrics
-// contract and must not be renumbered.
+// State is a circuit breaker's position.
+//
+// The numeric values are internal ordering only, and are deliberately *not*
+// what the cognigate_breaker_state gauge exports: GW-8 fixes that encoding at
+// 0 closed, 1 half-open, 2 open — severity order — which is not the order these
+// constants were declared in. Gauge translates; nothing else should assume the
+// two agree.
 type State int
 
 const (
@@ -32,8 +36,8 @@ func (s State) String() string {
 
 // Health is the GW-5 spelling of a state, which differs from String only in the
 // hyphen. The two are separate because String feeds the breaker.opened and
-// breaker.closed event payloads and the metrics labels — published contracts of
-// their own, which are not free to change to suit a third one.
+// breaker.closed event payloads — a published contract of its own, which is not
+// free to change to suit this one.
 func (s State) Health() string {
 	if s == StateHalfOpen {
 		return "half-open"
@@ -41,11 +45,26 @@ func (s State) Health() string {
 	return s.String()
 }
 
+// Gauge is the value GW-8 requires cognigate_breaker_state to export:
+// 0 closed, 1 half-open, 2 open. It is a translation rather than the constants
+// themselves so that the published metric can be in severity order while the
+// internal constants stay in the order they were declared — renumbering State
+// to match would silently change every stored value of a field of this type.
+func (s State) Gauge() float64 {
+	switch s {
+	case StateHalfOpen:
+		return 1
+	case StateOpen:
+		return 2
+	default:
+		return 0
+	}
+}
+
 // BlockRank orders states by how much traffic they stop, for rollups that need
-// a worst-of. It is deliberately not the numeric order of the constants: those
-// are numbered for the cognigate_breaker_state gauge, where half-open sits
-// above open, whereas a provider with one model open and another half-open is
-// most honestly described as open.
+// a worst-of. It happens to agree with Gauge, and is kept separate anyway: one
+// is a published metric encoding and the other is an internal comparison, and a
+// change to either must not silently move the other.
 func BlockRank(s State) int {
 	switch s {
 	case StateOpen:

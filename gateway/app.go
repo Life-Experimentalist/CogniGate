@@ -87,12 +87,28 @@ func build(cfg config.Config, dev bool, logger *slog.Logger, version string) (*a
 		OnChange:        events.CatalogHook(a.events),
 	})
 
+	// GW-8's catalog age is answered at scrape time rather than written at
+	// refresh. A gauge a refresh sets would be set to zero, and zero is what it
+	// would then report for as long as refreshes kept failing — the exact
+	// condition the series exists to reveal.
+	metrics.SetCatalogAgeSource(func() []obs.CatalogAgeSample {
+		var out []obs.CatalogAgeSample
+		for _, age := range cat.Ages() {
+			out = append(out, obs.CatalogAgeSample{
+				Tenant:   age.TenantID,
+				Provider: age.Provider,
+				Seconds:  age.Age.Seconds(),
+			})
+		}
+		return out
+	})
+
 	resolver := routing.NewResolver(mem, cat, cfg.Routing.MaxFallbackDepth)
 	breaker := routing.NewBreaker(
 		cfg.Routing.Breaker.ErrorThreshold,
 		cfg.Routing.Breaker.Window,
 		cfg.Routing.Breaker.OpenDuration,
-		events.BreakerHook(a.events),
+		breakerObservers(metrics, events.BreakerHook(a.events)),
 	)
 
 	a.server = server.New(server.Deps{
@@ -147,6 +163,28 @@ func seedDev(mem *store.Memory) (*devCredentials, error) {
 	}
 
 	return &devCredentials{TenantID: tenant.ID, DataKey: dataKey, AdminKey: adminKey}, nil
+}
+
+// breakerObservers fans one breaker transition out to both things that care
+// about it: the gauge GW-8 exports and the webhook GW-5 promises.
+//
+// They are combined here rather than the breaker growing a second callback,
+// because from the breaker's point of view there is one event and any number of
+// listeners. Both run while the breaker's lock is held, so neither may block —
+// the metric write does not, and the event hook already spawns its own
+// goroutine for exactly this reason.
+func breakerObservers(metrics *obs.Metrics, hook func(key string, from, to routing.State)) func(string, routing.State, routing.State) {
+	return func(key string, from, to routing.State) {
+		if metrics != nil {
+			tenantID, providerName, model := routing.SplitKey(key)
+			metrics.BreakerState.
+				WithLabelValues(tenantID, providerName, model).
+				Set(to.Gauge())
+		}
+		if hook != nil {
+			hook(key, from, to)
+		}
+	}
 }
 
 // Close releases what build acquired, in reverse order. It is safe to call on a

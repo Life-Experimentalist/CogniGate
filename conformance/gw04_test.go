@@ -129,7 +129,7 @@ func TestGW4_AC2_CrossingTheSoftThresholdWarnsOnceAndStillSucceeds(t *testing.T)
 		t.Fatalf("the window produced %d quota.threshold_crossed events, want exactly 1",
 			len(crossings))
 	}
-	if got, _ := crossings[0].Body.Data["state"].(string); got != quotaSoftExceeded {
+	if got, _ := crossings[0].data(t)["state"].(string); got != quotaSoftExceeded {
 		t.Errorf("the event reports state %q, want %q", got, quotaSoftExceeded)
 	}
 	if crossings[0].Signature == "" {

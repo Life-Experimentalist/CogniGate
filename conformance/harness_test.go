@@ -48,6 +48,19 @@ type config struct {
 	// matters, where the gateway says http://mock-provider:9900 and the runner
 	// says http://localhost:9900.
 	MockControl string
+
+	// MetricsToken authenticates the scrape endpoint. GW-8 leaves /metrics
+	// unauthenticated by default — it is a private-network endpoint carrying no
+	// request content — so this is empty unless the deployment chose otherwise.
+	MetricsToken string
+
+	// LogPath is a file the gateway's structured request log is written to, as
+	// the *suite* must read it. GW-8's first two acceptance criteria are about
+	// what a log line contains, which a wire-level suite cannot see: a gateway
+	// logging to stdout in a container is conformant and still unreadable from
+	// here. Empty skips those two, so a deployment that cannot expose its log is
+	// reported as untested rather than as failing.
+	LogPath string
 }
 
 func loadConfig() config {
@@ -56,6 +69,8 @@ func loadConfig() config {
 		AdminKey:     os.Getenv("CONF_ADMIN_KEY"),
 		MockProvider: os.Getenv("CONF_MOCK_PROVIDER"),
 		MockControl:  os.Getenv("CONF_MOCK_CONTROL_URL"),
+		MetricsToken: os.Getenv("CONF_METRICS_TOKEN"),
+		LogPath:      os.Getenv("CONF_LOG_PATH"),
 	}
 	if c.MockProvider == "" {
 		c.MockProvider = "embedded"
@@ -917,60 +932,100 @@ func awaitChat(t *testing.T, key, model string, want func(*response) bool, descr
 // --- webhook sink -----------------------------------------------------------
 
 // delivery is one webhook the mock's sink received.
+//
+// Body is kept as raw bytes rather than decoded in place because GW-8 signs the
+// exact bytes delivered: an HMAC check has to run over what arrived on the wire,
+// and a re-encoding of the parsed JSON will not reproduce it.
 type delivery struct {
-	Type      string `json:"type"`
-	EventID   string `json:"event_id"`
-	Signature string `json:"signature"`
-	Tenant    string `json:"tenant"`
-	Body      struct {
-		Data map[string]any `json:"data"`
-	} `json:"body"`
+	Type      string          `json:"type"`
+	EventID   string          `json:"event_id"`
+	Signature string          `json:"signature"`
+	Tenant    string          `json:"tenant"`
+	Status    int             `json:"status"`
+	Body      json.RawMessage `json:"body"`
 }
 
-// newSink subscribes a tenant's webhook to the named events and returns a reader
-// for what arrives.
+// accepted reports whether the sink took the delivery. A rejection is an attempt
+// the gateway is expected to repeat, not an event that arrived.
+func (d delivery) accepted() bool { return d.Status >= 200 && d.Status <= 299 }
+
+// data decodes the envelope's payload.
+func (d delivery) data(t *testing.T) map[string]any {
+	t.Helper()
+	var envelope struct {
+		Data map[string]any `json:"data"`
+	}
+	if err := json.Unmarshal(d.Body, &envelope); err != nil {
+		t.Fatalf("decoding a %s delivery: %v\n%s", d.Type, err, truncate(d.Body))
+	}
+	return envelope.Data
+}
+
+// sink is one webhook endpoint on the mock, subscribed to a tenant's events.
+type sink struct {
+	name   string
+	secret string
+}
+
+// newSink subscribes a tenant's webhook to the named events and returns the
+// endpoint it was pointed at.
 //
 // The sink is hosted by the mock rather than by this process because the gateway
 // has to dial it: in a container deployment the suite's own address is not
 // reachable from the gateway's network, which is the same problem
 // CONF_MOCK_PROVIDER already solves. Each sink has a path of its own, so two
 // tests — or two concurrent runs — cannot count each other's deliveries.
-func newSink(t *testing.T, tenantID string, eventTypes ...string) func(*testing.T) []delivery {
+func newSink(t *testing.T, tenantID string, eventTypes ...string) *sink {
 	t.Helper()
+
+	// Long enough for the gateway's minimum, and not a credential: it exists so
+	// the suite can recompute the HMAC the gateway sent.
+	const secret = "conformance-webhook-secret"
 
 	name := uniqueName(strings.ToLower(strings.NewReplacer("/", "-", "_", "-").Replace(t.Name())))
 	resp := suite.client.admin(t, http.MethodPost, "/admin/v1/tenants/"+tenantID+"/webhooks",
 		map[string]any{
-			"url": suite.providerURL + "/_events/" + name,
-			// Long enough for the gateway's minimum, and not a credential: the
-			// sink records the signature without checking it.
-			"secret": "conformance-webhook-secret",
+			"url":    suite.providerURL + "/_events/" + name,
+			"secret": secret,
 			"events": eventTypes,
 		})
 	if resp.Status != http.StatusCreated {
 		t.Fatalf("subscribing a webhook for %s: status %d\n%s", tenantID, resp.Status, truncate(resp.Body))
 	}
 
-	return func(t *testing.T) []delivery {
-		t.Helper()
-		got := mockControl(t, http.MethodGet, "/_control/events/"+name, nil)
-		var body struct {
-			Data []delivery `json:"data"`
-		}
-		if err := json.Unmarshal(got.Body, &body); err != nil {
-			t.Fatalf("reading the sink: %v\n%s", err, truncate(got.Body))
-		}
-		return body.Data
-	}
+	return &sink{name: name, secret: secret}
 }
 
-// deliveriesOfType filters a sink's deliveries, because a quota that crosses its
-// soft threshold and later its hard cap raises two different event types and only
-// one of them is ever the subject of an assertion.
+// read returns every attempt the sink saw, rejected ones included.
+func (s *sink) read(t *testing.T) []delivery {
+	t.Helper()
+	got := mockControl(t, http.MethodGet, "/_control/events/"+s.name, nil)
+	var body struct {
+		Data []delivery `json:"data"`
+	}
+	if err := json.Unmarshal(got.Body, &body); err != nil {
+		t.Fatalf("reading the sink: %v\n%s", err, truncate(got.Body))
+	}
+	return body.Data
+}
+
+// rejectNext arms the sink to refuse its next count deliveries with status, so a
+// test can drive the gateway's retry schedule rather than wait for one to happen
+// by accident. It must be called before the event it is meant to catch is
+// raised.
+func (s *sink) rejectNext(t *testing.T, status, count int) {
+	t.Helper()
+	mockControl(t, http.MethodPost, "/_control/events/"+s.name+"/fault",
+		map[string]any{"status": status, "count": count})
+}
+
+// deliveriesOfType filters a sink's accepted deliveries, because a quota that
+// crosses its soft threshold and later its hard cap raises two different event
+// types and only one of them is ever the subject of an assertion.
 func deliveriesOfType(all []delivery, eventType string) []delivery {
 	var out []delivery
 	for _, d := range all {
-		if d.Type == eventType {
+		if d.Type == eventType && d.accepted() {
 			out = append(out, d)
 		}
 	}
@@ -986,13 +1041,21 @@ func deliveriesOfType(all []delivery, eventType string) []delivery {
 // per request for the rest of the window. Delivery is asynchronous and retried,
 // so the settling period has to outlast a redelivery rather than merely a
 // round trip.
-func awaitDeliveries(t *testing.T, read func(*testing.T) []delivery, eventType string, want int) []delivery {
+func awaitDeliveries(t *testing.T, s *sink, eventType string, want int) []delivery {
+	t.Helper()
+	return awaitDeliveriesWithin(t, s, eventType, want, 20*time.Second)
+}
+
+// awaitDeliveriesWithin is awaitDeliveries with the patience named explicitly,
+// for the one test that arranges a rejection and so has to outlast the gateway's
+// backoff rather than merely its first attempt.
+func awaitDeliveriesWithin(t *testing.T, s *sink, eventType string, want int, patience time.Duration) []delivery {
 	t.Helper()
 
-	deadline := time.Now().Add(20 * time.Second)
+	deadline := time.Now().Add(patience)
 	var got []delivery
 	for {
-		got = deliveriesOfType(read(t), eventType)
+		got = deliveriesOfType(s.read(t), eventType)
 		if len(got) >= want {
 			break
 		}
@@ -1003,7 +1066,7 @@ func awaitDeliveries(t *testing.T, read func(*testing.T) []delivery, eventType s
 	}
 
 	time.Sleep(2 * time.Second)
-	return deliveriesOfType(read(t), eventType)
+	return deliveriesOfType(s.read(t), eventType)
 }
 
 // allowSeconds starts a stopwatch and returns the check for it. Several
