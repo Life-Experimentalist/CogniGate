@@ -14,8 +14,10 @@ RUN go mod download
 COPY . .
 
 # VERSION is stamped into the binary so /healthz and /v1/meta report something
-# an operator can match to a release. It defaults to "dev" for a local build.
-ARG VERSION=dev
+# an operator can match to a release. The default is semver rather than the word
+# "dev" because GW-9 publishes it as a version a client may parse; the
+# prerelease segment is what marks an untagged build.
+ARG VERSION=0.0.0-dev
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags "-s -w -X main.version=${VERSION}" -o cognigate .
 
 FROM alpine:3.24

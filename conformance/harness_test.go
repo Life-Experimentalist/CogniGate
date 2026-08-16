@@ -81,8 +81,14 @@ func loadConfig() config {
 // --- suite state ------------------------------------------------------------
 
 type suiteState struct {
-	cfg      config
-	client   *client
+	cfg    config
+	client *client
+	// capabilities is what /v1/meta claims, keyed by the gw-N id GW-9 fixes.
+	// It selects which sections of the suite run at all.
+	capabilities map[string]bool
+	// features is finer grained than capabilities and does not replace it: a
+	// gw-N id is too coarse to say whether quotas reject or only report, so a
+	// handful of tests gate on these instead of on their whole requirement.
 	features map[string]bool
 	version  string
 
