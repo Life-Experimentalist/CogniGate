@@ -104,7 +104,7 @@ func NewMetrics() *Metrics {
 
 		TelemetryDropped: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "cognigate_telemetry_dropped_total",
-			Help: "Usage records discarded because the telemetry buffer was full.",
+			Help: "Usage records discarded without being persisted: the telemetry buffer was full, the write failed permanently, or the process shut down before it could be retried.",
 		}),
 	}
 
