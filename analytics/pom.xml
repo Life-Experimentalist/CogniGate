@@ -81,6 +81,15 @@
             <artifactId>spring-boot-webmvc-test</artifactId>
             <scope>test</scope>
         </dependency>
+
+        <!-- Without this, MockMvc silently runs without the Spring Security
+             filter chain, and a test asserting that /api/** is closed would
+             pass against a service that is wide open. -->
+        <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-test</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>
