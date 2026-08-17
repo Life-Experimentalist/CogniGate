@@ -9,6 +9,7 @@ package server
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"log/slog"
 	"strings"
@@ -66,6 +67,15 @@ type Deps struct {
 	Events  Emitter
 	Logger  *slog.Logger
 	Version string
+	// TLSCertificate, when non-nil, makes Listen serve HTTPS (GW-11). Nil is
+	// plaintext, which is the default and the recommended production shape:
+	// GW-11 assumes a private network or an operator-owned reverse proxy, and
+	// this exists for the deployment that has neither.
+	//
+	// One certificate serves both planes because one listener does. There is
+	// no way to configure TLS on the data plane and leave the admin plane in
+	// the clear, which is the mistake a second field would make possible.
+	TLSCertificate *tls.Certificate
 	// Dev marks a `cognigate --dev` process. It only changes what /v1/meta
 	// reports; the routes and their semantics are identical, which is the whole
 	// point of GW-11's dev mode.
@@ -150,6 +160,12 @@ func (s *Server) routes() {
 	s.app.Use(s.identify())
 	s.app.Use(s.recover())
 	s.app.Use(s.observe())
+	// Ahead of limitBody, and of everything that follows it: a process that has
+	// been told to stop has no reason to read a body it is not going to serve.
+	// It sits after observe so the refusals are still counted and logged —
+	// "how much traffic arrived after we started draining" is the number that
+	// says whether the load balancer reacted in time.
+	s.app.Use(s.refuseWhenDraining())
 	s.app.Use(s.limitBody())
 
 	s.app.Get("/healthz", s.handleHealthz)
@@ -178,7 +194,17 @@ func (s *Server) routes() {
 }
 
 // Listen serves until Shutdown is called.
-func (s *Server) Listen(addr string) error { return s.app.Listen(addr) }
+//
+// The certificate is passed in already parsed rather than as a pair of paths:
+// it is read once, at assembly, so a certificate that does not load is reported
+// before the port opens instead of from inside the goroutine that was supposed
+// to start serving.
+func (s *Server) Listen(addr string) error {
+	if s.TLSCertificate != nil {
+		return s.app.ListenTLSWithCertificate(addr, *s.TLSCertificate)
+	}
+	return s.app.Listen(addr)
+}
 
 // Shutdown drains gracefully: /healthz starts failing immediately so traffic is
 // steered away, then in-flight requests are given drain_timeout to finish.

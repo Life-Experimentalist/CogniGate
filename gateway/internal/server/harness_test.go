@@ -193,6 +193,14 @@ type reply struct {
 	status int
 	header http.Header
 	body   []byte
+	// close is whether the response asked the client to drop the connection.
+	//
+	// It is a field of its own because the header it comes from is not in
+	// header: net/http's response reader consumes Connection: close into
+	// Response.Close and deletes the entry, so a test looking for the header
+	// finds nothing whether or not the server sent it. Response.Close is the
+	// observation.
+	close bool
 }
 
 // decode unmarshals the body into dst, failing the test rather than returning an
@@ -263,7 +271,7 @@ func (h *harness) doWithHeaders(method, path, token string, body any, headers ma
 	if err != nil {
 		h.t.Fatalf("reading %s %s response: %v", method, path, err)
 	}
-	return reply{status: res.StatusCode, header: res.Header, body: raw}
+	return reply{status: res.StatusCode, header: res.Header, body: raw, close: res.Close}
 }
 
 // --- fixtures ---------------------------------------------------------------

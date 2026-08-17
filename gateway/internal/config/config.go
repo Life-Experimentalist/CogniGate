@@ -41,6 +41,26 @@ type Config struct {
 
 type Gateway struct {
 	Port int `yaml:"port"`
+	// TLSCertFile and TLSKeyFile turn the listener into HTTPS when both are
+	// set. GW-11 makes plaintext the default and the recommended production
+	// shape — a private network or an operator-owned reverse proxy — and this
+	// the escape hatch for a deployment that has neither.
+	//
+	// One pair covers "both listeners" in GW-11's wording because both planes
+	// are served by one listener in this process. That is a property worth
+	// stating rather than leaving to be rediscovered: it is why there is no
+	// admin-specific pair, and why enabling TLS cannot leave one plane
+	// plaintext by accident.
+	TLSCertFile string `yaml:"tls_cert_file"`
+	TLSKeyFile  string `yaml:"tls_key_file"`
+}
+
+// TLSEnabled reports whether the listener should serve HTTPS. Validate has
+// already rejected the half-configured case, so either field is enough to
+// answer in a running process; both are read so that the answer is still
+// correct for a Config assembled in a test without going through Validate.
+func (g Gateway) TLSEnabled() bool {
+	return g.TLSCertFile != "" && g.TLSKeyFile != ""
 }
 
 // MinBootstrapKeyLen is the shortest admin bootstrap credential the gateway
@@ -241,6 +261,10 @@ func applyEnv(cfg *Config) {
 		}
 	})
 	envStr("ADMIN_BOOTSTRAP_KEY", func(v string) { cfg.Admin.BootstrapKey = v })
+	// Spelled without the CG_ prefix in GW-11's configuration table, which
+	// envStr already accepts as the second spelling of every name.
+	envStr("TLS_CERT_FILE", func(v string) { cfg.Gateway.TLSCertFile = v })
+	envStr("TLS_KEY_FILE", func(v string) { cfg.Gateway.TLSKeyFile = v })
 	envStr("ANALYTICS_URL", func(v string) { cfg.Analytics.BaseURL = v })
 	envStr("ANALYTICS_TOKEN", func(v string) { cfg.Analytics.Token = v })
 	envStr("METRICS_TOKEN", func(v string) { cfg.Metrics.Token = v })
@@ -279,6 +303,17 @@ func (c Config) Validate() error {
 	if n := len(c.Admin.BootstrapKey); n > 0 && n < MinBootstrapKeyLen {
 		return fmt.Errorf("admin.bootstrap_key is %d characters; at least %d are required",
 			n, MinBootstrapKeyLen)
+	}
+	// Both or neither. Half-configured TLS is the dangerous case: a deployment
+	// that set only the certificate believes it is serving HTTPS, and silently
+	// falling back to plaintext would leave it doing the opposite of what its
+	// configuration says. The keypair itself is loaded at assembly, where a
+	// certificate that does not parse can be reported before the port opens.
+	switch {
+	case c.Gateway.TLSCertFile != "" && c.Gateway.TLSKeyFile == "":
+		return fmt.Errorf("gateway.tls_cert_file is set but gateway.tls_key_file is not; TLS needs both")
+	case c.Gateway.TLSKeyFile != "" && c.Gateway.TLSCertFile == "":
+		return fmt.Errorf("gateway.tls_key_file is set but gateway.tls_cert_file is not; TLS needs both")
 	}
 	if c.Routing.MaxFallbackDepth < 1 {
 		return fmt.Errorf("routing.max_fallback_depth must be at least 1")

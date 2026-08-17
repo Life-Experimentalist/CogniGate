@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"log/slog"
 
@@ -51,6 +52,20 @@ type devCredentials struct {
 // need the dispatcher that delivers them.
 func build(cfg config.Config, dev bool, logger *slog.Logger, version string) (*app, error) {
 	a := &app{cfg: cfg, logger: logger}
+
+	// GW-11: TLS is off unless a keypair is configured. Loading it here rather
+	// than letting the listener open the files means an unreadable or malformed
+	// certificate stops the process with a message naming it, instead of
+	// surfacing from a goroutine after startup has already been announced.
+	var cert *tls.Certificate
+	if cfg.Gateway.TLSEnabled() {
+		loaded, err := tls.LoadX509KeyPair(cfg.Gateway.TLSCertFile, cfg.Gateway.TLSKeyFile)
+		if err != nil {
+			return nil, fmt.Errorf("loading the TLS keypair from %s and %s: %w",
+				cfg.Gateway.TLSCertFile, cfg.Gateway.TLSKeyFile, err)
+		}
+		cert = &loaded
+	}
 
 	// GW-11: with no analytics service configured the gateway runs entirely on
 	// its in-memory store. That is what makes `--dev` a single process, and it
@@ -112,17 +127,18 @@ func build(cfg config.Config, dev bool, logger *slog.Logger, version string) (*a
 	)
 
 	a.server = server.New(server.Deps{
-		Config:     cfg,
-		Store:      mem,
-		Catalog:    cat,
-		Resolver:   resolver,
-		Dispatcher: routing.NewDispatcher(resolver, breaker, registry, mem),
-		Metrics:    metrics,
-		Telemetry:  a.telemetry,
-		Events:     a.events,
-		Logger:     logger,
-		Version:    version,
-		Dev:        dev,
+		Config:         cfg,
+		Store:          mem,
+		Catalog:        cat,
+		Resolver:       resolver,
+		Dispatcher:     routing.NewDispatcher(resolver, breaker, registry, mem),
+		Metrics:        metrics,
+		Telemetry:      a.telemetry,
+		Events:         a.events,
+		Logger:         logger,
+		Version:        version,
+		Dev:            dev,
+		TLSCertificate: cert,
 	})
 
 	if dev {
