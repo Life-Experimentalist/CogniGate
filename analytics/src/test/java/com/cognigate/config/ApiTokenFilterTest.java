@@ -156,4 +156,15 @@ class ApiTokenFilterTest {
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("ANALYTICS_TOKEN");
     }
+
+    @Test
+    @DisplayName("the placeholder that ships in .env.example is refused")
+    void construction_withThePlaceholder_fails() {
+        // A blank check alone would let `replace_me` through — a valid non-blank
+        // string, published in the repository, on every deployment that copied
+        // the example and filled in only the two variables that complained.
+        assertThatThrownBy(() -> new SecurityConfig("replace_me"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("ANALYTICS_TOKEN");
+    }
 }

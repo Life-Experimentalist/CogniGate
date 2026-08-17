@@ -14,6 +14,15 @@ import org.springframework.security.web.authentication.UsernamePasswordAuthentic
 @EnableWebSecurity
 public class SecurityConfig {
 
+    /**
+     * The same floor the gateway puts under its own bootstrap credential. It is
+     * well below what {@code openssl rand -hex 32} produces; the point is not to
+     * measure entropy but to refuse the placeholder that ships in
+     * {@code .env.example}, which is otherwise a perfectly valid non-blank
+     * string published in the repository.
+     */
+    private static final int MIN_LENGTH = 16;
+
     private final String token;
 
     /**
@@ -24,11 +33,12 @@ public class SecurityConfig {
      * fails fast at startup instead.
      */
     public SecurityConfig(@Value("${ANALYTICS_TOKEN:}") String token) {
-        if (token == null || token.isBlank()) {
+        if (token == null || token.strip().length() < MIN_LENGTH) {
             throw new IllegalArgumentException(
-                "ANALYTICS_TOKEN is not set. Without it /api/** would accept usage records and "
-                    + "tenant administration from anyone who can reach this port. It must be the same "
-                    + "value the gateway is given as ANALYTICS_TOKEN. Generate one with: openssl rand -hex 32");
+                "ANALYTICS_TOKEN is not set, or is shorter than " + MIN_LENGTH + " characters. Without a "
+                    + "real one /api/** would accept usage records and tenant administration from anyone "
+                    + "who can reach this port. It must be the same value the gateway is given as "
+                    + "ANALYTICS_TOKEN. Generate one with: openssl rand -hex 32");
         }
         this.token = token;
     }
