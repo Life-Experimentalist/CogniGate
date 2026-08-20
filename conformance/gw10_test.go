@@ -202,7 +202,6 @@ func suiteTests(t *testing.T) map[string][]string {
 // it reaches zero when the specifications and the suite agree.
 var notYetCovered = map[string]bool{
 	"GW-12": true,
-	"GW-13": true,
 	"GW-14": true,
 }
 

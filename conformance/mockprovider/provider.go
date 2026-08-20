@@ -19,6 +19,7 @@
 package mockprovider
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -46,6 +47,19 @@ const (
 	// FaultStreamAbort dies after the stream has already begun. See
 	// abortMidStream for why a timeout is not a substitute.
 	FaultStreamAbort = "stream_abort"
+	// FaultStreamStall opens a stream, sends real content, and then goes quiet
+	// without ever closing the connection. It is the third distinct way a stream
+	// can go wrong and the only one FaultTimeout and FaultStreamAbort cannot
+	// stand in for: a timeout stalls before the first byte, an abort ends the
+	// connection outright, and this one leaves it open forever. Only silence on
+	// a live connection exercises the idle watchdog GW-13 requires, because only
+	// silence gives the gateway nothing at all to react to.
+	FaultStreamStall = "stream_stall"
+	// FaultOversizeBody answers with a well-formed completion whose body is
+	// larger than the caller asked for. It exists because a response size cap can
+	// only be tested by exceeding it, and no legitimate mock response comes close
+	// to the megabytes GW-13 sets the ceiling at.
+	FaultOversizeBody = "oversize_body"
 )
 
 // ListingTarget is the reserved value of the fault control's model field that
@@ -108,6 +122,10 @@ type fault struct {
 	mode      string
 	remaining int // ForeverCount means "until cleared"
 	delay     time.Duration
+	// bytes is the body size FaultOversizeBody produces. It has no default:
+	// the point of that mode is to land on a specific side of a specific
+	// ceiling, so a test that omits it is refused rather than served a guess.
+	bytes int
 }
 
 // Delivery is one webhook the gateway sent to a sink, as the sink saw it.
@@ -265,8 +283,11 @@ func (s *Server) serveModels(w http.ResponseWriter, r *http.Request, allowed map
 	s.listings++
 	s.mu.Unlock()
 
-	if mode, delay := s.takeFaultExact(ListingTarget); mode != FaultNone {
-		switch mode {
+	if f := s.takeFaultExact(ListingTarget); f.mode != FaultNone {
+		if !stalling(f.mode) && !stall(r.Context(), f.delay) {
+			return
+		}
+		switch f.mode {
 		case FaultRateLimit:
 			w.Header().Set("Retry-After", "1")
 			writeProviderError(w, http.StatusTooManyRequests, "rate_limit_error", "rate limit exceeded")
@@ -275,10 +296,7 @@ func (s *Server) serveModels(w http.ResponseWriter, r *http.Request, allowed map
 			writeProviderError(w, http.StatusInternalServerError, "server_error", "the server had an error")
 			return
 		case FaultTimeout:
-			select {
-			case <-time.After(delay):
-			case <-r.Context().Done():
-			}
+			stall(r.Context(), orDefault(f.delay, DefaultTimeoutDelay))
 			return
 		}
 	}
@@ -351,8 +369,19 @@ func (s *Server) serveCompletion(w http.ResponseWriter, r *http.Request, allowed
 		return
 	}
 
-	if mode, delay := s.takeFault(req.Model); mode != FaultNone {
-		switch mode {
+	if f := s.takeFault(req.Model); f.mode != FaultNone {
+		// A fault may be slow as well as wrong. GW-13.AC-4 needs a cascade whose
+		// entries each burn most of the request budget before failing, which is a
+		// combination no single mode can express: a timeout never fails, and a
+		// failure without a delay never consumes any of the budget.
+		//
+		// The stalling modes are excluded because for them the delay is where the
+		// silence falls rather than how long to wait before the fault begins.
+		// Pausing here as well would spend the same delay twice.
+		if !stalling(f.mode) && !stall(r.Context(), f.delay) {
+			return
+		}
+		switch f.mode {
 		case FaultRateLimit:
 			w.Header().Set("Retry-After", "1")
 			writeProviderError(w, http.StatusTooManyRequests, "rate_limit_error", "rate limit exceeded")
@@ -365,15 +394,16 @@ func (s *Server) serveCompletion(w http.ResponseWriter, r *http.Request, allowed
 				"invalid_request_error", "the request was not valid")
 			return
 		case FaultTimeout:
-			// Honour cancellation so a cleared-late fault does not pin a
-			// goroutine for the whole delay after the client has gone.
-			select {
-			case <-time.After(delay):
-			case <-r.Context().Done():
-			}
+			stall(r.Context(), orDefault(f.delay, DefaultTimeoutDelay))
 			return
 		case FaultStreamAbort:
 			s.abortMidStream(w, req.Model)
+			return
+		case FaultStreamStall:
+			s.stallMidStream(w, r, req.Model, orDefault(f.delay, DefaultTimeoutDelay))
+			return
+		case FaultOversizeBody:
+			s.oversizeCompletion(w, req.Model, f.bytes)
 			return
 		}
 	}
@@ -484,6 +514,74 @@ func (s *Server) abortMidStream(w http.ResponseWriter, model string) {
 	// chunk and without [DONE], which is what a provider dying mid-response
 	// actually looks like.
 	panic(http.ErrAbortHandler)
+}
+
+// stallMidStream opens a normal stream, emits real content, and then holds the
+// connection open in silence.
+//
+// This is the failure a stream idle timeout exists for, and neither of the other
+// two stream faults produces it. FaultTimeout stalls before the status line, so
+// the gateway is still free to fall back; FaultStreamAbort ends the connection,
+// which gives the gateway an EOF to react to. Only an open connection that has
+// gone quiet leaves the gateway with nothing but the clock, which is exactly the
+// case GW-13 asks it to bound.
+//
+// The stall honours cancellation, so a client that gives up — or a gateway that
+// enforces its timeout, which is the outcome under test — frees this goroutine
+// immediately rather than after the whole delay.
+func (s *Server) stallMidStream(w http.ResponseWriter, r *http.Request, model string, delay time.Duration) {
+	chunk := beginStream(w)
+	if chunk == nil {
+		return
+	}
+
+	chunk(streamChunk(model, map[string]any{"role": "assistant"}, nil))
+	chunk(streamChunk(model, map[string]any{"content": completionText}, nil))
+
+	select {
+	case <-time.After(delay):
+	case <-r.Context().Done():
+	}
+	// Returning without [DONE] and without a stop chunk. By the time this
+	// happens the gateway has long since given up on the stream.
+}
+
+// oversizeCompletion answers with a well-formed completion of a requested size.
+//
+// The padding goes in the message content rather than in a junk field so the
+// body is something a gateway would actually have to read to the end: a response
+// cap that only looked at Content-Length would still be caught here, but so
+// would one that streamed the body into a parser without bounding it.
+func (s *Server) oversizeCompletion(w http.ResponseWriter, model string, size int) {
+	// Everything around the content in the JSON envelope, measured rather than
+	// guessed, so the body lands within a few bytes of what was asked for
+	// instead of a few hundred over it.
+	body := oversizeBody(model, "")
+	padding := size - len(body)
+	if padding < 0 {
+		padding = 0
+	}
+	writeJSON(w, http.StatusOK, oversizeEnvelope(model, strings.Repeat("x", padding)))
+}
+
+func oversizeEnvelope(model, content string) map[string]any {
+	return map[string]any{
+		"id":      "chatcmpl-mock",
+		"object":  "chat.completion",
+		"created": time.Now().Unix(),
+		"model":   model,
+		"choices": []any{map[string]any{
+			"index":         0,
+			"message":       map[string]any{"role": "assistant", "content": content},
+			"finish_reason": "stop",
+		}},
+		"usage": usageBlock(),
+	}
+}
+
+func oversizeBody(model, content string) []byte {
+	body, _ := json.Marshal(oversizeEnvelope(model, content))
+	return body
 }
 
 // --- webhook sink -----------------------------------------------------------
@@ -666,6 +764,12 @@ type faultRequest struct {
 	Mode    string `json:"mode"`
 	Count   int    `json:"count"`
 	DelayMS int    `json:"delay_ms"`
+	// Bytes sizes the body FaultOversizeBody produces. Required for that mode
+	// and meaningless for every other, so it is refused on both counts rather
+	// than defaulted: a size cap test is entirely about which side of the cap
+	// the body lands on, and there is no size this mock could pick that would
+	// be right for a deployment it knows nothing about.
+	Bytes int `json:"bytes"`
 }
 
 func (s *Server) controlSetFault(w http.ResponseWriter, r *http.Request) {
@@ -676,13 +780,19 @@ func (s *Server) controlSetFault(w http.ResponseWriter, r *http.Request) {
 	}
 	switch req.Mode {
 	case FaultNone, FaultRateLimit, FaultServerError, FaultTimeout,
-		FaultClientError, FaultStreamAbort:
+		FaultClientError, FaultStreamAbort, FaultStreamStall, FaultOversizeBody:
 	default:
 		writeJSON(w, http.StatusBadRequest, map[string]any{
 			"error": fmt.Sprintf("unknown fault mode %q", req.Mode)})
 		return
 	}
-	// Two of the modes describe things only a completion can do. Accepting them
+	if (req.Bytes > 0) != (req.Mode == FaultOversizeBody) {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"error": fmt.Sprintf("fault mode %q takes %s a positive bytes",
+				req.Mode, map[bool]string{true: "", false: "no"}[req.Mode == FaultOversizeBody])})
+		return
+	}
+	// Four of the modes describe things only a completion can do. Accepting them
 	// against the listing target and then ignoring them would leave a test
 	// arranged against an endpoint that never misbehaved, passing for the wrong
 	// reason.
@@ -696,10 +806,10 @@ func (s *Server) controlSetFault(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	delay := DefaultTimeoutDelay
-	if req.DelayMS > 0 {
-		delay = time.Duration(req.DelayMS) * time.Millisecond
-	}
+	// Stored as asked, including zero. The stalling modes substitute
+	// DefaultTimeoutDelay at use time; every other mode treats zero as "answer
+	// immediately", which is what every existing arrangement means by omitting it.
+	delay := time.Duration(req.DelayMS) * time.Millisecond
 
 	s.mu.Lock()
 	if req.Mode == FaultNone {
@@ -709,7 +819,8 @@ func (s *Server) controlSetFault(w http.ResponseWriter, r *http.Request) {
 		if count == 0 {
 			count = ForeverCount
 		}
-		s.faults[req.Model] = &fault{mode: req.Mode, remaining: count, delay: delay}
+		s.faults[req.Model] = &fault{
+			mode: req.Mode, remaining: count, delay: delay, bytes: req.Bytes}
 	}
 	s.mu.Unlock()
 
@@ -741,45 +852,77 @@ func (s *Server) controlReset(w http.ResponseWriter, r *http.Request) {
 // takeFault reports what this request should do instead of succeeding, and
 // consumes one use of a counted fault. A fault registered against the empty
 // model id applies to every model, and the model's own fault wins over it.
-func (s *Server) takeFault(model string) (string, time.Duration) {
+// stall waits out a fault's delay, and reports whether it got there. A false
+// return means the client gave up first, in which case there is nobody left to
+// answer and the handler should simply return: honouring cancellation is what
+// keeps a forgotten fault from pinning a goroutine for the whole delay.
+func stall(ctx context.Context, d time.Duration) bool {
+	if d <= 0 {
+		return true
+	}
+	select {
+	case <-time.After(d):
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+// stalling reports whether a mode expresses itself by going quiet. For those two
+// the delay is the fault, so they consume it themselves at the point in the
+// exchange the silence belongs; every other mode treats it as a slow answer.
+func stalling(mode string) bool {
+	return mode == FaultTimeout || mode == FaultStreamStall
+}
+
+func orDefault(d, fallback time.Duration) time.Duration {
+	if d <= 0 {
+		return fallback
+	}
+	return d
+}
+
+func (s *Server) takeFault(model string) fault {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	for _, key := range []string{model, ""} {
-		if mode, delay, ok := s.takeLocked(key); ok {
-			return mode, delay
+		if f, ok := s.takeLocked(key); ok {
+			return f
 		}
 	}
-	return FaultNone, 0
+	return fault{mode: FaultNone}
 }
 
 // takeFaultExact is takeFault without the catch-all fallback, for targets that
 // are not models and so must not inherit an every-model arrangement.
-func (s *Server) takeFaultExact(key string) (string, time.Duration) {
+func (s *Server) takeFaultExact(key string) fault {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if mode, delay, ok := s.takeLocked(key); ok {
-		return mode, delay
+	if f, ok := s.takeLocked(key); ok {
+		return f
 	}
-	return FaultNone, 0
+	return fault{mode: FaultNone}
 }
 
 // takeLocked consumes one use of the fault at key, if there is a live one.
 // Called with the lock held.
-func (s *Server) takeLocked(key string) (string, time.Duration, bool) {
+func (s *Server) takeLocked(key string) (fault, bool) {
 	f, ok := s.faults[key]
 	if !ok {
-		return "", 0, false
+		return fault{}, false
 	}
 	if f.remaining == 0 {
 		delete(s.faults, key)
-		return "", 0, false
+		return fault{}, false
 	}
 	if f.remaining > 0 {
 		f.remaining--
 	}
-	return f.mode, f.delay, true
+	// A copy: the caller reads it after the lock is released, and the stored
+	// one is still being counted down by concurrent requests.
+	return *f, true
 }
 
 // credential identifies which of a provider's pooled keys served a request, so
