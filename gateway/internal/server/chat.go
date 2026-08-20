@@ -129,12 +129,17 @@ func (s *Server) streamCompletion(c *fiber.Ctx, tenantID, requested string, body
 		clientRequestID = httpx.ClientRequestID(c)
 		prefix          = keyPrefix(c)
 		logger          = s.Logger
+		// The tenant's own stall budget, not the deployment's. Read here for the
+		// same reason as everything else in this block: by the time the writer
+		// runs, c is a recycled request and the tenant on it belongs to someone
+		// else.
+		idle = s.limits(c).StreamIdleTimeout
 	)
 
 	c.Context().SetBodyStreamWriter(func(w *bufio.Writer) {
 		defer result.Response.Close()
 
-		usage, stalled, relayErr := relaySSE(w, result.Response.Stream, s.Config.Limits.StreamIdleTimeout)
+		usage, stalled, relayErr := relaySSE(w, result.Response.Stream, idle)
 
 		switch {
 		case stalled:

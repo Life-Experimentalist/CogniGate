@@ -225,26 +225,6 @@ func (s *Server) bootstrapMatches(raw string) bool {
 	return store.ConstantTimeEqual(raw, want)
 }
 
-// limitConcurrency caps simultaneous in-flight requests per credential (GW-13).
-//
-// Per key rather than per tenant: a runaway job holding one key should not be
-// able to starve the tenant's other integrations, and the caller who needs to
-// fix it is the one holding that key.
-func (s *Server) limitConcurrency() fiber.Handler {
-	return func(c *fiber.Ctx) error {
-		key := httpx.Key(c)
-		if key == nil {
-			return c.Next()
-		}
-		release, ok := s.limiter.acquire(key.ID)
-		if !ok {
-			return httpx.Fail(c, apierr.ConcurrencyExceeded(s.Config.Limits.MaxConcurrentPerKey))
-		}
-		defer release()
-		return c.Next()
-	}
-}
-
 // limitBody enforces max_request_bytes as a GW-7 error rather than as a
 // transport failure.
 //
@@ -281,7 +261,7 @@ func (s *Server) limitBody() fiber.Handler {
 // long generation at two minutes. GW-13 governs those with stream_idle_timeout
 // instead, which measures silence rather than duration.
 func (s *Server) opContext(c *fiber.Ctx) (context.Context, context.CancelFunc) {
-	return context.WithTimeout(c.UserContext(), s.Config.Limits.RequestTimeout)
+	return context.WithTimeout(c.UserContext(), s.limits(c).RequestTimeout)
 }
 
 // bearer extracts the credential from the Authorization header.
@@ -308,6 +288,10 @@ func bearer(c *fiber.Ctx) string {
 // rejection threshold, not a queue: GW-13 requires 429 concurrency_exceeded,
 // and a caller who wanted to wait would rather do so with their own backoff
 // than inside an opaque gateway queue.
+//
+// limit is the deployment ceiling, used when a caller passes none. The limit is
+// per acquire rather than fixed at construction because GW-13 lets a tenant be
+// held to a lower one, and the counters are shared across every tenant.
 type concurrencyLimiter struct {
 	mu    sync.Mutex
 	inUse map[string]int
@@ -321,11 +305,15 @@ func newConcurrencyLimiter(limit int) *concurrencyLimiter {
 	return &concurrencyLimiter{inUse: map[string]int{}, limit: limit}
 }
 
-func (l *concurrencyLimiter) acquire(key string) (func(), bool) {
+func (l *concurrencyLimiter) acquire(key string, limit int) (func(), bool) {
+	if limit < 1 {
+		limit = l.limit
+	}
+
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	if l.inUse[key] >= l.limit {
+	if l.inUse[key] >= limit {
 		return nil, false
 	}
 	l.inUse[key]++

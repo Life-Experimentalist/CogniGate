@@ -174,7 +174,7 @@ func (s *Server) adminMeta(c *fiber.Ctx) error {
 	if key != nil {
 		scope = key.Scope
 	}
-	meta := s.meta()
+	meta := s.meta(c)
 	// The one field that differs, and it is not one GW-9 names: it says which
 	// route answered, which is worth keeping now that the two bodies are
 	// otherwise indistinguishable.
@@ -364,15 +364,16 @@ func (s *Server) updateTenant(c *fiber.Ctx) error {
 	id := param(c, "tenant")
 
 	var req struct {
-		Name   *string `json:"name"`
-		Status *string `json:"status"`
+		Name   *string             `json:"name"`
+		Status *string             `json:"status"`
+		Limits *store.TenantLimits `json:"limits"`
 	}
 	if err := parse(c, &req); err != nil {
 		return httpx.Fail(c, err)
 	}
-	if req.Name == nil && req.Status == nil {
+	if req.Name == nil && req.Status == nil && req.Limits == nil {
 		return httpx.Fail(c, apierr.
-			InvalidRequest("A tenant update must change name or status."))
+			InvalidRequest("A tenant update must change name, status or limits."))
 	}
 	if req.Status != nil {
 		switch *req.Status {
@@ -382,11 +383,17 @@ func (s *Server) updateTenant(c *fiber.Ctx) error {
 				InvalidRequest(`status must be "active" or "suspended".`).WithParam("status"))
 		}
 	}
+	if req.Limits != nil {
+		if err := s.validateTenantLimits(*req.Limits); err != nil {
+			return httpx.Fail(c, err)
+		}
+	}
 
 	ctx, cancel := s.opContext(c)
 	defer cancel()
 
-	tenant, err := s.Store.UpdateTenant(ctx, id, store.TenantPatch{Name: req.Name, Status: req.Status})
+	tenant, err := s.Store.UpdateTenant(ctx, id,
+		store.TenantPatch{Name: req.Name, Status: req.Status, Limits: req.Limits})
 	if err != nil {
 		return httpx.Fail(c, storeErr(err, "tenant", id))
 	}

@@ -59,7 +59,24 @@ with distinct codes clients can handle — not mystery connection resets.
 | `limits.upstream_connect_timeout`    | `10s`   | Per attempt |
 | `limits.stream_idle_timeout`         | `60s`   | Streaming stall abort |
 | `limits.max_concurrent_per_key`      | `32`    | In-flight cap |
-| Per-tenant overrides (≤ ceilings)    | unset   | Via GW-6 |
+| `rate_limit.requests_per_second`      | `50`    | Sustained per-tenant rate |
+| `rate_limit.burst_capacity`          | `100`   | Token bucket depth |
+| Per-tenant overrides (≤ ceilings)    | unset   | `limits` on `PATCH /admin/v1/tenants/{id}` |
+
+Six of those keys are overridable per tenant, under the names
+`max_request_bytes`, `request_timeout_seconds`, `stream_idle_timeout_seconds`,
+`max_concurrent_per_key`, `requests_per_second` and `burst_capacity`. Each may
+only narrow: a value above the deployment's is rejected with 400
+`invalid_request` rather than clamped, so an operator reads back the tenant they
+configured. Zero means "no override"; the block is replaced wholesale, so
+sending `{}` clears every override.
+
+`max_response_bytes` and `upstream_connect_timeout` are deliberately not
+overridable. Both are fixed into the provider adapter's HTTP transport when the
+process starts, so honouring them per tenant would mean a transport, and a
+connection pool, per tenant — a real cost for a knob no acceptance criterion
+asks for. They stay deployment-wide, and `/v1/meta` publishes the deployment's
+value for the first.
 
 ## Acceptance criteria
 

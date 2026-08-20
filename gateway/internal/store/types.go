@@ -32,14 +32,45 @@ type Tenant struct {
 	Name      string    `json:"name"`
 	Status    string    `json:"status"` // active | suspended
 	CreatedAt time.Time `json:"created_at"`
+	// Limits narrows the deployment's ceilings for this tenant (GW-13). A zero
+	// field means "whatever the deployment says", which is why this is a value
+	// rather than a pointer: a tenant with no overrides and a tenant whose
+	// overrides are all unset are the same tenant, and giving them two
+	// representations would only invite code that handles one of them.
+	Limits TenantLimits `json:"limits"`
+}
+
+// TenantLimits are the per-tenant halves of GW-13's limit table. Each is a
+// ceiling the operator may lower for one tenant, never raise: the admin API
+// rejects a value above the deployment's, so a tenant cannot be configured into
+// consuming more of the process than the process was sized for.
+//
+// Only the four limits that can be decided per request are here.
+// max_response_bytes and upstream_connect_timeout are deliberately absent: both
+// are baked into the provider adapter's HTTP transport when the process starts,
+// so honouring them per tenant would mean a transport per tenant — a real cost
+// in connection pools for a knob no acceptance criterion asks for.
+type TenantLimits struct {
+	MaxRequestBytes          int64 `json:"max_request_bytes,omitempty"`
+	RequestTimeoutSeconds    int   `json:"request_timeout_seconds,omitempty"`
+	StreamIdleTimeoutSeconds int   `json:"stream_idle_timeout_seconds,omitempty"`
+	MaxConcurrentPerKey      int   `json:"max_concurrent_per_key,omitempty"`
+	RequestsPerSecond        int   `json:"requests_per_second,omitempty"`
+	BurstCapacity            int   `json:"burst_capacity,omitempty"`
 }
 
 // TenantPatch is a partial update. Every field is a pointer so that "absent"
 // and "set to the zero value" stay distinguishable — without that, a PATCH
 // carrying only a status change would silently blank the name.
+//
+// Limits replaces the whole block rather than merging field by field: a
+// half-applied limit set is a configuration nobody asked for, and "send me the
+// limits you want this tenant to have" is the only rule an operator has to
+// remember. An empty object therefore clears every override.
 type TenantPatch struct {
 	Name   *string
 	Status *string
+	Limits *TenantLimits
 }
 
 // APIKey stores only a hash. The plaintext is returned once, at creation, and
