@@ -79,7 +79,7 @@ func (s *Server) completion(c *fiber.Ctx, tenantID, requested string, body []byt
 	result, err := s.Dispatcher.Dispatch(ctx, tenantID, requested, body, false, "/chat/completions")
 	if err != nil {
 		s.recordRejection(c, requested, err)
-		return httpx.Fail(c, s.timeoutAware(ctx, err))
+		return httpx.Fail(c, timeoutAware(ctx, s.limits(c).RequestTimeout, err))
 	}
 	defer result.Response.Close()
 
@@ -107,7 +107,7 @@ func (s *Server) streamCompletion(c *fiber.Ctx, tenantID, requested string, body
 		// with a status line. GW-3's "fall back only before the first byte" rule
 		// is satisfied by construction: the cascade lives entirely above here.
 		s.recordRejection(c, requested, err)
-		return httpx.Fail(c, s.timeoutAware(ctx, err))
+		return httpx.Fail(c, timeoutAware(ctx, s.limits(c).RequestTimeout, err))
 	}
 
 	s.applyRoutingHeaders(c, result)
@@ -134,9 +134,14 @@ func (s *Server) streamCompletion(c *fiber.Ctx, tenantID, requested string, body
 		// runs, c is a recycled request and the tenant on it belongs to someone
 		// else.
 		idle = s.limits(c).StreamIdleTimeout
+		// The concurrency permit moves with the relay. Taken here rather than in
+		// the writer for the same reason as everything else in this block: c is a
+		// recycled request by then.
+		releaseSlot = adoptSlot(c)
 	)
 
 	c.Context().SetBodyStreamWriter(func(w *bufio.Writer) {
+		defer releaseSlot()
 		defer result.Response.Close()
 
 		usage, stalled, relayErr := relaySSE(w, result.Response.Stream, idle)
@@ -439,7 +444,11 @@ func causeOf(e *apierr.Error) string {
 // candidate failed was that the gateway ran out of time. Reporting that as
 // upstream_exhausted would send an operator looking at provider health for a
 // problem that is a deadline.
-func (s *Server) timeoutAware(ctx context.Context, err error) error {
+//
+// budget is the deadline the request was actually held to, which since GW-13 is
+// the tenant's own and not necessarily the deployment's. Quoting the deployment's
+// would tell a tenant narrowed to five seconds that it had two minutes.
+func timeoutAware(ctx context.Context, budget time.Duration, err error) error {
 	if !errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		return err
 	}
@@ -447,7 +456,7 @@ func (s *Server) timeoutAware(ctx context.Context, err error) error {
 	if errors.As(err, &e) && e.Status != fiber.StatusBadGateway {
 		return err
 	}
-	return apierr.GatewayTimeout(s.Config.Limits.RequestTimeout.Seconds()).WithCause(err)
+	return apierr.GatewayTimeout(budget.Seconds()).WithCause(err)
 }
 
 func keyPrefix(c *fiber.Ctx) string {

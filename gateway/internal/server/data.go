@@ -865,7 +865,7 @@ func (s *Server) meta(c *fiber.Ctx) metaResponse {
 			"health",
 			"meta",
 		},
-		Limits:  s.metaLimits(c),
+		Limits: s.metaLimits(c),
 		Object: "meta",
 		Mode:   mode,
 		Store:  s.Store.Kind(),
