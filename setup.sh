@@ -117,12 +117,6 @@ set_env() {
   sed -i.bak "s|^$1=.*|$1=$2|" .env && rm -f .env.bak
 }
 
-if [ -z "${ENCRYPTION_MASTER_KEY:-}" ] || [ "${ENCRYPTION_MASTER_KEY}" = "replace_with_32_byte_hex_key_here_minimum_64_chars" ]; then
-  echo -e "${YELLOW}⚠ ENCRYPTION_MASTER_KEY is not set or is still the placeholder. Generating one...${NC}"
-  set_env ENCRYPTION_MASTER_KEY "$(randhex 32)"
-  echo -e "${GREEN}✓ ENCRYPTION_MASTER_KEY generated and saved to .env${NC}"
-fi
-
 if [ -z "${GATEWAY_BOOTSTRAP_KEY:-}" ] || [ "${GATEWAY_BOOTSTRAP_KEY}" = "replace_me" ]; then
   echo -e "${YELLOW}⚠ GATEWAY_BOOTSTRAP_KEY is not set or is still the placeholder. Generating one...${NC}"
   set_env GATEWAY_BOOTSTRAP_KEY "$(randhex 24)"
@@ -156,7 +150,6 @@ if [ -n "$DETACH" ]; then
   echo -e "  ${BOLD}Gateway:${NC}          http://localhost:8080"
   echo -e "  ${BOLD}Analytics:${NC}        http://localhost:8081"
   echo -e "  ${BOLD}PostgreSQL:${NC}       localhost:5432 (db: cognigate)"
-  echo -e "  ${BOLD}Redis:${NC}            localhost:6379"
   echo ""
   echo -e "  Run ${YELLOW}docker compose logs -f${NC} to tail all logs."
   echo -e "  Run ${YELLOW}docker compose down${NC} to stop all services."
