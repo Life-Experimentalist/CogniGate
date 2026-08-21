@@ -91,7 +91,7 @@ which consumers build theirs.
 | Per-tenant `debug_capture.ttl_seconds` | deployment default (max `72h`) | Hard-delete horizon |
 | Per-tenant `debug_capture.sample_rate` | deployment default | Fraction captured |
 | `debug.default_capture_ttl`            | `24h`   | The TTL a tenant that names none is held to |
-| `debug.max_capture_ttl`                | `72h`   | Ceiling any tenant policy may request |
+| `debug.max_capture_ttl`                | `72h`   | Ceiling any tenant policy may request; may be lowered, never raised |
 | `debug.default_sample_rate`            | `0.01`  | The fraction a tenant that names none is held to |
 | `debug.max_capture_bytes_per_tenant`   | `33554432` | Buffer one tenant's captures may fill; the oldest are evicted to stay inside it |
 | `debug.capture_sweep_interval`         | `1m`    | How often expired captures are freed |

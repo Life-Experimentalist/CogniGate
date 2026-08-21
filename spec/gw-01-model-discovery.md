@@ -33,7 +33,8 @@ applications ever hand-maintain a model list.
 
 - `GET /v1/models` (data plane, `cg-*` key) MUST return the union of
   models available **to the calling tenant right now**: only providers the
-  tenant has keys/routes for, minus models excluded by tenant policy.
+  tenant has credentials or routing rules for, minus models excluded by
+  tenant policy.
 - The response MUST be OpenAI-list-shaped (`{"object":"list","data":[...]}`)
   so stock OpenAI SDKs parse it. Each entry MUST carry `id`, `object:
   "model"`, `owned_by` (provider slug), and CogniGate extension fields

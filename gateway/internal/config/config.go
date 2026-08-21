@@ -170,6 +170,14 @@ type Log struct {
 	Level string `yaml:"level"`
 }
 
+// MaxCaptureTTLCeiling is the longest retention window any deployment may
+// configure. GW-14 states the 72 h limit without qualification — "no override" —
+// so it is a property of CogniGate rather than of a deployment: `max_capture_ttl`
+// may be lowered and never raised. The documentation is quotable in someone
+// else's compliance record, which it could not be if an operator could edit the
+// number it names.
+const MaxCaptureTTLCeiling = 72 * time.Hour
+
 // Debug governs GW-14 capture. MaxTTL is a ceiling the admin API refuses to
 // exceed: captured prompts are the most sensitive thing the gateway can hold,
 // so they expire in days, not indefinitely.
@@ -244,7 +252,7 @@ func Default() Config {
 		Shutdown:  Shutdown{DrainTimeout: 30 * time.Second},
 		Log:       Log{Level: "info"},
 		Debug: Debug{
-			MaxTTL:            72 * time.Hour,
+			MaxTTL:            MaxCaptureTTLCeiling,
 			DefaultTTL:        24 * time.Hour,
 			DefaultSampleRate: 0.01,
 			MaxBytesPerTenant: 32 << 20,
@@ -382,6 +390,9 @@ func (c Config) Validate() error {
 	}
 	if c.Debug.DefaultSampleRate < 0 || c.Debug.DefaultSampleRate > 1 {
 		return fmt.Errorf("debug.default_sample_rate must be within 0..1")
+	}
+	if c.Debug.MaxTTL > MaxCaptureTTLCeiling {
+		return fmt.Errorf("debug.max_capture_ttl may not exceed %s", MaxCaptureTTLCeiling)
 	}
 	if c.Debug.DefaultTTL > c.Debug.MaxTTL {
 		return fmt.Errorf("debug.default_capture_ttl exceeds debug.max_capture_ttl")
