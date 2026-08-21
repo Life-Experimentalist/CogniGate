@@ -27,8 +27,9 @@ body:
         - "Gateway (Go Edge Proxy)"
         - "Analytics (Spring Boot Domain Engine)"
         - "Docker / docker-compose"
-        - "Plugin System (Janino / ClassLoader)"
-        - "Billing / EncryptionService"
+        - "Routing / Fallback / Circuit Breakers"
+        - "Quotas / Rate Limiting"
+        - "Usage Metering"
         - "Documentation"
         - "Other"
     validations:

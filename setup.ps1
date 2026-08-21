@@ -80,11 +80,12 @@ if (-not (Test-Path ".env")) {
     Write-Host "  [OK] .env file exists" -ForegroundColor Green
 }
 
-# Both credentials in .env.example are deliberately unusable: the analytics
-# engine refuses a master key that is not 32 bytes of hex, and the gateway
-# refuses a bootstrap key shorter than 16 characters. That makes an unedited
-# copy fail loudly at startup rather than becoming a deployment whose secrets
-# are published in this repository - so this is where it gets edited.
+# Both credentials in .env.example are placeholders, and both are replaced
+# here. Leaving either as shipped would mean a deployment whose secrets are
+# published in this repository: the bootstrap key opens the admin plane, and
+# the analytics token is the only thing in front of every tenant's usage on
+# port 8081. The gateway refuses a bootstrap key shorter than 16 characters,
+# so that one at least fails loudly; the token would simply work.
 function New-HexSecret([int]$Bytes) {
     $buf = New-Object byte[] $Bytes
     [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($buf)
@@ -96,6 +97,12 @@ if ($envContent -match "(?m)^GATEWAY_BOOTSTRAP_KEY=replace_" -or $envContent -no
     Write-Host "  [!] Generating GATEWAY_BOOTSTRAP_KEY..." -ForegroundColor Yellow
     $envContent = $envContent -replace "(?m)^GATEWAY_BOOTSTRAP_KEY=.*", "GATEWAY_BOOTSTRAP_KEY=$(New-HexSecret 24)"
     Write-Host "  [OK] GATEWAY_BOOTSTRAP_KEY generated." -ForegroundColor Green
+}
+
+if ($envContent -match "(?m)^ANALYTICS_TOKEN=replace_" -or $envContent -notmatch "(?m)^ANALYTICS_TOKEN=") {
+    Write-Host "  [!] Generating ANALYTICS_TOKEN..." -ForegroundColor Yellow
+    $envContent = $envContent -replace "(?m)^ANALYTICS_TOKEN=.*", "ANALYTICS_TOKEN=$(New-HexSecret 32)"
+    Write-Host "  [OK] ANALYTICS_TOKEN generated." -ForegroundColor Green
 }
 
 # Written once, so a run that generates both keys does not leave a window in

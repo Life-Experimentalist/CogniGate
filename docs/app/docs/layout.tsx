@@ -280,7 +280,6 @@ function SidebarContent() {
                 <SidebarLink href="/docs/explorer">
                     Codebase Explorer
                 </SidebarLink>
-                <SidebarLink href="/docs/plugins">Plugin System</SidebarLink>
                 <SidebarLink href="/docs/routing">
                     Routing & Failover
                 </SidebarLink>

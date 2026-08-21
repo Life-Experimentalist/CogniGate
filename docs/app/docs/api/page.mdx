@@ -1,129 +1,283 @@
 export const metadata = {
     title: "API Reference",
     description:
-        "API specifications for the CogniGate Edge Proxy (OpenAI-compatible) and the Java Domain Administration API.",
+        "The two planes CogniGate serves: an OpenAI-compatible data plane on /v1, and an administration plane on /admin/v1.",
 };
 
 # API Reference
 
-CogniGate exposes two API planes: the High-Performance Edge Proxy for routing LLM traffic and the Admin Engine API for managing tenants, API keys, and routing rules.
+Both planes are served by the gateway on port `8080`. They are separated by the
+key that reaches them, not by the port: a data key opens `/v1` and nothing else,
+an admin key opens `/admin/v1` and nothing else. A key presented to the wrong
+plane is a `401` with code `wrong_plane`, never a partial success.
 
 > [!TIP]
-> You can also download our [OpenAPI Specification](https://github.com/Life-Experimentalist/CogniGate/blob/main/openapi.yaml) or our [Postman Collection](https://github.com/Life-Experimentalist/CogniGate/blob/main/postman_collection.json) to easily import and test the APIs locally.
+> The data plane's contract is also published as an
+> [OpenAPI specification](https://github.com/Life-Experimentalist/CogniGate/blob/main/openapi.yaml)
+> and a [Postman collection](https://github.com/Life-Experimentalist/CogniGate/blob/main/postman_collection.json).
 
-## 1. Edge Proxy API (Port 8080)
-
-The Edge Proxy runs on port `8080` and provides a drop-in replacement for OpenAI's chat completion endpoint.
-
-### Route LLM Traffic
-
-**POST** `/v1/chat/completions`
-
-Requires Bearer authentication using your tenant's CogniGate API key (`Authorization: Bearer cg-...`).
-
-#### Request Example
-
-```bash
-curl -X POST http://localhost:8080/v1/chat/completions \
-  -H "Authorization: Bearer cg-a4f6d89201bd..." \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "gpt-4",
-    "messages": [
-      {
-        "role": "user",
-        "content": "What is the capital of France?"
-      }
-    ]
-  }'
-```
-
-#### Response Example
+Every failure, on either plane, is the same envelope:
 
 ```json
 {
-    "id": "chatcmpl-123",
-    "object": "chat.completion",
-    "created": 1677652288,
-    "model": "gpt-4",
-    "choices": [
-        {
-            "message": {
-                "role": "assistant",
-                "content": "The capital of France is Paris."
-            },
-            "finish_reason": "stop"
-        }
-    ],
-    "usage": {
-        "prompt_tokens": 9,
-        "completion_tokens": 7,
-        "total_tokens": 16
+    "error": {
+        "message": "The requested model is not available to this tenant.",
+        "type": "invalid_request_error",
+        "code": "model_not_found",
+        "param": "model"
     }
 }
 ```
 
 ---
 
-## 2. Admin API (Port 8081)
+## 1. Data plane (`/v1`)
 
-The administration API is exposed by the Spring Boot engine on port `8081`.
+Authenticate with a tenant data key: `Authorization: Bearer cg-...`. Admin keys
+carry the prefix `cga-`, so which plane a credential belongs to is legible
+without trying it.
 
-### Create a Tenant
+| Method | Path                   | Purpose                                              |
+| ------ | ---------------------- | ---------------------------------------------------- |
+| `POST` | `/v1/chat/completions` | Route a completion, streaming or not                  |
+| `GET`  | `/v1/models`           | The models this tenant can reach, aliases included     |
+| `GET`  | `/v1/models/{id}`      | One model's metadata                                   |
+| `GET`  | `/v1/usage`            | Token and spend totals over a window                   |
+| `GET`  | `/v1/usage/breakdown`  | The same totals grouped by model, provider, key or tag |
+| `GET`  | `/v1/health`           | Per-provider reachability for this tenant              |
+| `GET`  | `/v1/meta`             | What this deployment supports, and its limits          |
 
-**POST** `/api/admin/tenants?name={name}`
+`GET /healthz` needs no key at all — it is what a load balancer polls. `GET
+/metrics` serves Prometheus when metrics are enabled, guarded by its own token
+when one is configured.
+
+### Route a completion
+
+**POST** `/v1/chat/completions`
 
 ```bash
-curl -X POST "http://localhost:8081/api/admin/tenants?name=StarkCorp"
+curl -X POST http://localhost:8080/v1/chat/completions \
+  -H "Authorization: Bearer $COGNIGATE_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "fast",
+    "messages": [{"role": "user", "content": "What is the capital of France?"}]
+  }'
+```
 
-# Response:
+`model` may be a concrete model id or one of the tenant's capability aliases.
+Set `"stream": true` for server-sent events; the response is relayed chunk by
+chunk and the usage record is written when the stream ends.
+
+Every response carries `X-CogniGate-Request-Id`. A routed one also carries
+`X-CogniGate-Served-By` — the provider and model that actually answered — and
+`X-CogniGate-Fallback-Depth`, which is `0` when the first choice answered. When
+quotas are configured, `X-CogniGate-Quota-State` reports the caller's position
+on every response, refusals included: `ok`, `soft-exceeded` or `hard-exceeded`.
+
+Send `X-Client-Request-Id` on the request to tag it with a correlation id of
+your own. It is stored on the usage record and is what `group_by=client_request_id`
+groups on.
+
+### Read usage back
+
+**GET** `/v1/usage?window=day`
+
+`window` is `day` or `month`, and defaults to `day`. The window it resolves to
+is half-open — `recorded_at >= since` and `recorded_at < until` — so a record on
+a boundary falls in exactly one of two adjacent windows, and the resolved bounds
+come back in the response.
+
+```bash
+curl "http://localhost:8080/v1/usage?window=month" \
+  -H "Authorization: Bearer $COGNIGATE_KEY"
+```
+
+```json
 {
-  "id": 1,
-  "name": "StarkCorp",
-  "cognigateApiKey": "cg-b29ad571120cd09..."
+    "object": "usage",
+    "window": "month",
+    "since": "2026-09-01T00:00:00Z",
+    "until": "2026-09-03T11:04:22Z",
+    "requests": 1420,
+    "prompt_tokens": 384200,
+    "completion_tokens": 91043,
+    "total_tokens": 475243,
+    "cost_usd": 4.81,
+    "state": "ok",
+    "limits": []
 }
 ```
 
-### List Tenants
+**GET** `/v1/usage/breakdown?group_by=model` returns the same figures per
+bucket under `data`, sorted by spend. `group_by` accepts `model`, `provider`,
+`key` and `client_request_id`. The response is capped at the 200 costliest
+buckets and sets `"truncated": true` when it had to cut — grouping by
+`client_request_id` is what makes that bound necessary.
 
-**GET** `/api/admin/tenants`
+---
+
+## 2. Admin plane (`/admin/v1`)
+
+Authenticate with an admin key. The bootstrap key is set at startup; every key
+after that is minted through the plane itself. An admin key carries a scope —
+`root` reaches every tenant and can create them, a tenant-scoped key reaches
+exactly one.
+
+Reaching a tenant your key is not scoped to is a `404`, not a `403`. A `403`
+would confirm that the tenant exists, which is enough to enumerate a
+deployment's customer list by guessing ids.
+
+### Deployment
+
+| Method | Path                       | Purpose                                    |
+| ------ | -------------------------- | ------------------------------------------ |
+| `GET`  | `/admin/v1/meta`           | Version, features, effective limits         |
+| `POST` | `/admin/v1/catalog/refresh`| Re-read model catalogues from providers     |
+| `GET`  | `/admin/v1/audit`          | Every mutation, with actor and result       |
+
+### Admin keys
+
+| Method   | Path                          | Purpose                    |
+| -------- | ----------------------------- | -------------------------- |
+| `POST`   | `/admin/v1/admin-keys`        | Mint an admin key           |
+| `GET`    | `/admin/v1/admin-keys`        | List them (metadata only)   |
+| `DELETE` | `/admin/v1/admin-keys/{id}`   | Revoke one                  |
+
+### Tenants
+
+| Method   | Path                        | Purpose             |
+| -------- | --------------------------- | ------------------- |
+| `POST`   | `/admin/v1/tenants`         | Create — `root` only |
+| `GET`    | `/admin/v1/tenants`         | List                 |
+| `GET`    | `/admin/v1/tenants/{id}`    | Read one             |
+| `PATCH`  | `/admin/v1/tenants/{id}`    | Rename, suspend, set limits, cache and capture policy |
+| `DELETE` | `/admin/v1/tenants/{id}`    | Delete               |
 
 ```bash
-curl http://localhost:8081/api/admin/tenants
+curl -X POST http://localhost:8080/admin/v1/tenants \
+  -H "Authorization: Bearer $COGNIGATE_ADMIN_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "acme"}'
 ```
 
-### Add Provider API Key
+```json
+{
+    "id": "ten_7f3a…",
+    "name": "acme",
+    "status": "active",
+    "created_at": "2026-09-03T11:04:22Z"
+}
+```
 
-**POST** `/api/admin/tenants/{tenantId}/keys`
+### Under a tenant
+
+Everything below is scoped to one tenant at
+`/admin/v1/tenants/{tenant}/…`.
+
+| Method              | Path                | Purpose                                          |
+| ------------------- | ------------------- | ------------------------------------------------ |
+| `POST` `GET`        | `keys`              | Mint and list this tenant's data keys             |
+| `DELETE`            | `keys/{id}`         | Revoke one                                        |
+| `POST` `GET`        | `providers`         | Register an upstream and its credentials          |
+| `PATCH` `DELETE`    | `providers/{id}`    | Update or remove one                              |
+| `PUT` `GET` `DELETE`| `aliases/{name}`    | Define a capability alias (`GET` lists all)       |
+| `PUT` `GET`         | `routing-rules`     | Define fallback chains                            |
+| `DELETE`            | `routing-rules/{id}`| Remove one                                        |
+| `PUT` `GET` `DELETE`| `quota`             | Token and spend caps for the tenant               |
+| `PUT` `GET` `DELETE`| `keys/{id}/quota`   | The same, narrowed to one key                     |
+| `POST`              | `cache/flush`       | Drop this tenant's cached responses               |
+| `GET`               | `captures`          | Read debug captures, when the tenant enabled them |
+| `POST` `GET`        | `webhooks`          | Subscribe to events                               |
+| `DELETE`            | `webhooks/{id}`     | Unsubscribe                                       |
+| `GET`               | `events`            | Pull the same events a webhook would push         |
+| `GET`               | `usage`             | This tenant's usage, as an administrator          |
+| `GET`               | `usage/breakdown`   | Grouped, as an administrator                      |
+
+### Mint a data key
+
+**POST** `/admin/v1/tenants/{tenant}/keys`
 
 ```bash
-curl -X POST http://localhost:8081/api/admin/tenants/1/keys \
+curl -X POST http://localhost:8080/admin/v1/tenants/ten_7f3a/keys \
+  -H "Authorization: Bearer $COGNIGATE_ADMIN_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "production", "expires_at": "2027-01-01T00:00:00Z"}'
+```
+
+```json
+{
+    "key": {
+        "id": "key_2b91…",
+        "tenant_id": "ten_7f3a…",
+        "plane": "data",
+        "name": "production",
+        "prefix": "cg-2b91",
+        "created_at": "2026-09-03T11:06:10Z",
+        "expires_at": "2027-01-01T00:00:00Z"
+    },
+    "secret": "cg-2b91…",
+    "warning": "This is the only time the secret is shown. Store it now; it cannot be retrieved again."
+}
+```
+
+The store keeps only a hash. `secret` is returned here and nowhere else — a
+listing returns the metadata and the prefix, never the credential.
+
+### Register a provider
+
+**POST** `/admin/v1/tenants/{tenant}/providers`
+
+```bash
+curl -X POST http://localhost:8080/admin/v1/tenants/ten_7f3a/providers \
+  -H "Authorization: Bearer $COGNIGATE_ADMIN_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "providerName": "openai",
-    "apiKey": "sk-proj-..."
+    "name": "openai",
+    "kind": "openai",
+    "base_url": "https://api.openai.com/v1",
+    "keys": ["<your provider key>"]
   }'
 ```
 
-### Add Model Routing Rule
+`kind` selects the adapter, and `openai` is the only one CogniGate ships. It
+covers every provider that reimplements the OpenAI wire format — Together,
+Groq, Fireworks, OpenRouter, Azure OpenAI, vLLM, Ollama, LM Studio — because
+only the base URL differs between them. An unrecognised `kind` falls back to
+it rather than refusing to route, since that is what almost everything speaks.
+A provider with its own protocol needs a translating proxy in front of it.
 
-**POST** `/api/admin/tenants/{tenantId}/rules`
+Provider keys are held in memory and are never serialised back out — a listing
+shows `key_prefixes`, not keys.
+
+### Define an alias
+
+**PUT** `/admin/v1/tenants/{tenant}/aliases/fast`
 
 ```bash
-curl -X POST http://localhost:8081/api/admin/tenants/1/rules \
+curl -X PUT http://localhost:8080/admin/v1/tenants/ten_7f3a/aliases/fast \
+  -H "Authorization: Bearer $COGNIGATE_ADMIN_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"capabilities": ["chat"], "cost_tier": "cheapest", "min_context_window": 16000}'
+```
+
+An alias either pins a model outright (`"pin": "gpt-4o-mini"`) or describes what
+it needs and lets the catalogue choose. See [Routing](/docs/routing).
+
+### Set a quota
+
+**PUT** `/admin/v1/tenants/{tenant}/quota`
+
+```bash
+curl -X PUT http://localhost:8080/admin/v1/tenants/ten_7f3a/quota \
+  -H "Authorization: Bearer $COGNIGATE_ADMIN_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "modelName": "gpt-4",
-    "backupModelName": "claude-3-haiku",
-    "priority": 1
+    "tokens": {"cap": 5000000, "soft_threshold_pct": 80},
+    "cost":   {"cap": 250.0,   "soft_threshold_pct": 80}
   }'
 ```
 
-### Upload Custom Plugin
-
-**POST** `/api/admin/plugins/upload?className={className}`
-
-```bash
-curl -X POST "http://localhost:8081/api/admin/plugins/upload?className=com.cognigate.plugin.MyCustomHandler" \
-  -F "file=@MyCustomHandler.java"
-```
+Crossing the soft threshold emits an event; crossing the cap refuses the request
+with `quota_exceeded` or `budget_exceeded`. A key-level quota narrows the
+tenant's — it is evaluated alongside it and can never widen it.

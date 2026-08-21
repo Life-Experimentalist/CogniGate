@@ -1,54 +1,173 @@
 export const metadata = {
     title: "Troubleshooting",
     description:
-        "Diagnose and resolve common issues with CogniGate, including key decryption errors, Redis synchronization failures, and Janino plugin compilation errors.",
+        "Every error code the gateway can return, what each one actually means, and the failure modes that are properties of the design rather than bugs.",
 };
 
-# Troubleshooting Guide
+# Troubleshooting
 
-This guide documents common errors, diagnostic strategies, and steps to resolve issues with your CogniGate cluster.
+Every error carries a `code`. The code is the diagnosis — start there, not with
+the status.
 
-## 1. Common Request Errors
+```json
+{
+    "error": {
+        "type": "invalid_request_error",
+        "code": "alias_unresolvable",
+        "message": "The alias \"transcribe\" resolved to no available model.",
+        "param": "model",
+        "request_id": "req_3a71f0c9d284"
+    }
+}
+```
 
-### 401 Unauthorized
+`request_id` is also on every response as `X-CogniGate-Request-Id`, including
+responses that failed before anything else ran. It is the one string worth
+quoting in a bug report.
 
-- **Symptom**: Requests to the Edge Proxy on port `8080` return a `401 Unauthorized` response.
-- **Checks**:
-    1. Verify the request has the correct header format: `Authorization: Bearer cg-...`.
-    2. Confirm the tenant key exists in the database. Run `GET /api/admin/tenants` to list active keys.
-    3. Verify that the key is synced to Redis under the prefix `tenant:cfg:`.
+## Authentication
 
-### 429 / Model Exhausted
+| Code               | Status | Means                                                     |
+| ------------------ | ------ | --------------------------------------------------------- |
+| `invalid_api_key`  | 401    | No such key, or it is expired or revoked                   |
+| `wrong_plane`      | 401    | Right key, wrong plane                                     |
+| `insufficient_scope` | 403  | Admin key without `root`, on a route that needs it         |
 
-- **Symptom**: Requests return `429 Rate Limited or model exhausted`.
-- **Checks**:
-    1. All registered keys for the target model are marked unhealthy in Redis due to consecutive downstream rate-limits. Add additional provider keys to increase quota.
-    2. Check if your backup models are correctly configured. If all primary keys fail, the router should automatically cascade to the configured `backupModelName`.
+**`wrong_plane` is the one that catches people.** A `cg-` key on `/admin/v1`, or
+a `cga-` key on `/v1`, is a distinct refusal precisely so it does not read as
+"bad credential". Check the prefix before you check anything else.
 
----
+`insufficient_scope` on tenant creation means the key is tenant-scoped. Only a
+`root` admin key — or the bootstrap key — can create or delete tenants.
 
-## 2. Backend & System Failures
+A tenant-scoped key reaching another tenant's resources gets `resource_not_found`,
+not a 403. That is intentional and not a bug: a 403 would confirm the other
+tenant exists.
 
-### Janino Compiler Errors
+## Routing
 
-- **Symptom**: Uploading a plugin returns a `500 Dynamic compilation failed` status.
-- **Reason**: The uploaded `.java` file uses Java syntax that the Janino compiler cannot process.
-- **Remedy**: Janino supports a subset of the Java language. Simplify the plugin code:
-    - Avoid Java Records and modern switch pattern matching.
-    - Replace complex nested lambda streams with standard for-loops and collections.
-    - Ensure the class imports matches standard libraries or dependencies in `pom.xml`.
+| Code                       | Status | Means                                              |
+| -------------------------- | ------ | -------------------------------------------------- |
+| `model_not_found`          | 404    | The name is neither a catalog model nor an alias    |
+| `alias_unresolvable`       | 404    | The alias exists; nothing in the catalog satisfies it |
+| `alias_collides_with_model` | 409   | An alias name shadows a real model id               |
+| `fallback_duplicate_model` | 400    | The same entry appears twice in one chain           |
+| `upstream_exhausted`       | 502    | Every candidate in the chain failed                 |
 
-### Redis Cache Mismatches
+**`alias_unresolvable` almost always means no provider is registered**, or the
+registered provider's catalogue does not advertise the capability the alias
+requires. It is separated from `model_not_found` because it is a configuration
+problem the caller cannot see or fix — a bare 404 would send them looking in
+the wrong place.
 
-- **Symptom**: Changes made via the Admin API do not seem to take effect in the Edge Proxy.
-- **Reason**: Cache synchronization between Java and Go failed because the Redis Pub/Sub invalidation channel is disconnected.
-- **Remedy**:
-    1. Verify that Redis is running: `docker compose ps redis`.
-    2. Check Domain Engine logs for Pub/Sub exceptions during key creation.
-    3. Verify the Redis configuration prefix match in [cognigate.config.yml](https://github.com/Life-Experimentalist/CogniGate/blob/main/cognigate.config.yml) (default `tenant:cfg:`).
+`upstream_exhausted` carries an `attempts` array naming what was tried:
 
-### Decryption Failures
+```json
+"attempts": [
+  {"provider": "openai", "model": "gpt-4o", "failure": "rate_limit", "status": 429},
+  {"provider": "local",  "model": "llama-3.1-70b", "failure": "breaker_open"}
+]
+```
 
-- **Symptom**: Java Domain Engine logs show `javax.crypto.AEADBadTagException: Tag mismatch!`.
-- **Reason**: The `ENCRYPTION_MASTER_KEY` used to decrypt the API keys in PostgreSQL does not match the key that was used to encrypt them.
-- **Remedy**: Restore the original `ENCRYPTION_MASTER_KEY` value in your `.env` file. If the master key was permanently lost, you must re-save all provider API keys via the Admin API.
+`breaker_open` means the gateway never made the call. Check
+`GET /v1/health`, which reports every breaker that is not closed and, on the open
+ones, `breaker_until`.
+
+## Limits and quotas
+
+| Code                    | Status | Means                                              |
+| ----------------------- | ------ | -------------------------------------------------- |
+| `rate_limited`          | 429    | Requests per second, per tenant                     |
+| `concurrency_exceeded`  | 429    | Too many in flight on one key                       |
+| `quota_exceeded`        | 429    | A token cap was reached                             |
+| `budget_exceeded`       | 429    | A spend cap was reached                             |
+| `request_too_large`     | 413    | Body over `limits.max_request_bytes`                |
+| `response_too_large`    | 502    | Upstream answer over `limits.max_response_bytes`    |
+
+All four 429s are distinct on purpose: they need four different responses from
+you. `rate_limited` wants backoff, `concurrency_exceeded` wants fewer parallel
+requests, `quota_exceeded` and `budget_exceeded` want a bigger cap or a new
+window.
+
+`X-CogniGate-Quota-State` reports the caller's position on every data-plane
+response: `ok`, `soft-exceeded` (past the warning threshold, still served) or
+`hard-exceeded`. The approach to a cap is visible before the refusal.
+
+### "My quota didn't stop anything"
+
+Two likely causes, both by design:
+
+1. `quotas.enforcement` is `observe`. Over-cap requests are served, events are
+   emitted, and headers are set. That is what the mode is for — sizing caps
+   before they start refusing traffic. Switch to `on`.
+2. **Metering is asynchronous.** Usage is recorded after the response is
+   returned, so a burst of concurrent requests can cross a cap together before
+   any of them has been counted. The cap is enforced on the next request, not
+   retroactively on that burst.
+
+## Streaming
+
+`upstream_stream_stalled` means a stream produced nothing for longer than
+`limits.stream_idle_timeout` (60s by default) and was ended rather than left
+holding a connection open indefinitely.
+
+It arrives as a **terminal SSE event, never an HTTP status** — the status line
+went out with the first token, long before the stall. This is the reason a
+streaming client must read the last event rather than trusting the 200: a
+truncated answer announces itself in-band or not at all. The same applies to an
+upstream that dies mid-stream.
+
+Raise the timeout if your provider is genuinely that slow to first token; suspect
+the provider if it happens often.
+
+## Configuration changes that seem not to apply
+
+The gateway holds its configuration in memory, and that has two consequences
+worth naming before you go looking for a cache bug:
+
+- **A restart loses it.** Tenants, keys, providers, aliases, routing rules and
+  quotas are gone. Usage survives, because that lives in PostgreSQL.
+- **Replicas do not share it.** Creating a tenant on one gateway does not create
+  it on the others. If you are running more than one behind a load balancer, an
+  admin call landed on exactly one of them.
+
+Neither is a synchronisation failure. Both are the shape described under
+[Scaling](/docs/deployment#scaling).
+
+What *is* cached with a TTL is the model catalogue (`catalog.ttl`, 1h). It is
+invalidated automatically when a provider is added or changed, and
+`POST /admin/v1/catalog/refresh` forces it.
+
+## The stack itself
+
+```bash
+docker compose ps                    # all three should be healthy
+docker compose logs -f gateway
+docker compose logs -f analytics
+curl http://localhost:8080/healthz   # unauthenticated liveness
+```
+
+`GET /v1/health` — with a data-plane key — is the richer view: per-provider
+reachability and every open breaker.
+
+### Usage is missing but requests are working
+
+That is the expected shape of an analytics outage, not a coincidence: the
+gateway does not wait for the analytics service, buffers what it cannot deliver
+and drains the backlog when it recovers.
+
+If usage stays missing after analytics is healthy, the likely cause is a
+mismatched `ANALYTICS_TOKEN`. The analytics service answers 401, the gateway
+treats a 4xx as permanent and drops the record after one attempt rather than
+retrying forever against a rejection that will not change. Look for
+`usage record could not be persisted` in the gateway's log.
+
+### Analytics will not start
+
+It has no `ANALYTICS_TOKEN`, or it cannot reach PostgreSQL. It refuses to start
+without the token rather than publish an open metering API.
+
+## Filing a bug
+
+Include the `request_id`, the `code`, and the gateway log line for that request
+id. All three are already on the response.

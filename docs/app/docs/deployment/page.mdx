@@ -1,91 +1,95 @@
 export const metadata = {
-    title: "Deployment Guide",
+    title: "Deployment",
     description:
-        "Learn how to deploy CogniGate in production using Docker Compose, scale Go Edge Proxy instances, and configure database persistence.",
+        "Running CogniGate for real: the reference compose deployment, what to change before production, and what horizontal scaling does and does not give you.",
 };
 
-# Deployment Guide
+# Deployment
 
-CogniGate is designed to run in containerized environments and can easily be deployed on a single virtual machine using Docker Compose, or scaled horizontally on Kubernetes.
+CogniGate runs as containers. The repository ships a reference
+[`docker-compose.yml`](https://github.com/Life-Experimentalist/CogniGate/blob/main/docker-compose.yml)
+that brings up three services — the gateway, the analytics engine, and
+PostgreSQL — with every one of them health-checked.
 
-## Docker Compose Deployment
-
-The quickest way to deploy CogniGate in production is using Docker Compose. The default [`docker-compose.yml`](https://github.com/Life-Experimentalist/CogniGate/blob/main/docker-compose.yml) file orchestrates all four core services:
-
-```yaml
-version: "3.8"
-
-services:
-    postgres-db:
-        image: postgres:16-alpine
-        environment:
-            POSTGRES_DB: cognigate
-            POSTGRES_USER: cognigate_user
-            POSTGRES_PASSWORD: \${SPRING_DATASOURCE_PASSWORD}
-        volumes:
-            - pgdata:/var/lib/postgresql/data
-        networks:
-            - cogni-net
-
-    redis:
-        image: redis:7-alpine
-        networks:
-            - cogni-net
-
-    analytics:
-        build:
-            context: ./analytics
-            dockerfile: Dockerfile
-        environment:
-            SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-db:5432/cognigate
-            SPRING_DATASOURCE_USERNAME: cognigate_user
-            SPRING_DATASOURCE_PASSWORD: \${SPRING_DATASOURCE_PASSWORD}
-            REDIS_URL: redis:6379
-            ENCRYPTION_MASTER_KEY: \${ENCRYPTION_MASTER_KEY}
-        ports:
-            - "8081:8081"
-        depends_on:
-            - postgres-db
-            - redis
-        networks:
-            - cogni-net
-
-    gateway:
-        build:
-            context: ./gateway
-            dockerfile: Dockerfile
-        environment:
-            REDIS_URL: redis:6379
-            PORT: 8080
-        ports:
-            - "8080:8080"
-        depends_on:
-            - redis
-        networks:
-            - cogni-net
-
-volumes:
-    pgdata:
-
-networks:
-    cogni-net:
-        driver: bridge
-```
-
-## Running in Detached Production Mode
-
-To pull dependencies, compile Docker images, and start the system in the background, run the setup script with the production flags:
+## The reference deployment
 
 ```bash
-# Linux / macOS
-./setup.sh --prod --detach
+cp .env.example .env
+openssl rand -hex 32   # -> ANALYTICS_TOKEN
+openssl rand -hex 24   # -> GATEWAY_BOOTSTRAP_KEY
 
-# Windows (PowerShell)
-.\setup.ps1 -Mode prod -Detach
+docker compose up -d --wait
 ```
 
-## Production Best Practices
+`--wait` returns only once the whole stack is actually serving rather than
+merely started. The two images built here carry their own `HEALTHCHECK` — the
+gateway on `/healthz`, analytics on `/actuator/health` — and PostgreSQL is
+checked in the compose file, because the stock image ships without one.
 
-1. **Secure the Admin Panel**: The administration service (port `8081`) exposes endpoints for creating tenants and adding credentials. Do not expose port `8081` to the public internet. Restrict it via a firewall or bind it to localhost.
-2. **Database Strategy**: Change `cognigate.analytics.jpa.ddl_auto` in [cognigate.config.yml](https://github.com/Life-Experimentalist/CogniGate/blob/main/cognigate.config.yml) from `update` to `validate` in production. Use Liquibase or Flyway to manage database schema updates.
-3. **Horizontal Scaling**: The Go Edge Proxy is stateless. You can scale the `gateway` container horizontally (e.g. `docker compose up --scale gateway=3`) and place them behind a load balancer. Since they sync configurations via Redis Pub/Sub, they will scale seamlessly.
+There is deliberately no `depends_on: analytics` on the gateway. The gateway
+builds its analytics client but does not dial it at startup, buffers what it
+cannot deliver, and drains the backlog when analytics answers. Waiting would
+mean an outage in one service becoming an outage in both.
+
+Two variables have no defaults, and the compose file refuses to start without
+them:
+
+| Variable                | What it guards                                      |
+| ----------------------- | --------------------------------------------------- |
+| `GATEWAY_BOOTSTRAP_KEY` | The admin plane, before any admin key has been minted |
+| `ANALYTICS_TOKEN`       | The metering API on port 8081                        |
+
+A reference deployment that shipped with a known credential is a reference
+deployment nobody should copy, so neither has a fallback value.
+
+Three more are optional:
+
+| Variable             | Default | Effect                                    |
+| -------------------- | ------- | ----------------------------------------- |
+| `QUOTA_ENFORCEMENT`  | `on`    | `observe` reports over-cap without refusing |
+| `CACHE_ENABLED`      | `false` | Response caching (GW-12)                    |
+| `POSTGRES_PASSWORD`  | dev value | Change it before production               |
+
+## Before production
+
+1. **Do not publish port 8081.** The analytics service holds every tenant's
+   usage. The reference file publishes it so a first-run deployment can be
+   inspected; a real one should leave it on the internal network. Publishing
+   5432 is the same mistake with a larger blast radius.
+2. **Retire the bootstrap key.** It exists to mint the first real admin key
+   through `POST /admin/v1/admin-keys`. Once you have one, take
+   `GATEWAY_BOOTSTRAP_KEY` back out of the environment — a long-lived root
+   credential in a compose file is the thing it was meant to avoid.
+3. **Terminate TLS.** The recommended shape is a private network or an
+   operator-owned reverse proxy. Where you have neither, set `CG_TLS_CERT_FILE`
+   and `CG_TLS_KEY_FILE`; one listener serves both planes, so the pair cannot
+   leave one of them plaintext by accident.
+4. **Pin the schema.** The analytics service runs Hibernate with
+   `ddl-auto: update`, which is fine for a first run and wrong for a system
+   holding billing data. Move to Flyway or Liquibase and set `validate`.
+5. **Scrape `/metrics`.** It is on by default and unauthenticated, which is
+   what a Prometheus scrape on a private network expects. Set
+   `CG_METRICS_TOKEN` if the path is reachable from anywhere it should not be.
+
+## Scaling
+
+The gateway holds its configuration in memory. That is what makes it fast and
+what bounds how it scales, so it is worth being precise about:
+
+- **Usage is shared.** Every replica ships its records to the same analytics
+  service, so totals and breakdowns are correct across the whole fleet no
+  matter which replica served a request.
+- **Configuration is not.** Two gateways are two independent sets of tenants,
+  keys, providers, aliases, routing rules and quotas. Creating a tenant on one
+  replica does not create it on the others.
+- **Nor are caches, rate limiters or captures.** A per-key rate limit of 50 rps
+  across three replicas is 150 rps in practice.
+
+So `docker compose up --scale gateway=3` behind a load balancer works, provided
+every replica is configured identically at startup and nothing calls the admin
+plane afterwards. Configuration that must outlive a restart or be shared between
+replicas has to be applied at startup, from outside.
+
+Rolling a replica out is safe: shutting down fails `/healthz` immediately so
+traffic is steered away, then gives in-flight requests `drain_timeout` to
+finish. Open streams are not cut off mid-completion.

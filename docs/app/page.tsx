@@ -138,12 +138,11 @@ function Hero() {
                         margin: "0 auto 48px",
                     }}
                 >
-                    Self-hosted, provider-agnostic AI infrastructure for
-                    multiple clients and scenarios. Host any AI model behind a
-                    drop-in OpenAI-compatible gateway. Features zero-downtime
-                    key rotation, circuit-breaking, AES-256 key vaulting, and
-                    hot-swap plugin architecture to integrate literally any
-                    provider — built on Go 1.26 + Java 25 LTS.
+                    A self-hosted, OpenAI-compatible gateway in front of every
+                    model your applications use. They hold one CogniGate key;
+                    your provider credentials stay in the deployment. Capability
+                    aliases, fallback chains, circuit breakers, per-tenant quotas
+                    and durable usage metering — built on Go 1.26 and Java 25 LTS.
                 </p>
 
                 {/* Interactive Install */}
@@ -318,38 +317,38 @@ function Hero() {
 const features = [
     {
         icon: "⚡",
-        title: "Zero-Downtime Key Rotation",
-        desc: "Atomic Redis-backed provider API key cycling with instant Pub/Sub cache invalidation. Your users never see a disruption.",
+        title: "Aliases That Do Not Go Stale",
+        desc: "fast, balanced and best are constraints, not pins — capability, context window and price, re-resolved against the live catalogue. A chain hardcoded to last year's model decays; a constraint does not.",
         color: "#06b6d4",
     },
     {
         icon: "🔄",
         title: "Circuit Breaker & Failover",
-        desc: "Automatic exponential backoff on 429/5xx errors with cascading fallback to backup models. Never lose a request.",
+        desc: "Ordered fallback chains, key rotation inside a provider on a 429, and a breaker scoped to one tenant, provider and model — so an outage costs one timeout rather than every caller's.",
         color: "#7c3aed",
     },
     {
         icon: "🔐",
-        title: "AES-256-GCM Key Vault",
-        desc: "All provider API keys encrypted at rest with a master key. Never stored in plaintext anywhere in the system.",
+        title: "Provider Keys Never Leave",
+        desc: "Your application holds a cg- key. The upstream credential is returned by no route, written to no disk, and printed in no log line.",
         color: "#10b981",
     },
     {
         icon: "🏢",
         title: "True Multi-Tenancy",
-        desc: "Complete per-tenant isolation: dedicated routing rules, encrypted key vaults, billing, and rate limits.",
+        desc: "Per-tenant providers, aliases, routing rules, quotas, rate limits and usage — with the admin plane separated from the data plane by the key itself, not by the address.",
         color: "#f59e0b",
     },
     {
         icon: "🔌",
-        title: "Any AI Model via Plugins",
-        desc: "Provider-agnostic by design. Upload `.java` plugins at runtime to support local LLMs, Anthropic, Gemini, or custom models. Janino compiles it in-memory with zero restarts.",
+        title: "Any OpenAI-Compatible Provider",
+        desc: "One adapter covers OpenAI, Together, Groq, Fireworks, OpenRouter, Azure OpenAI, vLLM, Ollama and LM Studio. Register a base URL and a key.",
         color: "#ec4899",
     },
     {
         icon: "💰",
-        title: "Enterprise Billing",
-        desc: "Automatic monthly invoice generation with per-tenant token cost tracking and configurable pricing.",
+        title: "Usage You Can Bill From",
+        desc: "Every served request metered to PostgreSQL — tokens, cost, provider, model, fallback depth — buffered through an analytics outage and idempotent on retry.",
         color: "#06b6d4",
     },
 ];
@@ -469,11 +468,13 @@ function Architecture() {
                                 marginBottom: 32,
                             }}
                         >
-                            The edge proxy is written in Go 1.26 for
-                            nanosecond-level routing decisions. The domain
-                            engine runs on Java 25 with Spring Boot 4.1 and
-                            Project Loom Virtual Threads — handling thousands of
-                            concurrent admin operations without blocking.
+                            Two processes, one job each. The gateway is Go 1.26
+                            on Fiber: it authenticates, routes, meters and
+                            relays, holding its own configuration in memory so
+                            the request path never waits on a database. The
+                            analytics engine is Java 25 on Spring Boot 4.1 with
+                            virtual threads, and owns the one thing a restart
+                            must not lose — usage.
                         </p>
 
                         <div
@@ -486,22 +487,17 @@ function Architecture() {
                             {[
                                 {
                                     tech: "Go 1.26 + Fiber v2",
-                                    role: "Edge Proxy — :8080",
+                                    role: "Gateway — :8080",
                                     color: "#06b6d4",
                                 },
                                 {
                                     tech: "Java 25 LTS + Spring Boot 4.1",
-                                    role: "Domain Engine — :8081",
+                                    role: "Analytics Engine — :8081",
                                     color: "#7c3aed",
                                 },
                                 {
-                                    tech: "Redis 7",
-                                    role: "Fast-Path Cache + Pub/Sub",
-                                    color: "#10b981",
-                                },
-                                {
                                     tech: "PostgreSQL 16",
-                                    role: "Source of Truth",
+                                    role: "Durable Usage Store",
                                     color: "#f59e0b",
                                 },
                             ].map((item) => (
@@ -662,23 +658,36 @@ irm https://cognigate.vkrishna04.me/install.ps1 | iex`,
                         {
                             step: "02",
                             title: "Create a Tenant",
-                            code: `curl -X POST "http://localhost:8081/api/admin/tenants?name=my-org"
-# → {"id":1,"name":"my-org","cognigateApiKey":"cg-..."}`,
+                            code: `# CG_ADMIN is GATEWAY_BOOTSTRAP_KEY from the generated .env
+curl -X POST http://localhost:8080/admin/v1/tenants \\
+  -H "Authorization: Bearer $CG_ADMIN" \\
+  -H "Content-Type: application/json" \\
+  -d '{"name":"my-org"}'
+# → {"id":"ten_9f2c41ab77d0","name":"my-org","status":"active",...}`,
                         },
                         {
                             step: "03",
-                            title: "Add Your Provider Key",
-                            code: `curl -X POST http://localhost:8081/api/admin/tenants/1/keys \\
+                            title: "Mint a Key, Register a Provider",
+                            code: `# the cg- key your application will hold
+curl -X POST http://localhost:8080/admin/v1/tenants/ten_9f2c41ab77d0/keys \\
+  -H "Authorization: Bearer $CG_ADMIN" \\
   -H "Content-Type: application/json" \\
-  -d '{"providerName":"openai","apiKey":"sk-proj-..."}'`,
+  -d '{"name":"laptop"}'
+
+# the provider credential, which stays in the deployment
+curl -X POST http://localhost:8080/admin/v1/tenants/ten_9f2c41ab77d0/providers \\
+  -H "Authorization: Bearer $CG_ADMIN" \\
+  -H "Content-Type: application/json" \\
+  -d '{"name":"openai","base_url":"https://api.openai.com/v1","keys":["sk-..."]}'`,
                         },
                         {
                             step: "04",
                             title: "Start Routing AI Traffic",
                             code: `curl -X POST http://localhost:8080/v1/chat/completions \\
-  -H "Authorization: Bearer cg-..." \\
+  -H "Authorization: Bearer $CG_KEY" \\
   -H "Content-Type: application/json" \\
-  -d '{"model":"gpt-4","messages":[{"role":"user","content":"Hello!"}]}'`,
+  -d '{"model":"fast","messages":[{"role":"user","content":"Hello!"}]}'
+# fast is an alias: X-CogniGate-Served-By says what it resolved to`,
                         },
                     ].map((item) => (
                         <div
@@ -761,10 +770,10 @@ function Stats() {
                 }}
             >
                 {[
-                    { value: "< 1ms", label: "Gateway Routing Latency" },
-                    { value: "AES-256", label: "Key Encryption Standard" },
-                    { value: "100%", label: "OpenAI API Compatible" },
-                    { value: "∞", label: "Tenant Scalability" },
+                    { value: "14", label: "Conformance-Tested Requirements" },
+                    { value: "0", label: "Provider Keys Written to Disk" },
+                    { value: "3", label: "Containers to Run" },
+                    { value: "Apache-2.0", label: "Licence, No Paid Tier" },
                 ].map((s) => (
                     <div key={s.label}>
                         <div

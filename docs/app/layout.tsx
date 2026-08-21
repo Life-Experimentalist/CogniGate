@@ -12,11 +12,11 @@ export const metadata: Metadata = {
     metadataBase: new URL("https://cognigate.vkrishna04.me"),
     title: {
         default:
-            "CogniGate — The Zero-Downtime Cognitive Router for Enterprise AI",
+            "CogniGate — Self-Hosted LLM Gateway with Routing, Fallback and Metering",
         template: "%s | CogniGate",
     },
     description:
-        "Self-hosted, multi-tenant AI infrastructure platform. OpenAI-compatible gateway with zero-downtime key rotation, circuit-breaking, AES-256 key vaulting, and hot-swap plugin compilation.",
+        "Self-hosted, multi-tenant OpenAI-compatible LLM gateway. Capability aliases, fallback chains, circuit breakers, per-tenant quotas and durable usage metering — with provider credentials that never leave the deployment.",
     keywords: [
         "AI gateway",
         "LLM router",
@@ -30,8 +30,9 @@ export const metadata: Metadata = {
         "Go",
         "Spring Boot",
         "circuit breaker",
-        "project loom",
-        "zero trust keys",
+        "fallback routing",
+        "token quotas",
+        "usage metering",
     ],
     authors: [
         { name: "VKrishna04", url: "https://github.com/VKrishna04" },
@@ -46,9 +47,9 @@ export const metadata: Metadata = {
         locale: "en_US",
         url: "https://cognigate.vkrishna04.me",
         siteName: "CogniGate",
-        title: "CogniGate — The Zero-Downtime Cognitive Router for Enterprise AI",
+        title: "CogniGate — Self-Hosted LLM Gateway with Routing, Fallback and Metering",
         description:
-            "Self-hosted, multi-tenant AI infrastructure platform. Drop-in OpenAI replacement with enterprise security.",
+            "A drop-in OpenAI-compatible gateway you run yourself. Your applications hold one key; your provider credentials stay in the deployment.",
         images: [
             {
                 url: "/banner.png",

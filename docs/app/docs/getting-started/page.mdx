@@ -1,91 +1,171 @@
 export const metadata = {
     title: "Getting Started",
     description:
-        "Get CogniGate running in minutes with one command. Prerequisites, quick start, and first AI call.",
+        "Bring CogniGate up with one command, then walk the four calls that take a fresh deployment from nothing to a routed completion.",
 };
 
 # Getting Started
 
-Get CogniGate running locally in under 5 minutes using Docker.
+Three containers, one command, and four HTTP calls to a working completion.
 
 ## Prerequisites
 
 - Docker Engine 27+
 - Docker Compose v2+
-- No Java or Go installation required (everything runs in containers)
+- Nothing else. Go and Java are only needed to work on CogniGate, not to run it.
 
-## One-Command Setup
+## One command
 
 ```bash
 # Linux / macOS
 git clone https://github.com/Life-Experimentalist/CogniGate.git
 cd CogniGate
 ./setup.sh --dev --detach
+```
 
+```powershell
 # Windows (PowerShell)
 git clone https://github.com/Life-Experimentalist/CogniGate.git
 cd CogniGate
 .\setup.ps1 -Mode dev -Detach
 ```
 
-The setup script automatically:
+The script copies `.env.example` to `.env`, replaces both placeholder
+credentials with generated ones — `GATEWAY_BOOTSTRAP_KEY` and
+`ANALYTICS_TOKEN` — and then builds and starts the stack: the gateway, the
+analytics service, and PostgreSQL. It waits for all three to report healthy
+before it returns, so a successful run is a stack that is actually serving.
 
-1. Copies `.env.example` → `.env`
-2. Generates a secure `ENCRYPTION_MASTER_KEY`
-3. Builds and starts all 4 containers (Gateway, Analytics, PostgreSQL, Redis)
+Neither credential has a default, and neither is generated anywhere but your
+own `.env`. A reference deployment that shipped with a known admin key would be
+no deployment at all.
 
-## Verify It's Running
+## Verify
 
 ```bash
-# Check gateway health
-curl http://localhost:8080/health
-# → OK
+curl http://localhost:8080/healthz
 ```
 
-## Your First AI Call
+`/healthz` is the only unauthenticated route on the gateway. Everything else
+needs a key, including `GET /v1/health` — the richer readiness view that reports
+per-provider state.
 
-First, create a tenant and add an API key. Then route traffic through CogniGate:
+## Your first completion
+
+A fresh gateway knows nothing: no tenants, no keys, no providers. The bootstrap
+key in `.env` is the one credential that exists before any of that, and its only
+job is to create the first of each.
 
 ```bash
-# 1. Create tenant
-curl -X POST "http://localhost:8081/api/admin/tenants?name=my-org"
+export CG_ADMIN=$(grep '^GATEWAY_BOOTSTRAP_KEY=' .env | cut -d= -f2-)
+```
 
-# 2. Add provider key
-curl -X POST http://localhost:8081/api/admin/tenants/1/keys \
+### 1. Create a tenant
+
+```bash
+curl -X POST http://localhost:8080/admin/v1/tenants \
+  -H "Authorization: Bearer $CG_ADMIN" \
   -H "Content-Type: application/json" \
-  -d '{"providerName":"openai","apiKey":"sk-proj-..."}'
+  -d '{"name": "my-org"}'
+```
 
-# 3. Add routing rule
-curl -X POST http://localhost:8081/api/admin/tenants/1/rules \
+```json
+{
+    "id": "ten_9f2c41ab77d0",
+    "name": "my-org",
+    "status": "active",
+    "created_at": "2026-09-03T10:14:02Z"
+}
+```
+
+Every tenant is created with the four portable aliases — `fast`, `balanced`,
+`best` and `transcribe` — so there is something to route to before anything has
+been configured.
+
+### 2. Mint a data-plane key
+
+```bash
+curl -X POST http://localhost:8080/admin/v1/tenants/ten_9f2c41ab77d0/keys \
+  -H "Authorization: Bearer $CG_ADMIN" \
   -H "Content-Type: application/json" \
-  -d '{"modelName":"gpt-4","backupModelName":"gpt-3.5-turbo","priority":1}'
+  -d '{"name": "laptop"}'
+```
 
-# 4. Make your first call
+```json
+{
+    "key": {
+        "id": "key_5d80c1e4a933",
+        "tenant_id": "ten_9f2c41ab77d0",
+        "plane": "data",
+        "name": "laptop",
+        "prefix": "cg-2b91",
+        "created_at": "2026-09-03T10:15:47Z"
+    },
+    "secret": "cg-...",
+    "warning": "This is the only time the secret is shown. Store it now; it cannot be retrieved again."
+}
+```
+
+The gateway keeps a hash, not the key. `prefix` is the only part it stores in
+the clear, and it is there so a key can be recognised in a listing or a usage
+record without being reconstructable from one. There is no route that reads a
+secret back: a lost key is re-minted, not recovered.
+
+```bash
+export CG_KEY=cg-...   # the "secret" field, verbatim
+```
+
+### 3. Register a provider
+
+The provider's own credential is given to the tenant, not to the caller. This is
+the point of the gateway: your application holds a `cg-` key, and the upstream
+key never leaves the deployment.
+
+```bash
+curl -X POST http://localhost:8080/admin/v1/tenants/ten_9f2c41ab77d0/providers \
+  -H "Authorization: Bearer $CG_ADMIN" \
+  -H "Content-Type: application/json" \
+  -d '{
+        "name": "openai",
+        "kind": "openai",
+        "base_url": "https://api.openai.com/v1",
+        "keys": ["<your provider key>"]
+      }'
+```
+
+`keys` is a list because a provider may be given several: the gateway rotates
+through them and takes a failing one out of circulation without failing the
+request.
+
+### 4. Make the call
+
+```bash
 curl -X POST http://localhost:8080/v1/chat/completions \
-  -H "Authorization: Bearer <your-cg-key>" \
+  -H "Authorization: Bearer $CG_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"model":"gpt-4","messages":[{"role":"user","content":"Hello!"}]}'
+  -d '{
+        "model": "fast",
+        "messages": [{"role": "user", "content": "Hello!"}]
+      }'
 ```
 
-<div
-    style={{
-        marginTop: 40,
-        padding: "16px 20px",
-        background: "rgba(6,182,212,0.06)",
-        border: "1px solid rgba(6,182,212,0.2)",
-        borderRadius: 10,
-        fontSize: 14,
-        color: "#9ca3af",
-        lineHeight: 1.65,
-    }}
->
-    <strong style={{ color: "#06b6d4" }}>Next Steps:</strong> Read the{" "}
-    <a href="/docs/architecture" style={{ color: "#06b6d4" }}>
-        Architecture Overview
-    </a>{" "}
-    to understand how CogniGate routes requests, or jump into the{" "}
-    <a href="/docs/api" style={{ color: "#06b6d4" }}>
-        API Reference
-    </a>{" "}
-    for all endpoints.
-</div>
+The response is the provider's, unchanged — the same shape any OpenAI-compatible
+client already parses. What CogniGate adds is in the headers:
+
+```http
+X-CogniGate-Request-Id: req_3a71f0c9d284
+X-CogniGate-Served-By: openai/gpt-4o-mini
+X-CogniGate-Fallback-Depth: 0
+```
+
+`fast` is not a model. It is a constraint — cheapest chat-capable model this
+tenant can reach — and `X-CogniGate-Served-By` says what it resolved to on this
+request. A model name works there too, if you would rather be explicit.
+
+## Where to go next
+
+- [Architecture](/docs/architecture) — the two processes and what happens
+  between them
+- [API Reference](/docs/api) — both planes, route by route
+- [Configuration](/docs/configuration) — every option and what it changes
+- [Deployment](/docs/deployment) — what to change before this faces real traffic
