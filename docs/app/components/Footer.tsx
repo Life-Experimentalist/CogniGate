@@ -25,7 +25,7 @@ export function Footer() {
                 }}
             >
                 <img
-                    src="/logo.png"
+                    src={`${process.env.NEXT_PUBLIC_BASE_PATH ?? ""}/logo.png`}
                     alt="CogniGate Logo"
                     style={{
                         width: 24,
@@ -54,7 +54,10 @@ export function Footer() {
             >
                 {[
                     ["GitHub", GITHUB],
-                    ["Documentation", "/docs/getting-started"],
+                    [
+                        "Documentation",
+                        `${process.env.NEXT_PUBLIC_BASE_PATH ?? ""}/docs/getting-started`,
+                    ],
                     [
                         "Contributing",
                         `${GITHUB}/blob/main/.github/CONTRIBUTING.md`,

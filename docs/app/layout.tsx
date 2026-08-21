@@ -94,7 +94,7 @@ export default function RootLayout({
                 />
                 {/* Verification tags, icons, search scrapers compatibility */}
                 <meta name="theme-color" content="#030712" />
-                <link rel="icon" href="/logo.png" />
+                <link rel="icon" href={`${process.env.NEXT_PUBLIC_BASE_PATH ?? ""}/logo.png`} />
             </head>
             <body className="antialiased">{children}</body>
         </html>

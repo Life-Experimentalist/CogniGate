@@ -287,7 +287,7 @@ function Hero() {
                     }}
                 >
                     <a
-                        href="/docs/getting-started"
+                        href={`${process.env.NEXT_PUBLIC_BASE_PATH ?? ""}/docs/getting-started`}
                         className="btn-primary"
                         style={{
                             textDecoration: "none",
