@@ -320,12 +320,14 @@ jobs:
           CONF_REPORT: ${{ github.workspace }}/conformance-report-observe.json
         run: |
           set -euo pipefail
-          QUOTA_ENFORCEMENT=observe             docker compose ${COMPOSE_FILES} up -d --wait --wait-timeout 180 gateway
+          QUOTA_ENFORCEMENT=observe \
+            docker compose ${COMPOSE_FILES} up -d --wait --wait-timeout 180 gateway
 
           # A replaced container needs a new follower: the one started earlier is
           # still attached to the gateway that was just torn down, and GW-8 reads
           # this file to check the request log.
-          nohup docker compose ${COMPOSE_FILES} logs -f --no-color --no-log-prefix gateway             > "${CONF_LOG_PATH}" 2>&1 &
+          nohup docker compose ${COMPOSE_FILES} logs -f --no-color --no-log-prefix gateway \
+            > "${CONF_LOG_PATH}" 2>&1 &
 
           go test -count=1 -timeout 25m ./conformance/...
 
@@ -333,7 +335,41 @@ jobs:
           # enforcement-dependent criterion skips in this mode, so a suite that
           # skipped AC-8 as well would still be green while certifying nothing
           # the first run had not already covered.
-          jq -e '.results[] | select(.id == "GW-4.AC-8") | .status == "pass"'             "${CONF_REPORT}"
+          jq -e '.results[] | select(.id == "GW-4.AC-8") | .status == "pass"' \
+            "${CONF_REPORT}"
+
+      # GW-12. Response caching is an optional capability, so every run above
+      # certifies only its AC-7 — that a deployment which declined a cache never
+      # says anything about one. The other six are statements about a gateway
+      # that has one, and are unreachable without turning it on. Recreating just
+      # the gateway is enough, for the reason the observe-mode step gives, and
+      # this run leaves quota enforcement at its default so that the two
+      # switches are never flipped at once.
+      - name: GW-12 — the suite passes against a gateway with caching enabled
+        env:
+          CONF_BASE_URL: http://localhost:8080
+          CONF_MOCK_PROVIDER: http://mock-provider-a:9900
+          CONF_MOCK_CONTROL_URL: http://localhost:19900
+          CONF_LOG_PATH: ${{ github.workspace }}/gateway-cache.log
+          CONF_REPORT: ${{ github.workspace }}/conformance-report-cache.json
+        run: |
+          set -euo pipefail
+          CACHE_ENABLED=true \
+            docker compose ${COMPOSE_FILES} up -d --wait --wait-timeout 180 gateway
+
+          nohup docker compose ${COMPOSE_FILES} logs -f --no-color --no-log-prefix gateway \
+            > "${CONF_LOG_PATH}" 2>&1 &
+
+          go test -count=1 -timeout 25m ./conformance/...
+
+          # By name rather than by exit code, for the reason GW-4.AC-8 is: every
+          # one of these skips where the capability is unclaimed, so a run that
+          # had failed to enable caching would be green having certified nothing
+          # the first run did not already cover.
+          for ac in 1 2 3 4 5 6; do
+            jq -e --arg id "GW-12.AC-${ac}" \
+              '.results[] | select(.id == $id) | .status == "pass"' "${CONF_REPORT}"
+          done
 
       - name: Upload the conformance reports
         if: always()
@@ -346,6 +382,7 @@ jobs:
             container-report/conformance-report.json
             gateway.log
             gateway-observe.log
+            gateway-cache.log
           if-no-files-found: warn
 
       - name: Print logs on failure

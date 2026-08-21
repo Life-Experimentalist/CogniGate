@@ -64,10 +64,27 @@ The first release has not been cut. Everything below is the state of `main`.
   `limits` block on `PATCH /admin/v1/tenants/{id}`, and each published in
   `GET /v1/meta` so a client can size its requests against the figure that is
   actually enforced.
+- **Response caching (GW-12), off by default.** An opt-in cache for requests a
+  provider would answer the same way twice: non-streaming, deterministic as
+  expressed, and asked for either by `X-CogniGate-Cache: prefer` or by a tenant
+  policy. A hit replays the stored body with `X-CogniGate-Cache: hit`, calls no
+  upstream, and meters no tokens and no cost. Keys are a SHA-256 over the tenant
+  id, the *resolved* provider and model, and the canonicalized request body, so
+  entries are never shared between tenants and an alias repin misses rather than
+  serving the model it no longer points at. `POST
+  /admin/v1/tenants/{id}/cache/flush` clears a tenant's entries.
+
+  Two things about it are worth knowing before turning it on. The cache lives in
+  the gateway process rather than in Redis, as
+  [GW-12](spec/gw-12-response-caching.md) explains, so a multi-replica
+  deployment caches per replica: the hit rate is lower than a shared cache
+  would give, and a flush clears the replica that serves it. And the per-alias
+  `cache` policy the specification describes is not implemented — the switch is
+  per tenant and per request.
 
 ### Not yet implemented
 
-Named here because the specifications are published and their absence is
-visible: response caching (GW-12) and the debug-capture side of the
-content-blind design (GW-14). Neither is listed in `/v1/meta`'s capabilities,
-which is the machine-readable form of the same statement.
+Named here because the specification is published and its absence is visible:
+the debug-capture side of the content-blind design (GW-14). It is not listed in
+`/v1/meta`'s capabilities, which is the machine-readable form of the same
+statement.

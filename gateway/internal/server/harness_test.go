@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -94,6 +95,32 @@ type harness struct {
 	adapter   *fakeAdapter
 	events    *recordingEmitter
 	telemetry *obs.Telemetry
+	usage     *recordingSink
+}
+
+// recordingSink keeps every usage record on its way to the store.
+//
+// The store aggregates — UsageTotals has no room for per-request fields — so a
+// test that needs to assert one, such as whether a row was marked cached, has
+// nowhere else to read it. It delegates rather than replacing the store so the
+// aggregate queries stay answerable too.
+type recordingSink struct {
+	mu      sync.Mutex
+	inner   obs.Sink
+	records []store.UsageRecord
+}
+
+func (r *recordingSink) RecordUsage(ctx context.Context, rec *store.UsageRecord) error {
+	r.mu.Lock()
+	r.records = append(r.records, *rec)
+	r.mu.Unlock()
+	return r.inner.RecordUsage(ctx, rec)
+}
+
+func (r *recordingSink) all() []store.UsageRecord {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]store.UsageRecord(nil), r.records...)
 }
 
 // recordingEmitter stands in for the webhook dispatcher so a test can assert an
@@ -154,7 +181,8 @@ func newHarness(t *testing.T, mutate ...func(*config.Config)) *harness {
 	// from, so a test can serve a completion and then assert the usage row it
 	// produced — which is the only way the streaming path's accounting is
 	// observable at all.
-	telemetry := obs.NewTelemetry(mem, cfg.Telemetry.Buffer, logger, metrics)
+	usage := &recordingSink{inner: mem}
+	telemetry := obs.NewTelemetry(usage, cfg.Telemetry.Buffer, logger, metrics)
 	t.Cleanup(telemetry.Close)
 
 	srv := New(Deps{
@@ -173,7 +201,10 @@ func newHarness(t *testing.T, mutate ...func(*config.Config)) *harness {
 		Version: "1.0.0-test",
 	})
 
-	return &harness{t: t, srv: srv, mem: mem, adapter: adapter, events: events, telemetry: telemetry}
+	return &harness{
+		t: t, srv: srv, mem: mem, adapter: adapter,
+		events: events, telemetry: telemetry, usage: usage,
+	}
 }
 
 // flushTelemetry blocks until every usage record queued so far has reached the

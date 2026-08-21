@@ -197,11 +197,10 @@ func suiteTests(t *testing.T) map[string][]string {
 // 1:1 mapping for everything it has finished, rather than staying red until the
 // last tranche lands and enforcing nothing in the meantime. It is deliberately
 // spelled as an allowlist of *requirements* and checked in both directions: a
-// requirement named here must have no tests at all, so landing GW-12's tranche
+// requirement named here must have no tests at all, so landing GW-14's tranche
 // without deleting its entry fails this criterion. The list can only shrink, and
 // it reaches zero when the specifications and the suite agree.
 var notYetCovered = map[string]bool{
-	"GW-12": true,
 	"GW-14": true,
 }
 

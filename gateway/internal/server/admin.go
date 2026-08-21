@@ -74,6 +74,11 @@ func (s *Server) adminRoutes(g fiber.Router) {
 	t.Get("/keys/:id/quota", s.getQuota)
 	t.Delete("/keys/:id/quota", s.deleteQuota)
 
+	// A flush, not a delete: there is no cache resource to address, only a
+	// pile of answers to be rid of. POST because it changes something, and
+	// under the tenant because a cache belongs to exactly one (GW-12.AC-6).
+	t.Post("/cache/flush", s.flushTenantCache)
+
 	t.Post("/webhooks", s.createWebhook)
 	t.Get("/webhooks", s.listWebhooks)
 	t.Delete("/webhooks/:id", s.deleteWebhook)
@@ -367,13 +372,14 @@ func (s *Server) updateTenant(c *fiber.Ctx) error {
 		Name   *string             `json:"name"`
 		Status *string             `json:"status"`
 		Limits *store.TenantLimits `json:"limits"`
+		Cache  *store.TenantCache  `json:"cache"`
 	}
 	if err := parse(c, &req); err != nil {
 		return httpx.Fail(c, err)
 	}
-	if req.Name == nil && req.Status == nil && req.Limits == nil {
+	if req.Name == nil && req.Status == nil && req.Limits == nil && req.Cache == nil {
 		return httpx.Fail(c, apierr.
-			InvalidRequest("A tenant update must change name, status or limits."))
+			InvalidRequest("A tenant update must change name, status, limits or cache."))
 	}
 	if req.Status != nil {
 		switch *req.Status {
@@ -388,12 +394,17 @@ func (s *Server) updateTenant(c *fiber.Ctx) error {
 			return httpx.Fail(c, err)
 		}
 	}
+	if req.Cache != nil {
+		if err := s.validateTenantCache(*req.Cache); err != nil {
+			return httpx.Fail(c, err)
+		}
+	}
 
 	ctx, cancel := s.opContext(c)
 	defer cancel()
 
 	tenant, err := s.Store.UpdateTenant(ctx, id,
-		store.TenantPatch{Name: req.Name, Status: req.Status, Limits: req.Limits})
+		store.TenantPatch{Name: req.Name, Status: req.Status, Limits: req.Limits, Cache: req.Cache})
 	if err != nil {
 		return httpx.Fail(c, storeErr(err, "tenant", id))
 	}

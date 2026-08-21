@@ -27,8 +27,9 @@ deliver none of them.
   lists failure classes, not payloads), webhook events, or metrics
   labels.
 - Content transits gateway memory and, when GW-12 caching is enabled,
-  lives in Redis under the entry TTL — both documented, bounded, and
-  under the operator's control. Telemetry from gateway to analytics
+  stays in that memory for the entry's TTL — both documented, bounded,
+  and under the operator's control. It reaches no store the operator did
+  not ask for: the cache is in-process, so nothing leaves the gateway. Telemetry from gateway to analytics
   MUST already exclude content (contractualizing existing behavior).
 - CogniGate MUST NOT parse message content for routing, moderation, or
   analytics beyond what proxying strictly requires (JSON framing, token

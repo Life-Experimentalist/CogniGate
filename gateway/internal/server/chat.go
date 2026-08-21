@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"strconv"
 	"sync/atomic"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 
 	"github.com/cognigate/gateway/internal/apierr"
+	"github.com/cognigate/gateway/internal/cache"
 	"github.com/cognigate/gateway/internal/httpx"
 	"github.com/cognigate/gateway/internal/obs"
 	"github.com/cognigate/gateway/internal/provider"
@@ -25,13 +27,61 @@ import (
 
 // chatEnvelope is the only part of a completion request the gateway parses.
 //
-// Everything else — messages, tools, temperature, provider extensions — is
-// forwarded byte for byte. Routing needs the model and whether the caller wants
-// a stream; parsing more would mean re-serialising content the gateway has no
-// business touching (GW-14) and would silently drop fields it does not model.
+// Everything else — messages, tools, provider extensions — is forwarded byte
+// for byte. Reading a field here never removes it from what the upstream
+// receives; the request is relayed from the original bytes, and this struct is
+// only how the gateway learns what it must decide.
+//
+// Routing needs the model and whether the caller wants a stream. The three
+// sampling parameters are here for GW-12's eligibility rule and nothing else:
+// they are numbers, not content, so reading them does not touch what GW-14 puts
+// out of bounds.
 type chatEnvelope struct {
 	Model  string `json:"model"`
 	Stream bool   `json:"stream"`
+	// Raw rather than *float64/*int, because a typed decode makes the gateway
+	// refuse requests the upstream would accept: {"n": 1.0} is what a Python
+	// client's json.dumps of a float emits, and it does not fit an int. These
+	// three are read only to decide cache eligibility, so a value the gateway
+	// cannot read is answered by declining to cache it, never by rejecting it.
+	Temperature json.RawMessage `json:"temperature"`
+	TopP        json.RawMessage `json:"top_p"`
+	N           json.RawMessage `json:"n"`
+}
+
+// notNumber is what a present but non-numeric sampling field reads as. NaN
+// compares false against everything, so such a request fails every eligibility
+// test without needing a branch of its own.
+var notNumber = math.NaN()
+
+// sampled reads one of the three numeric fields. Absent and null both read as
+// absent, which is the same question GW-12 asks: did the caller express this?
+func sampled(raw json.RawMessage) (value float64, present bool) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return 0, false
+	}
+	var f float64
+	if err := json.Unmarshal(raw, &f); err != nil {
+		return notNumber, true
+	}
+	return f, true
+}
+
+// deterministic reports whether the request, as written, asks for randomness.
+//
+// This is GW-12's rule verbatim: temperature 0, or no temperature alongside the
+// API defaults for top_p and n. Note what it does not do — a request that omits
+// temperature entirely is treated as deterministic even though the provider
+// will sample at its own default. That is deliberate in the spec ("deterministic
+// as expressed") and safe only because caching is opt-in: nothing is cached for
+// a caller who did not ask for it.
+func (e chatEnvelope) deterministic() bool {
+	if t, present := sampled(e.Temperature); present {
+		return t == 0
+	}
+	p, pSet := sampled(e.TopP)
+	n, nSet := sampled(e.N)
+	return (!pSet || p == 1) && (!nSet || n == 1)
 }
 
 func (s *Server) handleChatCompletions(c *fiber.Ctx) error {
@@ -64,18 +114,35 @@ func (s *Server) handleChatCompletions(c *fiber.Ctx) error {
 	// returns, and a streamed response outlives the handler.
 	payload := append([]byte(nil), body...)
 
+	plan := s.planCache(c, env)
+	if plan.header != "" {
+		setCacheStatus(c, plan.header)
+	}
+
 	if env.Stream {
 		return s.streamCompletion(c, tenantID, env.Model, payload)
 	}
-	return s.completion(c, tenantID, env.Model, payload)
+	return s.completion(c, tenantID, env.Model, payload, plan)
 }
 
-// completion serves a buffered chat completion.
-func (s *Server) completion(c *fiber.Ctx, tenantID, requested string, body []byte) error {
+// completion serves a buffered chat completion, from the cache when GW-12 says
+// it may and the answer is there.
+func (s *Server) completion(c *fiber.Ctx, tenantID, requested string, body []byte, plan cachePlan) error {
 	ctx, cancel := s.opContext(c)
 	defer cancel()
 
 	started := time.Now()
+
+	// servedBy is the model the key was computed against, kept so that storing
+	// can check the answer came from it. Empty means this request is not
+	// cacheable, and both the lookup and the store are then skipped.
+	key, servedBy := s.cacheKeyFor(ctx, plan, tenantID, requested, body)
+	if key != "" {
+		if entry, ok := s.cache.Get(key); ok {
+			return s.serveFromCache(c, entry, requested, started)
+		}
+	}
+
 	result, err := s.Dispatcher.Dispatch(ctx, tenantID, requested, body, false, "/chat/completions")
 	if err != nil {
 		s.recordRejection(c, requested, err)
@@ -86,8 +153,89 @@ func (s *Server) completion(c *fiber.Ctx, tenantID, requested string, body []byt
 	s.applyRoutingHeaders(c, result)
 	s.meter(c, result, requested, result.Response.Usage, false, fiber.StatusOK, time.Since(started))
 
+	if key != "" {
+		setCacheStatus(c, cacheMiss)
+		// Stored only when the model that answered is the one the key names. A
+		// cascade that fell through to a second model produced a different
+		// answer than the key promises, and replaying it later as the primary's
+		// would make the fallback invisible to the caller it happened to.
+		if result.Candidate.ServedBy() == servedBy {
+			s.cache.Put(tenantID, key, cache.Entry{
+				Body:     append([]byte(nil), result.Response.Body...),
+				Provider: result.Candidate.Provider,
+				Model:    result.Candidate.Model,
+			}, plan.ttl)
+		}
+	}
+
 	c.Set(fiber.HeaderContentType, fiber.MIMEApplicationJSON)
 	return c.Status(fiber.StatusOK).Send(result.Response.Body)
+}
+
+// cacheKeyFor derives this request's cache key, or "" when it has none.
+//
+// Resolution runs here rather than being taken from the dispatch, because the
+// key names the model that will serve and a lookup that waited for the dispatch
+// would have nothing left to save. A resolution or parse failure yields no key
+// rather than an error: the dispatch a few lines below fails on the same input
+// and says so properly, and reporting it from the cache would blame the wrong
+// component.
+func (s *Server) cacheKeyFor(ctx context.Context, plan cachePlan, tenantID, requested string, body []byte) (key, servedBy string) {
+	if !plan.lookup {
+		return "", ""
+	}
+	primary, err := s.Dispatcher.Primary(ctx, tenantID, requested)
+	if err != nil {
+		return "", ""
+	}
+	key, err = cache.Key(tenantID, primary.ServedBy(), body)
+	if err != nil {
+		return "", ""
+	}
+	return key, primary.ServedBy()
+}
+
+// serveFromCache replays a stored answer.
+//
+// The body goes back byte for byte, its original completion id and usage block
+// included, because a caller that retried an identical request is entitled to an
+// identical answer — that is the whole promise. Only the headers differ, and
+// they differ honestly: the request id is this request's, and the cache header
+// says where the body came from.
+func (s *Server) serveFromCache(c *fiber.Ctx, entry cache.Entry, requested string, started time.Time) error {
+	setCacheStatus(c, cacheHit)
+	c.Set(httpx.HeaderServedBy, entry.ServedBy())
+	c.Set(httpx.HeaderFallbackDepth, "0")
+
+	out := httpx.GetOutcome(c)
+	out.Provider = entry.Provider
+	out.Model = entry.Model
+	if requested != entry.Model {
+		out.Alias = requested
+	}
+	httpx.SetOutcome(c, out)
+
+	// No tokens, no cost, no upstream-latency observation: nothing was consumed
+	// and nothing was called. The row exists so the request is countable and so
+	// a tenant can see how much of its traffic the cache absorbed (GW-12.AC-2).
+	if s.Telemetry != nil {
+		s.Telemetry.Record(store.UsageRecord{
+			RequestID:       httpx.RequestID(c),
+			ClientRequestID: httpx.ClientRequestID(c),
+			TenantID:        httpx.TenantID(c),
+			KeyPrefix:       keyPrefix(c),
+			Provider:        entry.Provider,
+			Model:           entry.Model,
+			RequestedModel:  requested,
+			Cached:          true,
+			StatusCode:      fiber.StatusOK,
+			DurationMS:      time.Since(started).Milliseconds(),
+			RecordedAt:      time.Now().UTC(),
+		})
+	}
+
+	c.Set(fiber.HeaderContentType, fiber.MIMEApplicationJSON)
+	return c.Status(fiber.StatusOK).Send(entry.Body)
 }
 
 // streamCompletion relays an SSE completion.

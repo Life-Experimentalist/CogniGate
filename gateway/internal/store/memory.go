@@ -190,6 +190,9 @@ func (m *Memory) UpdateTenant(_ context.Context, id string, patch TenantPatch) (
 	if patch.Limits != nil {
 		t.Limits = *patch.Limits
 	}
+	if patch.Cache != nil {
+		t.Cache = *patch.Cache
+	}
 	return cloneTenant(t), nil
 }
 

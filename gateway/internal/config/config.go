@@ -131,6 +131,10 @@ type Cache struct {
 	DefaultTTL    time.Duration `yaml:"default_ttl"`
 	MaxTTL        time.Duration `yaml:"max_ttl"`
 	MaxEntryBytes int64         `yaml:"max_entry_bytes"`
+	// MaxBytes bounds the cache as a whole. MaxEntryBytes decides what may be
+	// stored; this decides how much of it is kept. Without it a cache that
+	// refuses nothing individually still grows without limit collectively.
+	MaxBytes int64 `yaml:"max_bytes"`
 }
 
 type Webhooks struct {
@@ -214,6 +218,7 @@ func Default() Config {
 			DefaultTTL:    5 * time.Minute,
 			MaxTTL:        24 * time.Hour,
 			MaxEntryBytes: 256 * 1024,
+			MaxBytes:      64 * 1024 * 1024,
 		},
 		Webhooks:  Webhooks{MaxAttempts: 5, Timeout: 10 * time.Second},
 		Telemetry: Telemetry{Buffer: 1000},
@@ -340,6 +345,9 @@ func (c Config) Validate() error {
 	}
 	if c.Cache.DefaultTTL > c.Cache.MaxTTL {
 		return fmt.Errorf("cache.default_ttl exceeds cache.max_ttl")
+	}
+	if c.Cache.MaxEntryBytes > c.Cache.MaxBytes {
+		return fmt.Errorf("cache.max_entry_bytes exceeds cache.max_bytes: no entry could ever be stored")
 	}
 	if c.Telemetry.Buffer < 1 {
 		return fmt.Errorf("telemetry.buffer must be at least 1")

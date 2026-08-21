@@ -45,6 +45,14 @@ services:
       # Certifying both modes takes two runs, which is the honest cost of a
       # setting that changes what the gateway does.
       - CG_QUOTA_ENFORCEMENT=${QUOTA_ENFORCEMENT:-on}
+      # Response caching (GW-12), off in the reference deployment because the
+      # specification makes it opt-in: a gateway that replays answers is a
+      # different gateway, and an operator should turn that on deliberately
+      # rather than inherit it from a compose file they copied. Threaded through
+      # for the same reason quota enforcement is — GW-12's criteria are only
+      # reachable against a deployment that has it on, and its AC-7 only against
+      # one that has it off.
+      - CG_CACHE_ENABLED=${CACHE_ENABLED:-false}
     networks:
       - cogni-net
 
