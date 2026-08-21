@@ -24,6 +24,7 @@ import (
 
 	"github.com/cognigate/gateway/internal/apierr"
 	"github.com/cognigate/gateway/internal/cache"
+	"github.com/cognigate/gateway/internal/capture"
 	"github.com/cognigate/gateway/internal/catalog"
 	"github.com/cognigate/gateway/internal/config"
 	"github.com/cognigate/gateway/internal/httpx"
@@ -95,6 +96,15 @@ type Server struct {
 	// cache is nil unless the deployment enabled GW-12. Nil is a working cache
 	// that never hits, so no call site has to ask whether caching is on.
 	cache *cache.Cache
+	// captures holds GW-14 debug captures. Unlike the cache it is always
+	// present, because capture has no deployment switch: it is enabled per
+	// tenant, and until one is, this is simply empty.
+	captures *capture.Store
+	// stopSweep ends the capture sweeper. Closed by Shutdown, through a Once
+	// because a second Shutdown is a thing an operator's signal handler can do
+	// and closing a closed channel panics.
+	stopSweep     chan struct{}
+	stopSweepOnce sync.Once
 
 	// startedAt is when this process became able to serve, reported as
 	// gateway.uptime_seconds. It answers the first question asked of a gateway
@@ -126,8 +136,11 @@ func New(d Deps) *Server {
 		health:    &healthCache{ttl: d.Config.Health.CacheTTL},
 		quotas:    newQuotaCache(quotaCacheTTL),
 		cache:     newResponseCache(d.Config.Cache),
+		captures:  newCaptureStore(d.Config.Debug),
+		stopSweep: make(chan struct{}),
 		startedAt: time.Now(),
 	}
+	go s.sweepCaptures(d.Config.Debug.SweepInterval)
 
 	s.app = fiber.New(fiber.Config{
 		DisableStartupMessage: true,
@@ -180,7 +193,13 @@ func (s *Server) routes() {
 		s.app.Get(metricsPath(s.Config.Metrics.Path), s.metricsAuth(), s.handleMetrics)
 	}
 
-	v1 := s.app.Group("/v1", s.auth(store.PlaneData), s.limitTenant())
+	// captureDebug sits after auth, because it needs to know whose tenant this
+	// is, and ahead of limitTenant, because GW-14 owes the header to every
+	// response including the ones no handler ever reaches. A rate-limit or
+	// per-tenant size refusal is exactly the response someone who turned capture
+	// on to investigate their 429s is looking for, and a middleware placed after
+	// the limiter would be silent on all of them.
+	v1 := s.app.Group("/v1", s.auth(store.PlaneData), s.captureDebug(), s.limitTenant())
 	v1.Post("/chat/completions", s.handleChatCompletions)
 	v1.Get("/models", s.handleListModels)
 	v1.Get("/models/*", s.handleGetModel)
@@ -237,6 +256,9 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	if s.Telemetry != nil {
 		s.Telemetry.Close()
 	}
+	// After the listener, so a capture taken by the last request to drain is
+	// still swept rather than left behind by a sweeper that stopped first.
+	s.stopSweepOnce.Do(func() { close(s.stopSweep) })
 	return err
 }
 

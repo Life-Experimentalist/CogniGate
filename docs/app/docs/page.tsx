@@ -58,6 +58,13 @@ const sections = [
         icon: "🔐",
     },
     {
+        title: "Data & Privacy",
+        description:
+            "What CogniGate sees, what it records, and the one opt-in exception.",
+        href: "/docs/privacy",
+        icon: "🛡️",
+    },
+    {
         title: "Billing & Telemetry",
         description:
             "Non-blocking token consumption tracking and monthly invoices.",

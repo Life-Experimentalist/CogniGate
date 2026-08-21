@@ -42,11 +42,32 @@ deliver none of them.
   - Default: `enabled: false`. Enabling requires an explicit admin
     action, is recorded in the admin audit log (GW-6), and fires an
     `events`-visible record.
-  - Captured request/response bodies are stored encrypted at rest (same
-    AES-256-GCM vault key discipline as provider keys), scoped to
-    tenant, retrievable only via admin plane
+  - Captured request/response bodies are held **in the gateway process
+    only**, in a byte-bounded per-tenant buffer, scoped to tenant,
+    retrievable only via admin plane
     (`GET /admin/v1/tenants/{id}/captures`), and **hard-deleted** at
     `ttl` — maximum **72 h**, no override.
+    This is the same vault-key discipline provider keys get, which in
+    this gateway means memory-only and never serialised outward, not
+    ciphertext in a row: the gateway has no database, so there is no
+    row. Encrypting a buffer in the address space that holds the key
+    would defend against nothing that reading the process does not
+    already give. The trade is stated rather than hidden: captures do
+    not survive a restart, and in a multi-replica deployment each
+    replica answers only for the requests it served, so an operator
+    investigating one request follows its `X-CogniGate-Request-Id`
+    rather than expecting a single list to hold everything.
+  - Bodies come back **base64-encoded**, because JSON has no byte
+    string and a capture holds the bytes as they arrived. A malformed
+    body is often exactly the one being investigated, so it is not
+    re-parsed on the way out.
+  - A **streamed** response is captured as its request only. Reading a
+    stream in order to record it would consume it, turning every
+    captured stream into a buffered one — a capture that changed how the
+    gateway served the request it was capturing would be worse than no
+    capture. Requests without a body — the catalogue, meta, health and
+    usage reads — are labelled but not retained, so a polling client
+    cannot evict the completions capture was turned on for.
   - `sample_rate` defaults to `0.01`; `1.0` is allowed but the API
     response to enabling it MUST echo a warning field.
   - While capture is enabled for a tenant, every data-plane response for
@@ -64,21 +85,37 @@ which consumers build theirs.
 
 ## Configuration surface
 
-| Key                                   | Default | Meaning |
-| ------------------------------------- | ------- | ------- |
-| Per-tenant `debug_capture.enabled`    | `false` | Via GW-6 only |
-| Per-tenant `debug_capture.ttl`        | `24h` (max `72h`) | Hard-delete horizon |
-| Per-tenant `debug_capture.sample_rate`| `0.01`  | Fraction captured |
+| Key                                    | Default | Meaning |
+| -------------------------------------- | ------- | ------- |
+| Per-tenant `debug_capture.enabled`     | `false` | Via GW-6 only |
+| Per-tenant `debug_capture.ttl_seconds` | deployment default (max `72h`) | Hard-delete horizon |
+| Per-tenant `debug_capture.sample_rate` | deployment default | Fraction captured |
+| `debug.default_capture_ttl`            | `24h`   | The TTL a tenant that names none is held to |
+| `debug.max_capture_ttl`                | `72h`   | Ceiling any tenant policy may request |
+| `debug.default_sample_rate`            | `0.01`  | The fraction a tenant that names none is held to |
+| `debug.max_capture_bytes_per_tenant`   | `33554432` | Buffer one tenant's captures may fill; the oldest are evicted to stay inside it |
+| `debug.capture_sweep_interval`         | `1m`    | How often expired captures are freed |
 
 There is deliberately no deployment-wide "capture everything" switch.
+
+The per-tenant fields are integers on the wire (`ttl_seconds`, not
+`ttl`), and zero means "use the deployment default" rather than zero
+itself — absent and zero are indistinguishable in the stored document,
+so they are given the same meaning rather than two.
+
+The sweeper is the gateway's only background loop, and it is one because
+the TTL here is a deletion promise about content rather than a staleness
+rule about a cached answer: an operator who enables capture, sends
+traffic and turns it off again would otherwise leave that content
+resident until the process ended, since nothing would ever read it back.
 
 ## Acceptance criteria
 
 - **GW-14.AC-1** — After a conformance run planting unique sentinel
   strings in prompts and (mock) completions, no sentinel appears in:
-  Postgres dumps, gateway/analytics stdout logs, `GET /metrics` output,
-  webhook deliveries, or any admin-plane response — with debug capture
-  off (superset of GW-8.AC-2).
+  any durable store the deployment exposes, gateway/analytics stdout
+  logs, `GET /metrics` output, webhook deliveries, or any admin-plane
+  response — with debug capture off (superset of GW-8.AC-2).
 - **GW-14.AC-2** — With debug capture off (default), the captures
   endpoint returns an empty list after traffic flows.
 - **GW-14.AC-3** — Enabling capture (`sample_rate: 1.0`, `ttl: 60s` for
@@ -89,9 +126,11 @@ There is deliberately no deployment-wide "capture everything" switch.
   with 400.
 - **GW-14.AC-5** — The enable/disable actions appear in
   `GET /admin/v1/audit` (GW-6.AC-8 companion).
-- **GW-14.AC-6** — A captured body read back via the admin plane matches
-  the sentinel; a raw Postgres inspection of the same row shows
-  ciphertext, not the sentinel (encryption at rest).
+- **GW-14.AC-6** — With capture on, a captured body read back via the
+  admin plane matches the sentinel, and AC-1's sweep still finds it
+  nowhere else. Enabling capture opens one door and no other; an
+  implementation that satisfied "retrievable" by starting to log the
+  body would pass the first half and fail the second.
 - **GW-14.AC-7** — GW-3's `upstream_exhausted` error body for a request
   containing a sentinel does not contain the sentinel.
 

@@ -14,6 +14,7 @@ export default function sitemap(): MetadataRoute.Sitemap {
         "/docs/routing",
         "/docs/api",
         "/docs/security",
+        "/docs/privacy",
         "/docs/billing",
         "/docs/deployment",
         "/docs/troubleshooting",

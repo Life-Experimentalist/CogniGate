@@ -82,9 +82,29 @@ The first release has not been cut. Everything below is the state of `main`.
   `cache` policy the specification describes is not implemented — the switch is
   per tenant and per request.
 
-### Not yet implemented
+- **Content-blind design, with an opt-in debug capture (GW-14).** No prompt and
+  no completion reaches anything the deployment keeps. Log lines, metric labels,
+  events, webhook deliveries, usage records and everything sent to the analytics
+  engine carry counts, identifiers and outcomes — never message text — and the
+  conformance suite plants a sentinel string in a request and then looks for it
+  across all of them.
 
-Named here because the specification is published and its absence is visible:
-the debug-capture side of the content-blind design (GW-14). It is not listed in
-`/v1/meta`'s capabilities, which is the machine-readable form of the same
-statement.
+  One deliberate exception exists, off until an administrator turns it on. The
+  `debug_capture` block on `PATCH /admin/v1/tenants/{id}` retains a sampled
+  fraction of one tenant's request and response bodies for a bounded time,
+  readable at `GET /admin/v1/tenants/{id}/captures` and nowhere else. While it
+  is on, every data-plane response for that tenant carries
+  `X-CogniGate-Debug-Capture: on`, so a client can tell it is being recorded
+  without having to ask whoever administers the deployment. Turning it on is
+  written to the audit log and raises a `debug_capture.enabled` event, a TTL
+  above the deployment ceiling is refused with `capture_ttl_too_long` rather
+  than quietly clamped, and `sample_rate: 1.0` is accepted with a warning that
+  says what it means.
+
+  Captures live in the gateway process, as the response cache does and for the
+  same reason [GW-14](spec/gw-14-privacy.md) gives: the gateway has no database.
+  A restart drops them, each replica captures only the traffic it served, and
+  the bodies come back base64-encoded because they are bytes the gateway never
+  parsed. A streamed response is captured as its request alone — reading a
+  stream's body would consume it, and a capture feature that changed how the
+  gateway served the request it was capturing would be worse than not having one.

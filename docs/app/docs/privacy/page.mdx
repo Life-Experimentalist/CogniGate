@@ -1,0 +1,190 @@
+export const metadata = {
+    title: "What CogniGate Sees and Stores",
+    description:
+        "The plain-language statement of CogniGate's content-blind design: what the gateway reads, what it records, what it never keeps, and the one opt-in exception.",
+};
+
+# What CogniGate sees and stores
+
+This page is written to be quoted. If you are documenting a system that sends
+requests through CogniGate — for a data-protection review, a customer
+questionnaire, an internal architecture record — you can cite this page as the
+description of what the gateway does with the traffic you send it.
+
+CogniGate is **content-blind by design**. It routes, meters and observes
+*metadata*: who asked, which model answered, how many tokens it took, how long
+it took, and whether it worked. The messages themselves are payload it forwards
+and forgets. This is the whole posture, stated once:
+
+> Message content passes through the gateway's memory for the duration of the
+> request and is written to nothing. Everything CogniGate records about a
+> request — logs, metrics, events, usage records, the audit trail — describes
+> the request, not what was in it.
+
+There is one exception, it is off by default, turning it on is an audited
+administrative action, and every response tells the client while it is on. It is
+described in full below.
+
+The normative version of this page is
+[GW-14](https://github.com/Life-Experimentalist/CogniGate/blob/main/spec/gw-14-privacy.md)
+in the specification, and it is checked by the conformance suite rather than
+asserted here — see [How this is verified](#how-this-is-verified).
+
+## What CogniGate reads
+
+To proxy a completion request the gateway has to read the JSON envelope. It
+parses the framing — the `model` field, `stream`, and the message array's shape
+— and it reads the provider's reported `usage` block on the way back to meter
+tokens. When a response is streamed it re-frames the server-sent events.
+
+That is the entire list. CogniGate does not inspect message text to route it, to
+classify it, to moderate it, or to derive analytics from it. Routing decisions
+are made from the model name, the tenant's aliases and fallback chains, and
+provider health — never from what the prompt says.
+
+## What CogniGate records
+
+Every request produces one structured log line. Its fields are fixed, and this
+is all of them:
+
+`request_id`, `client_request_id`, `tenant`, `key_prefix`, `method`, `route`,
+`status`, `error_code`, `provider`, `model`, `alias`, `fallback_depth`,
+`prompt_tokens`, `completion_tokens`, `upstream_duration_ms`, `cache`,
+`duration_ms`.
+
+A usage record carries the same shape of information — identifiers, the resolved
+provider and model, token counts, cost, status, duration, and whether the answer
+was cached or streamed. Prometheus series at `/metrics` carry counts and
+histograms with labels drawn from that same set; no metric label is derived from
+a request body. Events and webhook deliveries describe things that happened to a
+tenant — a quota threshold crossed, a circuit breaker opened, a catalogue gone
+stale — and carry no message text. The admin audit log records who changed which
+configuration resource and what the attempt returned.
+
+None of these fields is derived from a prompt or a completion. A model id is a
+routing decision, not content: an operator who cannot see which model served a
+request cannot answer the first question anyone asks about a slow one.
+
+## What CogniGate does not store
+
+- **Prompts and completions are not written to any durable store.** Not to a
+  database, not to a file, not to the analytics engine.
+- **Not to logs at any level, including `debug`.** There is no verbosity setting
+  that starts printing bodies.
+- **Not into error responses.** When a fallback chain is exhausted, the
+  `upstream_exhausted` envelope lists which providers failed and how — not what
+  was sent to them.
+- **Not into metric labels**, where it would be retained by every scraper on the
+  network.
+- **Not to the analytics engine.** The telemetry the gateway ships for usage and
+  billing is metadata by contract.
+
+If response caching ([GW-12](/docs/api)) is enabled, a cached body lives in the
+gateway process for the entry's TTL, and nowhere else — the cache is in-process,
+so nothing leaves the gateway. It is off by default and its lifetime is the
+operator's to set.
+
+## The one exception: debug capture
+
+Real debugging sometimes needs the actual bytes. CogniGate has exactly one
+feature that retains them, and it is built so that turning it on is a decision
+somebody made, not a default somebody inherited.
+
+**It is per tenant, and there is no deployment-wide switch.** Enabling retention
+has to name whose content is being retained. An administrator sets it on one
+tenant:
+
+```bash
+curl -X PATCH https://gateway.example.com/admin/v1/tenants/tnt_123 \
+  -H "Authorization: Bearer $COGNIGATE_ADMIN_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"debug_capture": {"enabled": true, "ttl_seconds": 3600, "sample_rate": 0.05}}'
+```
+
+**Clients can tell.** While capture is on for a tenant, every data-plane
+response for that tenant carries the header `X-CogniGate-Debug-Capture: on` —
+including responses that were refused before any handler ran, such as a rate
+limit. The header is absent otherwise; there is no "off" value, because a header
+that appeared on every response of every deployment would mean nothing on any of
+them.
+
+**Enabling it is recorded.** The change appears in `GET /admin/v1/audit` with
+the acting key, and raises a `debug_capture.enabled` event visible in the
+tenant's event history and delivered to any webhook subscribed to it. Turning it
+off raises `debug_capture.disabled`.
+
+**Captures have one outlet.** They are readable at
+`GET /admin/v1/tenants/{id}/captures`, on the admin plane, scoped to that
+tenant's own administrators or the root key. No other endpoint, log line, metric
+or event exposes them.
+
+**They expire.** Each capture is hard-deleted at the tenant's TTL, and a TTL
+above the deployment ceiling — 72 hours, with no override — is refused with
+`capture_ttl_too_long` rather than quietly clamped, so nobody configures a week,
+reads back three days, and believes the first number.
+
+**A full sample warns you.** `sample_rate: 1.0` is permitted, and the API
+response to enabling it echoes a warning saying what it means: every request and
+every completion for that tenant retained for the length of the TTL.
+
+### What to expect from a capture
+
+These are consequences of keeping captures in the gateway process rather than in
+a database, and they are stated rather than hidden:
+
+- **A restart drops them.** Captures are memory-resident. They are a short,
+  deliberate investigation window, not an archive.
+- **Each replica answers only for the requests it served.** In a multi-replica
+  deployment, follow a request's `X-CogniGate-Request-Id` rather than expecting
+  one list to hold everything.
+- **Bodies come back base64-encoded.** JSON has no byte string, and a capture
+  holds the bytes as they arrived — a malformed body is often exactly the one
+  being investigated, so it is not re-parsed on the way out.
+- **A streamed response is captured as its request only.** Reading a stream in
+  order to record it would consume it, turning every captured stream into a
+  buffered one. A capture feature that changed how the gateway served the
+  request it was capturing would be worse than not having one.
+- **Requests with no body are labelled but not kept.** Catalogue, meta, health
+  and usage reads carry the header, but retaining them would let a polling
+  client fill the buffer and evict the completions capture was turned on for.
+- **The buffer is bounded per tenant.** Once a tenant's byte budget is full, the
+  oldest captures are evicted to stay inside it.
+
+## What CogniGate deliberately does not do for you
+
+These are design decisions, not gaps:
+
+- **No PII detection, masking, or redaction.** Domain-specific scrubbing belongs
+  upstream, in the system that knows what its own fields mean, and it should
+  happen *before* the request reaches CogniGate. A gateway that claimed to
+  understand everyone's compliance regime would serve none of them.
+- **No content moderation or safety filtering.**
+- **No guarantee about what providers retain.** CogniGate's contract ends at the
+  upstream call. What OpenAI, Anthropic or a self-hosted model does with a
+  request it receives is governed by that provider's terms, and choosing
+  providers is the operator's decision.
+- **No end-to-end encryption of content through the gateway.** It has to read
+  the JSON to proxy it. TLS on both hops is the transport story.
+
+**CogniGate makes no regulatory claims of its own, under any regime.** It does
+not claim to be compliant with, certified against, or sufficient for GDPR,
+HIPAA, SOC 2, or anything else. What it provides is a content-blind substrate
+you can build such a claim on — and this page is the description of that
+substrate you can put in front of whoever is asking.
+
+## How this is verified
+
+The content ban is checked, not asserted. CogniGate's conformance suite runs
+against a live deployment over HTTP and, for this requirement, plants a unique
+sentinel string in a prompt — and, because the test provider echoes it, in the
+completion too — then sweeps for it in the gateway's stdout log, the `/metrics`
+output, every webhook delivery, every admin-plane response, and the data-plane
+reads. Finding it anywhere fails the run.
+
+A second criterion runs the same sweep with capture *on*: the sentinel must be
+readable in the capture and still nowhere else. Enabling capture has to open one
+door and no other — an implementation that satisfied "retrievable" by starting
+to log the body would pass the first half and fail the second.
+
+A deployment publishes which requirements it implements at `GET /v1/meta`.
+`gw-14` appears there unconditionally: the content ban is not a switch.

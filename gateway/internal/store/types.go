@@ -41,6 +41,28 @@ type Tenant struct {
 	// Cache is this tenant's GW-12 response-cache policy, a value for the same
 	// reason Limits is.
 	Cache TenantCache `json:"cache"`
+	// DebugCapture is this tenant's GW-14 capture policy. Off is the zero
+	// value, which is the only default the specification permits.
+	DebugCapture TenantDebugCapture `json:"debug_capture"`
+}
+
+// TenantDebugCapture is GW-14's one exception to the content ban: while it is
+// enabled, a sampled fraction of this tenant's requests have their request and
+// response bodies retained, readable through the admin plane alone, until they
+// are hard-deleted at TTLSeconds.
+//
+// It is per tenant and nothing else. There is deliberately no deployment-wide
+// switch: turning retention on has to name whose content is being retained, and
+// it has to be an admin action someone can find in the audit log afterwards.
+//
+// A zero TTLSeconds means the deployment's default, not zero seconds, the same
+// convention TenantCache uses. A zero SampleRate is likewise the deployment's
+// default rather than "capture nothing" — Enabled is the switch, and a policy
+// that was enabled but silently captured nothing would be the worst of both.
+type TenantDebugCapture struct {
+	Enabled    bool    `json:"enabled,omitempty"`
+	TTLSeconds int     `json:"ttl_seconds,omitempty"`
+	SampleRate float64 `json:"sample_rate,omitempty"`
 }
 
 // TenantCache is the per-tenant half of GW-12's caching policy.
@@ -86,10 +108,11 @@ type TenantLimits struct {
 // limits you want this tenant to have" is the only rule an operator has to
 // remember. An empty object therefore clears every override.
 type TenantPatch struct {
-	Name   *string
-	Status *string
-	Limits *TenantLimits
-	Cache  *TenantCache
+	Name         *string
+	Status       *string
+	Limits       *TenantLimits
+	Cache        *TenantCache
+	DebugCapture *TenantDebugCapture
 }
 
 // APIKey stores only a hash. The plaintext is returned once, at creation, and

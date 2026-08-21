@@ -292,6 +292,9 @@ function SidebarContent() {
 
             <SidebarSection title="Advanced">
                 <SidebarLink href="/docs/security">Security</SidebarLink>
+                <SidebarLink href="/docs/privacy">
+                    Data &amp; Privacy
+                </SidebarLink>
                 <SidebarLink href="/docs/billing">Billing</SidebarLink>
                 <SidebarLink href="/docs/deployment">Deployment</SidebarLink>
                 <SidebarLink href="/docs/troubleshooting">

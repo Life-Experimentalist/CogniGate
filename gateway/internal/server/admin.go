@@ -79,6 +79,12 @@ func (s *Server) adminRoutes(g fiber.Router) {
 	// under the tenant because a cache belongs to exactly one (GW-12.AC-6).
 	t.Post("/cache/flush", s.flushTenantCache)
 
+	// The one place in the product where prompt content is served back out
+	// (GW-14). Read-only, admin plane, tenant-scoped: there is no route that
+	// creates a capture, because capture is a consequence of the tenant's
+	// policy and traffic, not something an admin call can conjure.
+	t.Get("/captures", s.listCaptures)
+
 	t.Post("/webhooks", s.createWebhook)
 	t.Get("/webhooks", s.listWebhooks)
 	t.Delete("/webhooks/:id", s.deleteWebhook)
@@ -369,17 +375,19 @@ func (s *Server) updateTenant(c *fiber.Ctx) error {
 	id := param(c, "tenant")
 
 	var req struct {
-		Name   *string             `json:"name"`
-		Status *string             `json:"status"`
-		Limits *store.TenantLimits `json:"limits"`
-		Cache  *store.TenantCache  `json:"cache"`
+		Name         *string                   `json:"name"`
+		Status       *string                   `json:"status"`
+		Limits       *store.TenantLimits       `json:"limits"`
+		Cache        *store.TenantCache        `json:"cache"`
+		DebugCapture *store.TenantDebugCapture `json:"debug_capture"`
 	}
 	if err := parse(c, &req); err != nil {
 		return httpx.Fail(c, err)
 	}
-	if req.Name == nil && req.Status == nil && req.Limits == nil && req.Cache == nil {
+	if req.Name == nil && req.Status == nil && req.Limits == nil &&
+		req.Cache == nil && req.DebugCapture == nil {
 		return httpx.Fail(c, apierr.
-			InvalidRequest("A tenant update must change name, status, limits or cache."))
+			InvalidRequest("A tenant update must change name, status, limits, cache or debug_capture."))
 	}
 	if req.Status != nil {
 		switch *req.Status {
@@ -399,16 +407,74 @@ func (s *Server) updateTenant(c *fiber.Ctx) error {
 			return httpx.Fail(c, err)
 		}
 	}
+	if req.DebugCapture != nil {
+		if err := s.validateTenantDebugCapture(*req.DebugCapture); err != nil {
+			return httpx.Fail(c, err)
+		}
+	}
 
 	ctx, cancel := s.opContext(c)
 	defer cancel()
 
-	tenant, err := s.Store.UpdateTenant(ctx, id,
-		store.TenantPatch{Name: req.Name, Status: req.Status, Limits: req.Limits, Cache: req.Cache})
+	// Read before the write, so the capture event can say whether this call
+	// actually changed anything. Emitting on every PATCH that mentions
+	// debug_capture would make the event history say "retention was turned on"
+	// once per unrelated tenant rename that happened to echo the block back.
+	var was bool
+	if req.DebugCapture != nil {
+		if prev, err := s.Store.GetTenant(ctx, id); err == nil {
+			was = prev.DebugCapture.Enabled
+		}
+	}
+
+	tenant, err := s.Store.UpdateTenant(ctx, id, store.TenantPatch{
+		Name:         req.Name,
+		Status:       req.Status,
+		Limits:       req.Limits,
+		Cache:        req.Cache,
+		DebugCapture: req.DebugCapture,
+	})
 	if err != nil {
 		return httpx.Fail(c, storeErr(err, "tenant", id))
 	}
-	return c.JSON(tenant)
+
+	if req.DebugCapture != nil && was != tenant.DebugCapture.Enabled {
+		s.emitCaptureChange(ctx, tenant)
+	}
+
+	// The tenant, plus whatever GW-14 insists the caller be told about what
+	// they just asked for. Warnings is omitempty, so the ordinary response is
+	// byte-for-byte the one every other build has returned.
+	return c.JSON(tenantResponse{
+		Tenant:   tenant,
+		Warnings: s.captureWarnings(tenant.DebugCapture),
+	})
+}
+
+// tenantResponse is a tenant with room for advice about it.
+//
+// The tenant is embedded so its fields stay at the top level: a caller that
+// reads .id and .status keeps working, and GW-9 counts an added optional field
+// as MINOR rather than the breaking change a nested {"tenant": …} would be.
+type tenantResponse struct {
+	*store.Tenant
+	Warnings []string `json:"warnings,omitempty"`
+}
+
+// emitCaptureChange announces that retention started or stopped, carrying the
+// policy but of course none of what it captures.
+func (s *Server) emitCaptureChange(ctx context.Context, t *store.Tenant) {
+	if s.Events == nil {
+		return
+	}
+	typ := events.DebugCaptureDisabled
+	data := map[string]any{"tenant": t.ID}
+	if t.DebugCapture.Enabled {
+		typ = events.DebugCaptureEnabled
+		data["ttl_seconds"] = int(s.captureTTL(t).Seconds())
+		data["sample_rate"] = s.captureSampleRate(t)
+	}
+	s.Events.Emit(ctx, t.ID, typ, data)
 }
 
 // deleteTenant destroys a tenant and everything under it.
@@ -438,6 +504,13 @@ func (s *Server) deleteTenant(c *fiber.Ctx) error {
 	}
 	s.Catalog.Invalidate(id)
 	s.quotas.invalidate(id)
+	// Both of these hold request and response content for a tenant that no
+	// longer exists (GW-14). Neither could ever be served again — a cache key
+	// and a capture list are both reached through a tenant id whose credentials
+	// have just gone — so leaving them would be retention with no reader, which
+	// is the shape of retention nobody remembers to look for.
+	s.cache.Flush(id)
+	s.captures.Flush(id)
 	return c.SendStatus(fiber.StatusNoContent)
 }
 
