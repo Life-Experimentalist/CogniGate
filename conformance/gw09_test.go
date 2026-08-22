@@ -198,7 +198,18 @@ func TestGW9_AC5_MetaIsCheapEnoughToPoll(t *testing.T) {
 	// this client's own round trip, which makes it a ceiling on the gateway's
 	// share rather than a reading of it — a pass is unambiguous, and a failure
 	// on a loaded machine is worth looking at either way.
+	//
+	// The calls are paced. GW-13 meters /v1/meta like every other data-plane
+	// route, and the default bucket refills at 50/s into a burst of 100 —
+	// exactly the number of calls this criterion names, before the preceding
+	// sections have spent anything on the shared key. Firing all 100 flat out
+	// drains it and earns a 429 partway through, which is the limiter working
+	// rather than a latency fault. One call per 25 ms sits under the sustained
+	// rate, so the bucket never nets down however little is left in it. The
+	// pause is outside the measured window: each sample times one round trip
+	// and nothing else.
 	const calls = 100
+	const pace = 25 * time.Millisecond
 	samples := make([]time.Duration, 0, calls)
 	for i := 0; i < calls; i++ {
 		started := time.Now()
@@ -208,9 +219,12 @@ func TestGW9_AC5_MetaIsCheapEnoughToPoll(t *testing.T) {
 			t.Fatalf("call %d: %v", i+1, err)
 		}
 		if resp.Status != http.StatusOK {
-			t.Fatalf("call %d answered %d, want 200", i+1, resp.Status)
+			t.Fatalf("call %d answered %d, want 200; GW-13 meters this route, so a 429 here means the pace no longer clears the refill rate", i+1, resp.Status)
 		}
 		samples = append(samples, elapsed)
+		if remaining := pace - elapsed; remaining > 0 {
+			time.Sleep(remaining)
+		}
 	}
 
 	sort.Slice(samples, func(i, j int) bool { return samples[i] < samples[j] })
