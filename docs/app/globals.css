@@ -299,21 +299,12 @@ body {
     .docs-sidebar-desktop {
         display: none !important;
     }
-    .docs-right-toc {
-        display: none !important;
-    }
     .docs-main-container {
         padding: 32px 16px !important;
         max-width: 100% !important;
     }
     .docs-layout-wrapper {
         padding-top: 80px !important;
-    }
-}
-
-@media (max-width: 1200px) {
-    .docs-right-toc {
-        display: none !important;
     }
 }
 
