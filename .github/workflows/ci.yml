@@ -208,8 +208,13 @@ jobs:
       # Pinned rather than @latest: this produces the JUnit XML GW-10 requires a
       # run to be able to emit, and a test reporter that changes underneath the
       # workflow changes what the evidence looks like without anyone asking.
+      #
+      # v1.12.0 is not buildable by the Go this job installs. It resolves
+      # golang.org/x/tools v0.19.0, whose tokeninternal package sizes an
+      # array with a constant that comes out negative under Go 1.26, so the
+      # install fails before a single test runs. v1.13.0 resolves v0.36.0.
       - name: Install gotestsum
-        run: go install gotest.tools/gotestsum@v1.12.0
+        run: go install gotest.tools/gotestsum@v1.13.0
 
       - name: Create .env from example
         run: |
