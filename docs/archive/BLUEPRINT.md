@@ -1,5 +1,13 @@
 # Project Blueprint: CogniGate
 
+> **Superseded — kept for the record.** This is the original design document,
+> written before any code existed. Parts of it describe things that were never
+> built: the hot-swap plugin engine, the Redis cache layer, and the file tree
+> it sketches. It is preserved because it is the record of what was intended,
+> not a description of what ships. For what the gateway actually does, read the
+> README and `docs/`; for what was dropped and why, the CHANGELOG's *Removed*
+> section.
+
 **Official Repository & Directory Name:** `CogniGate`
 
 > **Branding Tagline:** _The Zero-Downtime Cognitive Router for Enterprise AI._
