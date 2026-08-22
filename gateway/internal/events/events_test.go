@@ -378,13 +378,20 @@ func TestEmitIsANoOpWithoutWebhooks(t *testing.T) {
 // Losing a notification is bad; stalling the request that raised it is worse.
 func TestEmitDoesNotBlockWhenTheQueueIsFull(t *testing.T) {
 	block := make(chan struct{})
-	defer close(block)
+	entered := make(chan struct{}, 1)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		select {
+		case entered <- struct{}{}:
+		default:
+		}
 		<-block
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
+	// Released before the line above runs: Close waits on the connection the
+	// held handler is still holding, so a later close(block) never arrives.
+	defer close(block)
 
 	st := store.NewMemory(false)
 	tenantID := tenantWithWebhook(t, st, srv.URL, BreakerOpened)
@@ -408,6 +415,14 @@ func TestEmitDoesNotBlockWhenTheQueueIsFull(t *testing.T) {
 	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("Emit blocked on a full queue")
+	}
+
+	// The worker has to actually be held for the queue to have been full,
+	// or this would pass without ever testing what it claims.
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("no delivery ever reached the endpoint")
 	}
 }
 
