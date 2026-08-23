@@ -111,6 +111,18 @@ The first release has not been cut. Everything below is the state of `main`.
   stream's body would consume it, and a capture feature that changed how the
   gateway served the request it was capturing would be worse than not having one.
 
+- **A machine-readable contract covering both planes.** `openapi.yaml` now
+  describes all 47 operations the gateway serves rather than the single endpoint
+  it carried before, and `postman_collection.json` is derived from it. Neither
+  is written by hand: `scripts/gen_openapi.py` builds the specification from the
+  Go types the gateway actually serialises, and `scripts/gen_postman.py` builds
+  the collection from that specification, so the two cannot disagree with each
+  other. What keeps them from disagreeing with the gateway is a test rather than
+  a habit — the path set is reconciled against the live router in both
+  directions, so a route added without an entry fails the build, and so does an
+  entry describing a route that no longer exists. The second direction is the
+  one that decays quietly: a new route is easy to notice, a stale entry is not.
+
 ### Removed
 
 No release has been cut, so nothing below breaks a contract with anyone. These
@@ -141,6 +153,16 @@ because the documentation was public and someone may have planned against it.
 - **Kubernetes deployment guidance.** No manifests or charts exist. The
   deployment documentation covers the compose reference and says what running
   more than one gateway would take.
+- **The contents of the shipped Postman collection.** Four of its five requests
+  addressed `http://localhost:8081/api/admin/*`, a port and path prefix this
+  gateway has never served — the upload to the plugin engine removed above was
+  one of them. The fifth reached a route that does exist,
+  `POST /v1/chat/completions`, with a placeholder bearer token no deployment
+  would accept. It has been replaced wholesale by one generated from
+  `openapi.yaml`. The
+  collection id is carried over deliberately, so importing the new file updates
+  an existing copy in a Postman workspace instead of appearing beside it — the
+  old requests should not survive anywhere as a second collection.
 
 ### Fixed
 
