@@ -139,3 +139,16 @@ because the documentation was public and someone may have planned against it.
 - **Kubernetes deployment guidance.** No manifests or charts exist. The
   deployment documentation covers the compose reference and says what running
   more than one gateway would take.
+
+### Fixed
+
+- **The `LICENSE` file was a paraphrase, not the Apache License 2.0.** Every
+  source header, the README badge and `pom.xml` named Apache-2.0, but the file
+  itself was a restatement written in the licence's shape — the section
+  headings in the right order, each term reworded. A paraphrase grants nothing:
+  the permission comes from the exact wording, so the repository was public
+  with no operative grant behind the Apache-2.0 claim. The file is now the
+  verbatim text, appendix included, with the copyright line filled in as the
+  appendix directs. GitHub classifies the repository as Apache-2.0 rather than
+  "Other". Anyone who took a copy before this should re-pull — what they hold
+  does not grant what it says it does.
