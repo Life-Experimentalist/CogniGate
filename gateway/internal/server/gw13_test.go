@@ -151,10 +151,12 @@ func TestTenantRateLimitAnswersRateLimitedWithRetryAfter(t *testing.T) {
 	patchLimits(t, h, tenant.id, map[string]any{"requests_per_second": 1, "burst_capacity": 1})
 
 	// The burst is one, so the second request inside the same instant is over it.
-	if res := h.do(http.MethodGet, "/v1/meta", tenant.dataKey, nil); res.status != http.StatusOK {
+	// Metered on /v1/models rather than /v1/meta: health and meta are outside the
+	// rate limit by design, so they cannot demonstrate it.
+	if res := h.do(http.MethodGet, "/v1/models", tenant.dataKey, nil); res.status != http.StatusOK {
 		t.Fatalf("the first request was refused: status %d, body %s", res.status, res.body)
 	}
-	res := h.do(http.MethodGet, "/v1/meta", tenant.dataKey, nil)
+	res := h.do(http.MethodGet, "/v1/models", tenant.dataKey, nil)
 	h.expectError(res, http.StatusTooManyRequests, apierr.CodeRateLimited)
 
 	// GW-13 requires the hint, and GW-7 requires it on every 429: a client told
@@ -167,9 +169,52 @@ func TestTenantRateLimitAnswersRateLimitedWithRetryAfter(t *testing.T) {
 	// A second tenant is unaffected, which is the difference between a rate limit
 	// and an outage.
 	other := h.newTenant("globex")
-	if res := h.do(http.MethodGet, "/v1/meta", other.dataKey, nil); res.status != http.StatusOK {
+	if res := h.do(http.MethodGet, "/v1/models", other.dataKey, nil); res.status != http.StatusOK {
 		t.Errorf("a second tenant got %d; one tenant's rate limit reached another", res.status)
 	}
+}
+
+func TestHealthAndMetaAreOutsideTheRateLimit(t *testing.T) {
+	// GW-5 exists so a caller can tell a degraded gateway from a healthy one, and
+	// GW-9 makes /v1/meta the document it polls to do so. A tenant that has spent
+	// its budget is precisely the one that needs both answers, so neither route
+	// may be metered — otherwise the endpoints go dark in the one case they are
+	// for. GW-5.AC-7 and GW-9.AC-5 say the same thing in numbers: each requires
+	// 100 sequential calls to complete, which a burst of 100 cannot supply once
+	// anything else has spent a token.
+	h := newHarness(t)
+	tenant := h.newTenant("acme")
+	patchLimits(t, h, tenant.id, map[string]any{"requests_per_second": 1, "burst_capacity": 1})
+
+	// One token, spent on a metered route. Everything below runs on an empty
+	// bucket refilling at one per second, so a metered route cannot answer 200.
+	if res := h.do(http.MethodGet, "/v1/models", tenant.dataKey, nil); res.status != http.StatusOK {
+		t.Fatalf("the first request on a fresh bucket was refused: status %d", res.status)
+	}
+	if res := h.do(http.MethodGet, "/v1/models", tenant.dataKey, nil); res.status != http.StatusTooManyRequests {
+		t.Fatalf("/v1/models answered %d on a spent bucket, want 429; the bucket is not empty "+
+			"and the rest of this test would prove nothing", res.status)
+	}
+
+	for _, path := range []string{"/v1/health", "/v1/meta"} {
+		for i := 0; i < 5; i++ {
+			if res := h.do(http.MethodGet, path, tenant.dataKey, nil); res.status != http.StatusOK {
+				t.Fatalf("%s call %d answered %d on a spent bucket, want 200: it is being metered",
+					path, i+1, res.status)
+			}
+		}
+	}
+
+	// The exemption is from the rate limit alone. Concurrency still applies, which
+	// is what stops a valid key polling health in a hot loop.
+	release, ok := h.srv.limiter.acquire(keyIDFor(t, h, tenant.dataKey), 1)
+	if !ok {
+		t.Fatal("could not take a concurrency slot")
+	}
+	defer release()
+	patchLimits(t, h, tenant.id, map[string]any{"max_concurrent_per_key": 1})
+	res := h.do(http.MethodGet, "/v1/health", tenant.dataKey, nil)
+	h.expectError(res, http.StatusTooManyRequests, apierr.CodeConcurrencyExceeded)
 }
 
 func TestTenantRateLimitIsSeparateFromTheConcurrencyLimit(t *testing.T) {

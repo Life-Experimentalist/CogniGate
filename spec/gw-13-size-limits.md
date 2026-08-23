@@ -48,6 +48,15 @@ with distinct codes clients can handle — not mystery connection resets.
   (`rate_limit.requests_per_second: 50`, `burst_capacity: 100` in
   `cognigate.config.yml`) remain; when tripped they return 429
   `error.code = "rate_limited"` with `Retry-After`.
+- `GET /v1/health` (GW-5) and `GET /v1/meta` (GW-9) are outside the rate
+  limit. Both exist to be polled, and a tenant that has spent its budget is
+  the one that most needs to learn the gateway is degraded — metering them
+  would make both go dark in the situation they are for. GW-5.AC-7 and
+  GW-9.AC-5 also require 100 sequential calls each to complete, which a burst
+  of 100 cannot supply once anything else has spent a token. The exemption is
+  from `rate_limit` only: both routes still require a valid data-plane key,
+  still count against `max_concurrent_per_key`, and are still answered from
+  gateway-local state without dialling a provider.
 
 ## Configuration surface
 
