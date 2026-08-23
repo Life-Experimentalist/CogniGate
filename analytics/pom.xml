@@ -43,6 +43,16 @@
             <artifactId>spring-boot-starter-actuator</artifactId>
         </dependency>
 
+        <!-- GW-8 requires `GET /metrics` in Prometheus text format on *both*
+             processes, not just the gateway. The actuator starter above brings
+             Micrometer's core but no registry that can render a scrape, so
+             without this the endpoint could only speak actuator's own JSON,
+             which no Prometheus server reads. -->
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-registry-prometheus</artifactId>
+        </dependency>
+
         <!-- PostgreSQL Database Driver -->
         <dependency>
             <groupId>org.postgresql</groupId>

@@ -2,6 +2,7 @@ package conformance
 
 import (
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -241,4 +242,28 @@ func (c *client) metrics(t *testing.T) *scrape {
 		t.Fatalf("GET /metrics: status %d, want 200\n%s", resp.Status, truncate(resp.Body))
 	}
 	return parseExposition(t, string(resp.Body))
+}
+
+// scrapeURL fetches and parses an exposition endpoint at an absolute URL.
+//
+// The analytics engine is a second process on an address the suite is told
+// rather than one it can derive, so it is reached directly instead of through
+// the gateway client. No credential is sent: GW-8 requires the scrape to be
+// readable without one, and that is part of what the caller is asserting.
+func scrapeURL(t *testing.T, url string) *scrape {
+	t.Helper()
+
+	resp, err := http.Get(url)
+	if err != nil {
+		t.Fatalf("GET %s: %v", url, err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("reading %s: %v", url, err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET %s: status %d, want 200\n%s", url, resp.StatusCode, truncate(body))
+	}
+	return parseExposition(t, string(body))
 }

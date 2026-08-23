@@ -228,6 +228,15 @@ jobs:
       - name: Build and start the reference deployment
         run: docker compose ${COMPOSE_FILES} up --build -d --wait --wait-timeout 300
 
+      # GW-8.AC-8. The requirement covers both processes, and the analytics
+      # engine is a second deployable at an address the suite cannot derive from
+      # the gateway's. Exported here rather than per-step so every host pass
+      # checks it; the containerised pass deliberately does not inherit it,
+      # because that image's contract is three variables and adding a fourth
+      # would mean CI exercised something other than what is documented.
+      - name: Point the suite at the analytics engine
+        run: echo "CONF_ANALYTICS_URL=http://localhost:8081" >> "${GITHUB_ENV}"
+
       # GW-8.AC-1 and GW-8.AC-2 assert the shape of the gateway's request log,
       # which the suite can only check if it can read one. --no-log-prefix keeps
       # the JSON records intact; compose's usual "gateway  | " prefix would make

@@ -63,6 +63,15 @@ public class SecurityConfig {
                 // leave open because management.endpoint.health.show-details is
                 // never: it answers UP or DOWN and nothing else.
                 .requestMatchers("/actuator/health", "/actuator/health/**").permitAll()
+                // GW-8 requires the scrape endpoint on both processes and
+                // forbids making it present a key by default, because a
+                // Prometheus server has nowhere to put one. What it serves is
+                // process- and route-level only, so opening it discloses how
+                // busy this service is and not whose traffic made it busy. A
+                // deployment that wants it closed binds it to an internal
+                // interface or firewalls the port, which is the escape hatch
+                // the specification names.
+                .requestMatchers("/metrics").permitAll()
                 // Already gated: anything that reaches here got past the filter
                 // above, which means it presented the token.
                 .requestMatchers("/api/**").permitAll()

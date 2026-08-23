@@ -444,6 +444,35 @@ func TestGW8_AC7_ASoftThresholdCrossingRaisesOneEvent(t *testing.T) {
 	}
 }
 
+// --- AC-8 --------------------------------------------------------------------
+
+func TestGW8_AC8_TheAnalyticsEngineExposesAScrape(t *testing.T) {
+	begin(t)
+
+	if suite.cfg.AnalyticsURL == "" {
+		t.Skip("set CONF_ANALYTICS_URL to the analytics engine's origin to check its scrape; " +
+			"a deployment may run the gateway alone, and an address the suite is not told " +
+			"cannot be derived from the gateway's")
+	}
+
+	// Unauthenticated on purpose. GW-8 says the endpoint "MUST NOT require a
+	// key by default (scrapers are not tenants)", and scrapeURL sends no
+	// credential -- so a 401 here fails the criterion rather than skipping it.
+	// Parsing is the other half: scrapeURL fails the test when the body is not
+	// the exposition format, which is what separates this from actuator's own
+	// JSON, a document no Prometheus server reads.
+	scrape := scrapeURL(t, suite.cfg.AnalyticsURL+"/metrics")
+
+	// One series is the bar, and it is deliberately low. Which series the
+	// analytics engine exposes is its own business -- the specification fixes
+	// the gateway's names, not this process's -- but an endpoint that parses
+	// while exposing nothing is indistinguishable from one that is not wired up.
+	if len(scrape.samples) == 0 {
+		t.Error("the analytics engine's /metrics parsed but exposed no series; " +
+			"an empty scrape reports nothing about the process")
+	}
+}
+
 // --- helpers -----------------------------------------------------------------
 
 // signWebhook recomputes the header the specification fixes: the literal
