@@ -84,7 +84,7 @@ func TestGW6_AC1_EveryConfigurationIsReachableOverTheAPI(t *testing.T) {
 	// absent would lose the coverage of everything above, so each is gated on
 	// its own.
 	if suite.features["aliases"] {
-		putAlias(t, tn.ID, "gw6-ac1", map[string]any{"model": "mock-chat-a"})
+		putAlias(t, tn.ID, "gw6-ac1", map[string]any{"pin": "mock-chat-a"})
 		if list := c.admin(t, http.MethodGet, base+"/aliases", nil); list.Status != http.StatusOK {
 			t.Errorf("GET %s/aliases: status %d\n%s", base, list.Status, truncate(list.Body))
 		}
@@ -202,7 +202,7 @@ func TestGW6_AC3_ATenantScopedKeyCannotSeeAnotherTenant(t *testing.T) {
 			}{
 				{http.MethodGet, base + "/keys", nil},
 				{http.MethodGet, base + "/providers", nil},
-				{http.MethodPut, base + "/aliases/stolen", map[string]any{"model": "mock-chat-a"}},
+				{http.MethodPut, base + "/aliases/stolen", map[string]any{"pin": "mock-chat-a"}},
 			} {
 				resp := c.do(t, call.method, call.path, scoped, call.body)
 				if resp.Status != http.StatusNotFound {
