@@ -35,19 +35,23 @@ jobs:
 
       - name: Build Gateway binary (linux-amd64)
         working-directory: gateway
-        run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o cognigate-gateway-linux-amd64 .
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w -X main.version=${GITHUB_REF_NAME#v}" -o cognigate-gateway-linux-amd64 .
 
       - name: Build Gateway binary (linux-arm64)
         working-directory: gateway
-        run: CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o cognigate-gateway-linux-arm64 .
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w -X main.version=${GITHUB_REF_NAME#v}" -o cognigate-gateway-linux-arm64 .
 
       - name: Build Gateway binary (darwin-amd64)
         working-directory: gateway
-        run: CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w" -o cognigate-gateway-darwin-amd64 .
+        run: CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w -X main.version=${GITHUB_REF_NAME#v}" -o cognigate-gateway-darwin-amd64 .
+
+      - name: Build Gateway binary (darwin-arm64)
+        working-directory: gateway
+        run: CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w -X main.version=${GITHUB_REF_NAME#v}" -o cognigate-gateway-darwin-arm64 .
 
       - name: Build Gateway binary (windows-amd64)
         working-directory: gateway
-        run: CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o cognigate-gateway-windows-amd64.exe .
+        run: CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="-s -w -X main.version=${GITHUB_REF_NAME#v}" -o cognigate-gateway-windows-amd64.exe .
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -60,6 +64,7 @@ jobs:
             gateway/cognigate-gateway-linux-amd64
             gateway/cognigate-gateway-linux-arm64
             gateway/cognigate-gateway-darwin-amd64
+            gateway/cognigate-gateway-darwin-arm64
             gateway/cognigate-gateway-windows-amd64.exe
             docker-compose.yml
             .env.example

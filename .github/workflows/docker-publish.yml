@@ -61,6 +61,13 @@ jobs:
           context: ./gateway
           file: ./gateway/Dockerfile
           platforms: linux/amd64,linux/arm64
+          # The tag, without its leading v, so a released image reports a real
+          # version at /v1/meta instead of the Dockerfile's 0.0.0-dev default.
+          # On a branch push metadata-action's version output is the literal
+          # string 'main', which no semver parser accepts, so the default is
+          # kept there on purpose -- an honest dev marker beats an unparseable one.
+          build-args: |
+            VERSION=${{ startsWith(github.ref, 'refs/tags/v') && steps.meta-gateway.outputs.version || '0.0.0-dev' }}
           push: true
           tags: ${{ steps.meta-gateway.outputs.tags }}
           labels: ${{ steps.meta-gateway.outputs.labels }}
