@@ -31,6 +31,13 @@ jobs:
       # own RUN lines on the target platform, so emulation is needed for arm64.
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
+        with:
+          # Pinned, and newer than the action's default. The default QEMU
+          # segfaults running glibc's ldconfig, which is a postinst script every
+          # apt install on the arm64 analytics image triggers -- the build failed
+          # on `apt-get install curl` with SIGSEGV in libc-bin, not on anything
+          # this repository wrote.
+          image: tonistiigi/binfmt:qemu-v9.2.2
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
