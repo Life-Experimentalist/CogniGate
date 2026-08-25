@@ -1,0 +1,86 @@
+name: CodeQL
+
+# Static analysis of everything in this repository that executes: the Go
+# gateway, the Java analytics engine, and the workflows themselves.
+#
+# The schedule is not decoration. CodeQL's value on a project that goes quiet
+# for weeks comes almost entirely from re-running old code against new queries
+# -- the push and pull_request triggers only ever see code somebody was already
+# looking at.
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+  schedule:
+    - cron: "27 4 * * 1"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+
+    permissions:
+      # The only write this workflow needs: uploading the SARIF results.
+      security-events: write
+      contents: read
+      actions: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Built by hand rather than by autobuild. This repository has two Go
+          # modules -- gateway/ and the conformance suite at the root -- and an
+          # autobuilder that finds one of them produces a green run that has
+          # analysed half the code, which is worse than a red one.
+          - language: go
+            build-mode: manual
+
+          # Buildless. The pom targets Java 25 and builds a Spring Boot fat
+          # JAR; compiling it here would mean pinning a JDK and a Maven cache
+          # in a second place, and then keeping them in step with ci.yml
+          # forever. The buildless extractor reads the source instead.
+          - language: java-kotlin
+            build-mode: none
+
+          # The workflows in this directory. They hold the GHCR push
+          # credentials and the release token, so they are attack surface in
+          # the same sense the services are.
+          - language: actions
+            build-mode: none
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go 1.26
+        if: matrix.language == 'go'
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+
+      # Both modules, so both end up in the database. CGO is off everywhere
+      # else in this repository and is off here for the same reason: the
+      # shipped binaries are static.
+      - name: Build the Go modules
+        if: matrix.language == 'go'
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          go build ./...
+          cd gateway && go build ./...
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"

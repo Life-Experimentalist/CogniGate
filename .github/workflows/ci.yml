@@ -404,3 +404,46 @@ jobs:
       - name: Tear down
         if: always()
         run: docker compose ${COMPOSE_FILES} down -v
+
+  # Advisory scan of both Go modules against the Go vulnerability database.
+  #
+  # govulncheck is invoked directly rather than through a marketplace wrapper:
+  # the wrapper adds a second thing that can break, and this is one `go install`
+  # and one command. It is not pinned because the analysis is only half the
+  # tool -- the advisory data is fetched from vuln.go.dev at run time, and the
+  # scanner you least want frozen at an old release is the security one.
+  #
+  # check-latest matters more than it looks. govulncheck reports standard
+  # library vulnerabilities against the toolchain that compiled the code, and
+  # the runner image caches a Go patch release that can be weeks behind. Without
+  # this the job reports stdlib advisories that a current 1.26.x has already
+  # fixed, and the fix would be "wait for the runner image", which is not a fix.
+  #
+  # It reports only what the code can actually reach, so a quiet run is not a
+  # statement that the dependency graph is current -- keeping it current is
+  # .github/dependabot.yml's job. There is no equivalent blocking job for the
+  # Java module; Dependabot's own advisory alerts and CodeQL cover it, and
+  # OWASP dependency-check needs an NVD API key and minutes per run.
+  govulncheck:
+    name: Go vulnerability scan
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go 1.26
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          check-latest: true
+
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+
+      - name: Scan the gateway
+        working-directory: gateway
+        run: govulncheck ./...
+
+      # The GW-10 conformance suite, which is its own module rooted here.
+      - name: Scan the conformance suite
+        run: govulncheck ./...

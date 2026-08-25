@@ -6,7 +6,18 @@ on:
       - "v*.*.*"
 
 permissions:
+  # Creating the release and uploading its assets.
   contents: write
+  # Attestation. id-token mints the OIDC token actions/attest-build-provenance
+  # exchanges for a short-lived signing certificate; attestations writes the
+  # resulting statement to this repository's attestation store.
+  #
+  # Extended here rather than declared on the job, because a job-level
+  # permissions block replaces this one instead of adding to it -- and the
+  # first thing that would go missing is contents: write, which is the
+  # release upload itself.
+  id-token: write
+  attestations: write
 
 jobs:
   create-release:
@@ -53,12 +64,47 @@ jobs:
         working-directory: gateway
         run: CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="-s -w -X main.version=${GITHUB_REF_NAME#v}" -o cognigate-gateway-windows-amd64.exe .
 
+      # Signed provenance for every file the release ships. The statement
+      # names this workflow, at this commit, on this runner, as what
+      # produced each artifact -- so a downloader can check that a binary
+      # came from this repository rather than from somebody who uploaded a
+      # file with a plausible name.
+      #
+      # Verified with the command printed in the release notes below.
+      - name: Attest release artifacts
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: |
+            analytics/target/analytics-*.jar
+            gateway/cognigate-gateway-linux-amd64
+            gateway/cognigate-gateway-linux-arm64
+            gateway/cognigate-gateway-darwin-amd64
+            gateway/cognigate-gateway-darwin-arm64
+            gateway/cognigate-gateway-windows-amd64.exe
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           draft: false
           prerelease: ${{ contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') || contains(github.ref_name, 'rc') }}
           generate_release_notes: true
+          body: |
+            ### Verifying what you downloaded
+
+            Every binary and the analytics JAR carry signed build provenance.
+            Check one with the GitHub CLI:
+
+            ```bash
+            gh attestation verify cognigate-gateway-linux-amd64 --repo ${{ github.repository }}
+            ```
+
+            The published container images are attested the same way, by
+            digest:
+
+            ```bash
+            gh attestation verify oci://ghcr.io/life-experimentalist/cognigate-gateway:${{ github.ref_name }} --repo ${{ github.repository }}
+            ```
+
           files: |
             analytics/target/analytics-*.jar
             gateway/cognigate-gateway-linux-amd64
