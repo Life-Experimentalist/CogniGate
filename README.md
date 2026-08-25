@@ -128,6 +128,35 @@ This single command:
 2. ✅ Generates a `GATEWAY_BOOTSTRAP_KEY` and an `ANALYTICS_TOKEN`
 3. ✅ Builds and starts the three services (Gateway, Analytics, PostgreSQL), waiting until each reports healthy
 
+### Or Pull the Published Images
+
+Every push to `main` publishes both services to the GitHub Container
+Registry, built for `linux/amd64` and `linux/arm64`. The packages are public,
+so no `docker login` is needed to pull them:
+
+```bash
+docker pull ghcr.io/life-experimentalist/cognigate-gateway:main
+docker pull ghcr.io/life-experimentalist/cognigate-analytics:main
+```
+
+`docker-compose.yml` names those images alongside its build contexts, so a
+checkout that does not want to compile anything can fetch them instead:
+
+```bash
+git clone https://github.com/Life-Experimentalist/CogniGate.git
+cd CogniGate
+cp .env.example .env
+openssl rand -hex 24   # -> GATEWAY_BOOTSTRAP_KEY in .env
+openssl rand -hex 32   # -> ANALYTICS_TOKEN in .env
+docker compose pull && docker compose up -d --wait
+```
+
+The tags are `main` for the tip of the default branch and `sha-<commit>` to
+pin one commit of it. `latest` currently resolves to the same image as `main`;
+once the first release is tagged it will follow releases instead, so `main` is
+the tag that keeps meaning the branch either way. Releases will additionally
+carry `X.Y.Z` and `X.Y` — none has been cut yet.
+
 ### Verify It's Running
 
 ```bash

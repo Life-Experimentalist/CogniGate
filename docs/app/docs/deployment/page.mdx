@@ -26,6 +26,19 @@ merely started. The two images built here carry their own `HEALTHCHECK` — the
 gateway on `/healthz`, analytics on `/actuator/health` — and PostgreSQL is
 checked in the compose file, because the stock image ships without one.
 
+Both are published to the GitHub Container Registry on every push to `main`,
+for `linux/amd64` and `linux/arm64`, and `docker-compose.yml` names them
+alongside its build contexts. Pulling instead of building is what a host with
+no Go toolchain and no JDK on it wants:
+
+```bash
+docker compose pull && docker compose up -d --wait
+```
+
+`main` tracks the default branch and `sha-<commit>` pins one commit of it.
+`latest` resolves to the same image as `main` for now, and will follow releases
+once one is tagged, so `main` is the tag to name if the branch is what you mean.
+
 There is deliberately no `depends_on: analytics` on the gateway. The gateway
 builds its analytics client but does not dial it at startup, buffers what it
 cannot deliver, and drains the backlog when analytics answers. Waiting would

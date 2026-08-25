@@ -9,6 +9,11 @@
 #
 #   docker compose up -d --wait
 #
+# The two CogniGate services name a published image as well as a build context.
+# `docker compose up` still compiles from this checkout; `docker compose pull`
+# fetches the same two services prebuilt, which is the path for a host with no
+# Go or JDK on it. Both images are published for amd64 and arm64.
+#
 # Every service is health-checked, so `--wait` returns only once the whole stack
 # is actually serving rather than merely started (GW-11). The two images we build
 # carry their own `HEALTHCHECK` — gateway on /healthz, analytics on
@@ -17,6 +22,7 @@
 
 services:
   gateway:
+    image: ghcr.io/life-experimentalist/cognigate-gateway:main
     build:
       context: ./gateway
       dockerfile: Dockerfile
@@ -56,6 +62,7 @@ services:
       - cogni-net
 
   analytics:
+    image: ghcr.io/life-experimentalist/cognigate-analytics:main
     build:
       context: ./analytics
       dockerfile: Dockerfile
