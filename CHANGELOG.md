@@ -203,13 +203,14 @@ because the documentation was public and someone may have planned against it.
   Maven module, the docs site's npm tree, the workflows' own actions, and the
   container base images. The Go module block allows indirect dependencies,
   because `go.mod` records the whole transitive graph and watching only direct
-  requirements lets the other half drift while every run stays green. The
-  builder base images — `golang:1.26-alpine` and
-  `maven:3.9-eclipse-temurin-25` — take patch updates only: they are toolchain
-  pins that have to agree with `go.mod` and the pom, and a bot moving one
-  alone would compile a shipped image with a toolchain nothing tested. The
-  runtime images update freely, since they carry the OS packages and cannot
-  change how anything was compiled.
+  requirements lets the other half drift while every run stays green. The two
+  builder base images are ignored outright: they are toolchain pins that have
+  to agree with `go.mod` and the pom, they are discarded before the published
+  image is assembled, and Dependabot cannot reliably tell how big a change to
+  one of them is — its first run proposed `maven:3.9-eclipse-temurin-25` →
+  `-temurin-26`, a whole JDK major, because the part it compares is the
+  unchanged leading `3.9`. The runtime images update freely, since they carry
+  the OS packages and cannot change how anything was compiled.
 
 - **CI scans both Go modules against the Go vulnerability database on every
   push,** with `govulncheck` invoked directly rather than through a wrapper

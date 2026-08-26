@@ -96,13 +96,26 @@ updates:
   # stages want opposite policies.
   #
   # The builder images are toolchain pins wearing a base-image costume:
-  # golang:1.26-alpine has to agree with go.mod's `go 1.26` and CI's
-  # go-version, and maven:3.9-eclipse-temurin-25 has to agree with the pom's
-  # Java 25 target. A bot bumping either one alone would compile the shipped
-  # image with a toolchain nothing in CI ever tested, and the build would very
-  # likely still be green. So their major and minor bumps are ignored and
-  # belong to whoever moves the language version on purpose; patch updates
-  # still flow, which is where the toolchain image's own CVE fixes arrive.
+  # golang:1.26-alpine has to agree with go.mod's `go 1.26`, and
+  # maven:3.9-eclipse-temurin-25 has to agree with the pom's Java 25
+  # target. A bot moving either one alone would compile the shipped image
+  # with a toolchain nothing in CI ever tested, and the build would very
+  # likely still be green. So both are ignored outright.
+  #
+  # Outright, rather than by update-type, because filtering on
+  # version-update:semver-major and -minor does not catch these. The first
+  # run under that rule opened a PR moving maven:3.9-eclipse-temurin-25 to
+  # maven:3.9-eclipse-temurin-26 -- a whole JDK major -- because the part
+  # Dependabot classifies is the leading 3.9, which did not change. The JDK
+  # version lives in the tag suffix, which its semver comparison does not
+  # read at all. The same hazard applies to golang:1.26-alpine, where the
+  # Go version happens to sit where the classifier can see it -- but a rule
+  # that works for one and silently fails for the other is worse than no
+  # rule, so neither relies on it.
+  #
+  # Nothing is lost by ignoring them completely: both are builder stages in
+  # multi-stage builds, discarded before the published image is assembled.
+  # No CVE in either one reaches anything this repository ships.
   #
   # The runtime images -- alpine and the Temurin JRE -- are left entirely
   # alone to update. They carry the OS packages, which is the whole
@@ -117,9 +130,7 @@ updates:
     open-pull-requests-limit: 5
     ignore:
       - dependency-name: "golang"
-        update-types: ["version-update:semver-major", "version-update:semver-minor"]
       - dependency-name: "maven"
-        update-types: ["version-update:semver-major", "version-update:semver-minor"]
     groups:
       base-images:
         update-types: ["minor", "patch"]
