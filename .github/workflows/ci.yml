@@ -6,6 +6,15 @@ on:
   pull_request:
     branches: ["main"]
 
+# Read-only, for all five jobs. Nothing here publishes anything: the jobs
+# check out, build, test and stand up a compose stack, and the artifact
+# uploads use the Actions runtime token rather than this one. Declared
+# because the default is whatever the repository's Actions settings say,
+# which is a property of a settings page rather than of this file, and can
+# be widened without any change here to notice.
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
