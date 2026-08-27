@@ -155,6 +155,64 @@ export function useMDXComponents(components: MDXComponents): MDXComponents {
                 </code>
             );
         },
+        // GFM tables. The wrapper scrolls rather than the page: a wide table
+        // in a fixed-width docs column would otherwise push the whole layout
+        // sideways on a narrow viewport.
+        table: ({ children }) => (
+            <div
+                style={{
+                    overflowX: "auto",
+                    margin: "24px 0",
+                    border: "1px solid rgba(255,255,255,0.08)",
+                    borderRadius: "10px",
+                    background: "rgba(255,255,255,0.02)",
+                }}
+            >
+                <table
+                    style={{
+                        width: "100%",
+                        borderCollapse: "collapse",
+                        fontSize: "14px",
+                        lineHeight: "1.6",
+                    }}
+                >
+                    {children}
+                </table>
+            </div>
+        ),
+        th: ({ children, style }) => (
+            <th
+                style={{
+                    ...style,
+                    textAlign: style?.textAlign ?? "left",
+                    padding: "10px 14px",
+                    fontWeight: 600,
+                    fontSize: "12px",
+                    letterSpacing: "0.05em",
+                    textTransform: "uppercase",
+                    color: "var(--accent-cyan)",
+                    background: "rgba(6, 182, 212, 0.06)",
+                    borderBottom: "1px solid rgba(255,255,255,0.1)",
+                    whiteSpace: "nowrap",
+                }}
+            >
+                {children}
+            </th>
+        ),
+        td: ({ children, style }) => (
+            <td
+                style={{
+                    ...style,
+                    textAlign: style?.textAlign ?? "left",
+                    padding: "10px 14px",
+                    color: "var(--text-secondary)",
+                    borderBottom: "1px solid rgba(255,255,255,0.05)",
+                    verticalAlign: "top",
+                }}
+            >
+                {children}
+            </td>
+        ),
         a: ({ children, href }) => {
             const isExternal =
                 href && (href.startsWith("http") || href.startsWith("https"));
