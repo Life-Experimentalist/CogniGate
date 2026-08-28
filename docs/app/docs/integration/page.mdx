@@ -55,7 +55,8 @@ The `curl` examples below use three shell variables, so set them once:
 
 ```bash
 export CG=http://localhost:8080        # wherever the gateway is reachable
-export CG_ADMIN=cg-...                 # an admin key; the bootstrap key on a fresh install
+export CG_ADMIN=...                    # an admin key; on a fresh install this is the
+                                       # bare hex GATEWAY_BOOTSTRAP_KEY from .env
 export TENANT=...                      # the tenant id from POST /admin/v1/tenants
 ```
 
