@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
+import { SITE_URL, asset } from "./site";
 
 const inter = Inter({
     variable: "--font-inter",
@@ -9,7 +10,7 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-    metadataBase: new URL("https://cognigate.vkrishna04.me"),
+    metadataBase: new URL(SITE_URL),
     title: {
         default:
             "CogniGate — Self-Hosted LLM Gateway with Routing, Fallback and Metering",
@@ -45,7 +46,7 @@ export const metadata: Metadata = {
     openGraph: {
         type: "website",
         locale: "en_US",
-        url: "https://cognigate.vkrishna04.me",
+        url: SITE_URL,
         siteName: "CogniGate",
         title: "CogniGate — Self-Hosted LLM Gateway with Routing, Fallback and Metering",
         description:
@@ -94,7 +95,7 @@ export default function RootLayout({
                 />
                 {/* Verification tags, icons, search scrapers compatibility */}
                 <meta name="theme-color" content="#030712" />
-                <link rel="icon" href={`${process.env.NEXT_PUBLIC_BASE_PATH ?? ""}/logo.png`} />
+                <link rel="icon" href={asset("/logo.png")} />
             </head>
             <body className="antialiased">{children}</body>
         </html>

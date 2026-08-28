@@ -1,4 +1,5 @@
 import { MetadataRoute } from "next";
+import { SITE_URL } from "./site";
 
 export const dynamic = "force-static";
 
@@ -9,6 +10,6 @@ export default function robots(): MetadataRoute.Robots {
             allow: "/",
             disallow: "/private/",
         },
-        sitemap: "https://cognigate.vkrishna04.me/sitemap.xml",
+        sitemap: `${SITE_URL}/sitemap.xml`,
     };
 }

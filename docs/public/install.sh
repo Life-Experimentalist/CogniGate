@@ -3,7 +3,7 @@
 # CogniGate — Interactive Setup Wrapper (Linux / macOS)
 # Copyright 2026 VKrishna04 and Life Experimentalist
 #
-# Execution: curl -sSL https://cognigate.vkrishna04.me/install.sh | bash
+# Execution: curl -sSL https://life-experimentalist.github.io/CogniGate/install.sh | bash
 # =============================================================================
 
 set -e

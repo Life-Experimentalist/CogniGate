@@ -2,7 +2,7 @@
 # CogniGate — Interactive Setup Wrapper (Windows PowerShell)
 # Copyright 2026 VKrishna04 and Life Experimentalist
 #
-# Execution: irm https://cognigate.vkrishna04.me/install.ps1 | iex
+# Execution: irm https://life-experimentalist.github.io/CogniGate/install.ps1 | iex
 # =============================================================================
 
 $ErrorActionPreference = "Stop"
