@@ -1,0 +1,110 @@
+import { publicUrl } from "../../site";
+import CodeBlockWrapper from "../../components/CodeBlockWrapper";
+
+export const metadata = {
+    title: "AI Agents",
+    description:
+        "Install the CogniGate agent skill so a coding agent can deploy, provision, integrate and troubleshoot the gateway on its own — in this session and every later one.",
+};
+
+export const skillUrl = publicUrl("/skill/SKILL.md");
+
+export const installSkill = `mkdir -p ~/.claude/skills/cognigate && curl -fsSL ${skillUrl} -o ~/.claude/skills/cognigate/SKILL.md`;
+
+# AI Agents
+
+CogniGate ships an **agent skill**: one markdown file that teaches a coding
+agent how to install the gateway, provision a tenant, register providers, wire
+an existing application into it, and diagnose it when something breaks.
+
+Install it once and it is available in every future session. The agent stops
+guessing at the API from a README and starts working from a procedure that was
+written against the source.
+
+<CodeBlockWrapper language="bash">{installSkill}</CodeBlockWrapper>
+
+Then, in any session:
+
+```
+set up CogniGate and point my app at it
+```
+
+For agents that are not Claude Code, the file is a plain markdown document with
+YAML frontmatter — drop it wherever your tool loads instructions from, or paste
+it into the context.
+
+## What the skill actually contains
+
+| Section | What the agent gets |
+| --- | --- |
+| Non-negotiable rules | Never print or commit a secret; never `--clean` to fix a container; never fall back to calling a provider directly |
+| Install | Prerequisites, the two setup scripts, and the three containers that must be up |
+| Generated secrets | Where they land, why `replace_me` is refused at startup, how to rotate |
+| Provision | Tenant → provider → key → first routed call, as four checkable steps |
+| Control plane | The full `/admin/v1` route table, with what each call returns |
+| Integrating an application | The generic procedure from [Integrating an Application](/docs/integration) |
+| Troubleshooting | Nine failure modes, each with the symptom, the cause and the fix |
+| Keeping it running | What to check, what to rotate, what to watch in usage |
+
+Read it before you install it — it is short, and it is the same file the agent
+will follow: <a href={skillUrl}>{skillUrl}</a>
+
+## The bootstrap prompt
+
+If you would rather hand an agent a single URL than install anything, there is
+a shorter bootstrap at <a href={publicUrl("/prompt.md")}>{publicUrl("/prompt.md")}</a>.
+It points at the skill, and carries a self-contained minimum for an agent with
+no network access to fetch it.
+
+The skill is the better option. The bootstrap only helps during an install; the
+skill is still there the next time something breaks.
+
+## What the skill will not do
+
+These are deliberate, and they are stated in the skill itself so the agent does
+not helpfully route around them:
+
+- **It will not print a secret.** Not a provider key, not a minted `cg-`
+  secret, not the bootstrap key. An agent transcript is a log, and a logged
+  secret is a leaked secret.
+- **It will not run `./setup.sh --clean` to fix a failing container.** That
+  deletes the Postgres volume and with it every tenant, key, provider and usage
+  record. It is a reset, not a repair.
+- **It will not report success from a script's own output.** Both setup scripts
+  can print success on a path that wrote nothing. The skill requires
+  `docker compose ps` and a live `/healthz` before an agent may claim the
+  deployment is up.
+- **It will not work around a failure by pointing an application at a provider
+  directly.** That reintroduces exactly the credential exposure the gateway
+  exists to remove, and it is the most tempting shortcut available to an agent
+  that has been asked to "make it work".
+
+## Why a skill and not an MCP server
+
+A skill is a text file served over HTTPS. It has no runtime, no process to keep
+alive, no version to keep in step with a protocol, and no attack surface — an
+agent that reads it still acts through its own tools, under its own
+permissions, with the user watching.
+
+An MCP server would be a second program to build, package, release and secure,
+to do what `curl` against a documented HTTP API already does. If your workflow
+genuinely needs one, the admin API is [fully documented](/docs/api) and there is
+an OpenAPI spec in the repository to generate from.
+
+## Verifying an agent's work
+
+Do not take an agent's word for it. Three checks, in order:
+
+```bash
+docker compose ps                       # three containers: gateway, analytics, postgres-db
+curl -fsS http://localhost:8080/healthz # the gateway answers
+curl -sS -X POST http://localhost:8080/v1/chat/completions \
+  -H "Authorization: Bearer $COGNIGATE_API_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"fast","messages":[{"role":"user","content":"ping"}]}' -i | grep -i x-cognigate-served-by
+```
+
+The third one is the one that matters. `X-CogniGate-Served-By` names the
+provider and model that actually answered — if it is present, routing works
+end to end, and no amount of confident summary from an agent is a substitute
+for seeing it.

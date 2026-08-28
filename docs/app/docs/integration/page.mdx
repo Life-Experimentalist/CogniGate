@@ -1,0 +1,172 @@
+export const metadata = {
+    title: "Integrating an Application",
+    description:
+        "Put CogniGate in front of an application that already calls an LLM API: the seven steps, what not to change, and how to prove it worked.",
+};
+
+# Integrating an Application
+
+If your application already speaks the OpenAI Chat Completions API, the whole
+integration is **two settings**: a base URL and a key. There is no SDK to
+install, no adapter to write, and no request or response shape that changes.
+
+That is the design. A gateway that needed a client library would be a second
+dependency to keep in step with every provider SDK your codebase already has.
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url=os.environ["COGNIGATE_URL"] + "/v1",   # http://cognigate.internal:8080
+    api_key=os.environ["COGNIGATE_API_KEY"],        # the cg- secret
+)
+```
+
+```typescript
+const client = new OpenAI({
+    baseURL: process.env.COGNIGATE_URL + "/v1",
+    apiKey: process.env.COGNIGATE_API_KEY,
+});
+```
+
+```go
+cfg := openai.DefaultConfig(os.Getenv("COGNIGATE_API_KEY"))
+cfg.BaseURL = os.Getenv("COGNIGATE_URL") + "/v1"
+client := openai.NewClientWithConfig(cfg)
+```
+
+```java
+OpenAIClient client = OpenAIOkHttpClient.builder()
+        .baseUrl(System.getenv("COGNIGATE_URL") + "/v1")
+        .apiKey(System.getenv("COGNIGATE_API_KEY"))
+        .build();
+```
+
+Anything that can set a base URL works the same way — LangChain, LlamaIndex,
+Vercel AI SDK, Semantic Kernel, Spring AI, a hand-rolled `fetch`. Point it at
+`/v1` and give it the `cg-` key.
+
+## The seven steps
+
+Do them in this order. Each one is reversible on its own, and the order is what
+keeps the application working the whole way through.
+
+### 1. Find the call sites
+
+Grep for the SDK constructors and the raw endpoints:
+
+```bash
+grep -rniE "OpenAI\(|AzureOpenAI\(|ChatOpenAI|api\.openai\.com|openai\.azure\.com|chat/completions" --include='*.{py,ts,tsx,js,go,java,rb,cs}' .
+```
+
+Then find whatever environment variable currently holds the provider key. That
+variable is the real inventory: every place it is read is a place that talks to
+a provider directly today.
+
+### 2. Inventory the model names
+
+List every model id the application passes. Each one becomes either a `pin` on
+a CogniGate alias, or a literal that must exist in the catalog of some provider
+you register. Nothing else will resolve.
+
+### 3. Add two settings
+
+`COGNIGATE_URL` and `COGNIGATE_API_KEY`, in whatever configuration mechanism
+the application already uses — the same place the provider key lives today.
+Do not introduce a config system for two strings.
+
+### 4. Repoint the client
+
+Base URL and key. Nothing else. Leave request bodies, streaming, tool calls,
+retries and error handling exactly as they are — the wire format is unchanged,
+so a change to any of them is a change you will have to debug separately from
+the one you meant to make.
+
+### 5. Delete the provider credential from the application
+
+Remove it from `.env`, from the deployment's secret store, and from CI.
+
+If it was ever committed to a repository, **rotate it at the provider**. Deleting
+a secret from a file does not un-publish it. This is the step that gets skipped,
+and it is the one the whole exercise was for.
+
+### 6. Move model names behind aliases
+
+Replace a hardcoded model id at the call site with `fast`, `balanced` or
+`best`, and pin the alias in the gateway:
+
+```bash
+curl -sS -X PUT $CG/admin/v1/tenants/$TENANT/aliases/fast -H "Authorization: Bearer $CG_ADMIN" -H 'Content-Type: application/json' -d '{"cost_tier":"cheapest","capabilities":["chat"]}'
+```
+
+Now which model a feature uses is an operational decision instead of a deploy.
+That is the difference between changing a model at 2am and shipping a release
+at 2am.
+
+### 7. Verify against the running application
+
+Not against curl. Exercise a real request path, then check both ends:
+
+- The response carries `X-CogniGate-Served-By: <provider>/<model>`. That header
+  is what the alias actually resolved to.
+- `GET /admin/v1/tenants/$TENANT/usage` has a row for it.
+
+If the header is present and the row exists, the traffic is going through the
+gateway. If either is missing, something is still calling a provider directly.
+
+## One key per application, per environment
+
+Mint a separate key for each service and each environment, named after the
+thing that holds it:
+
+```bash
+curl -sS -X POST $CG/admin/v1/tenants/$TENANT/keys -H "Authorization: Bearer $CG_ADMIN" -H 'Content-Type: application/json' -d '{"name":"checkout-service-prod"}'
+```
+
+A key shared between two services cannot be revoked without causing an outage
+in the other one, and its usage rows cannot be attributed to either. The secret
+is returned exactly once, in the `secret` field — `key` is metadata and the
+store keeps only a hash.
+
+## What each environment should look like
+
+| Environment | Tenant | Providers | Quota |
+| --- | --- | --- | --- |
+| Local dev | one shared `dev` tenant | a cheap provider, or a local vLLM / Ollama base URL | a low ceiling, so a runaway loop costs nothing |
+| CI | its own tenant | a local or stub provider | a low ceiling |
+| Staging | its own tenant | the real providers | a real but bounded ceiling |
+| Production | its own tenant | the real providers, at least two | the actual budget |
+
+Separate tenants rather than separate keys under one tenant: a tenant is the
+isolation boundary for providers, aliases, routing rules, quotas and usage. Two
+environments sharing a tenant share a blast radius.
+
+## Multi-tenant applications
+
+If the application itself serves multiple customers, you have a choice:
+
+- **One CogniGate tenant for the whole application.** Simplest. Usage is
+  attributed to the application, not to its customers.
+- **One CogniGate tenant per customer.** Per-customer quotas, per-customer
+  usage rows, and a per-customer key you can revoke. Your application then
+  holds one `cg-` key per customer and picks the right one per request.
+
+Take the second only if you need to bill or throttle per customer. It is a real
+amount of key management.
+
+## Failure behaviour worth knowing before you ship
+
+- **A provider outage** opens a circuit breaker scoped to that one tenant,
+  provider and model, and the request falls through to the next candidate in
+  the chain. Register at least two providers in production or there is nothing
+  to fall through to.
+- **A `429` from CogniGate** is a quota or rate limit, not a provider refusal.
+  Check `GET /quota` and `GET /usage`.
+- **A `404 not_supported`** means the path is not on the gateway's surface.
+  CogniGate does not pass unknown OpenAI paths through to a provider, and
+  routing is case-sensitive.
+
+## Letting an agent do it
+
+The whole of this page, plus install and troubleshooting, is packaged as an
+agent skill. See [AI Agents](/docs/agents).

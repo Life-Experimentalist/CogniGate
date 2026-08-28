@@ -224,6 +224,13 @@ function SidebarContent() {
                 <SidebarLink href="/docs/api">Overview</SidebarLink>
             </SidebarSection>
 
+            <SidebarSection title="Integration">
+                <SidebarLink href="/docs/integration">
+                    Integrating an App
+                </SidebarLink>
+                <SidebarLink href="/docs/agents">AI Agents</SidebarLink>
+            </SidebarSection>
+
             <SidebarSection title="Advanced">
                 <SidebarLink href="/docs/security">Security</SidebarLink>
                 <SidebarLink href="/docs/privacy">
