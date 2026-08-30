@@ -1,8 +1,15 @@
 # =============================================================================
-# CogniGate — Interactive Setup Wrapper (Windows PowerShell)
+# CogniGate - Interactive Setup Wrapper (Windows PowerShell)
 # Copyright 2026 VKrishna04 and Life Experimentalist
 #
 # Execution: irm https://life-experimentalist.github.io/CogniGate/install.ps1 | iex
+#
+# This file must stay pure ASCII, for the same reason setup.ps1 must. Windows
+# PowerShell 5.1 reads a .ps1 with no byte-order mark as ANSI, and .editorconfig
+# requires utf-8 without one, so a multi-byte character here decodes into
+# mojibake. A check mark is the worst case: U+2713 is E2 9C 93, and 0x93 is a
+# left double quotation mark in cp1252, which opens a string that never closes
+# and takes the rest of the file down with it. Write [OK] / [!] / [X].
 # =============================================================================
 
 $ErrorActionPreference = "Stop"
@@ -23,11 +30,11 @@ Write-Host "Performing system checks..." -ForegroundColor Blue
 
 function Check-Command($cmd) {
     if (-not (Get-Command $cmd -ErrorAction SilentlyContinue)) {
-        Write-Host "  ✗ '$cmd' is not installed or not in PATH." -ForegroundColor Red
+        Write-Host "  [X] '$cmd' is not installed or not in PATH." -ForegroundColor Red
         Write-Host "    Please install $cmd before continuing." -ForegroundColor Yellow
         exit 1
     }
-    Write-Host "  ✓ $cmd found" -ForegroundColor Green
+    Write-Host "  [OK] $cmd found" -ForegroundColor Green
 }
 
 Check-Command "git"
