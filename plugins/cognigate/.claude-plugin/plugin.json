@@ -1,0 +1,23 @@
+{
+    "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+    "name": "cognigate",
+    "displayName": "CogniGate",
+    "version": "1.0.0",
+    "description": "Install, operate and integrate CogniGate — the self-hosted, OpenAI-compatible LLM gateway.",
+    "author": {
+        "name": "VKrishna04",
+        "url": "https://github.com/VKrishna04"
+    },
+    "homepage": "https://life-experimentalist.github.io/CogniGate/docs/agents/",
+    "repository": "https://github.com/Life-Experimentalist/CogniGate",
+    "license": "Apache-2.0",
+    "keywords": [
+        "llm",
+        "gateway",
+        "openai-compatible",
+        "self-hosted",
+        "routing",
+        "failover",
+        "docker"
+    ]
+}
