@@ -28,6 +28,17 @@ services:
       dockerfile: Dockerfile
     ports:
       - "8080:8080"
+    # The manifest is read at startup rather than baked into the image, so
+    # editing it and recreating the gateway is how a deployment is retuned.
+    # Without this the file is documentation of a file nobody reads. The source
+    # path is relative to this one and every documented way of getting here
+    # starts with a clone, so it is always present: a bind mount whose source is
+    # missing becomes an empty directory, and the gateway refuses to start on
+    # one. `command` appends to the image's entrypoint, so it carries the flags
+    # and not the binary.
+    command: ["-config", "/etc/cognigate/cognigate.config.yml"]
+    volumes:
+      - ./cognigate.config.yml:/etc/cognigate/cognigate.config.yml:ro
     environment:
       # The one credential that exists before any tenant does: it is how the
       # first tenant, and therefore the first API key, gets created. No default,
