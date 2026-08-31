@@ -405,6 +405,13 @@ func TestGetModel(t *testing.T) {
 		t.Errorf("qualified id = %q, want %q", model.ID, "test/test-large")
 	}
 
+	// ...and it is addressable with the slash percent-encoded, which is what an
+	// HTTP client that treats the id as one path segment will send.
+	h.do(http.MethodGet, "/v1/models/test%2Ftest-large", tenant.dataKey, nil).decode(t, &model)
+	if model.ID != "test/test-large" {
+		t.Errorf("encoded id = %q, want %q", model.ID, "test/test-large")
+	}
+
 	// An alias resolves here too: this is how a caller finds out what "fast"
 	// currently means.
 	h.do(http.MethodGet, "/v1/models/fast", tenant.dataKey, nil).decode(t, &model)
