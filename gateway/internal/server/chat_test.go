@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -384,6 +385,107 @@ func TestChatCompletionExhaustionIsReportedAsUpstreamExhausted(t *testing.T) {
 
 	res := h.do(http.MethodPost, "/v1/chat/completions", tenant.dataKey, chatRequest("test-small", false))
 	h.expectError(res, http.StatusBadGateway, apierr.CodeUpstreamExhausted)
+}
+
+// "All 2 routing candidates failed" is not an answer anyone can act on. The
+// caller needs to know which entries were tried and how each one died, because
+// a chain that died of rate limits is a billing problem, one that died of 5xx is
+// the provider's, and one that never dialled at all is the gateway's own breaker
+// deciding for it. GW-3.AC-5 puts that enumeration in the body.
+func TestChatCompletionExhaustionEnumeratesEachAttempt(t *testing.T) {
+	h := newHarness(t)
+	tenant := h.routeTenant("acme")
+
+	h.adapter.do = func(_ context.Context, _ provider.Credential, req *provider.Request) (*provider.Response, error) {
+		if req.Model == "test-small" {
+			return upstreamFailure(http.StatusInternalServerError, provider.FailServer, `{}`), nil
+		}
+		return nil, errTestUpstreamDown
+	}
+
+	res := h.do(http.MethodPost, "/v1/chat/completions", tenant.dataKey, chatRequest("test-small", false))
+	body := h.expectError(res, http.StatusBadGateway, apierr.CodeUpstreamExhausted)
+
+	want := []apierr.Attempt{
+		{Provider: "primary", Model: "test-small", Failure: "server", Status: http.StatusInternalServerError},
+		{Provider: "primary", Model: "test-large", Failure: "transport"},
+	}
+	if !reflect.DeepEqual(body.Error.Attempts, want) {
+		t.Errorf("attempts = %+v, want %+v", body.Error.Attempts, want)
+	}
+}
+
+// A candidate the breaker skipped is not a candidate that failed, and the body
+// has to say which it was: an operator reading "breaker_open" knows to look at
+// this gateway's recent history, and one reading "server" knows to look at the
+// provider.
+func TestChatCompletionExhaustionNamesSkippedCandidates(t *testing.T) {
+	h := newHarness(t, func(c *config.Config) {
+		c.Routing.Breaker.ErrorThreshold = 1
+	})
+	tenant := h.routeTenant("acme")
+
+	// The first request trips the breaker on primary/test-small while the
+	// fallback still answers, so only one of the two entries is broken.
+	h.adapter.do = func(_ context.Context, _ provider.Credential, req *provider.Request) (*provider.Response, error) {
+		if req.Model == "test-small" {
+			return nil, errTestUpstreamDown
+		}
+		return upstreamOK(10, 5), nil
+	}
+	if res := h.do(http.MethodPost, "/v1/chat/completions", tenant.dataKey, chatRequest("test-small", false)); res.status != http.StatusOK {
+		t.Fatalf("priming the breaker: status = %d, want 200 (body %s)", res.status, res.body)
+	}
+
+	h.adapter.do = func(context.Context, provider.Credential, *provider.Request) (*provider.Response, error) {
+		return nil, errTestUpstreamDown
+	}
+
+	res := h.do(http.MethodPost, "/v1/chat/completions", tenant.dataKey, chatRequest("test-small", false))
+	body := h.expectError(res, http.StatusBadGateway, apierr.CodeUpstreamExhausted)
+
+	want := []apierr.Attempt{
+		{Provider: "primary", Model: "test-small", Failure: "breaker_open"},
+		{Provider: "primary", Model: "test-large", Failure: "transport"},
+	}
+	if !reflect.DeepEqual(body.Error.Attempts, want) {
+		t.Errorf("attempts = %+v, want %+v", body.Error.Attempts, want)
+	}
+}
+
+// The attempt list is the one error body that quotes the routing layer, which
+// makes it the one most likely to grow a field it should not have. GW-3.AC-5
+// forbids provider secret material and GW-14 forbids prompt content; both are
+// cheap to assert and expensive to discover in production.
+func TestChatCompletionExhaustionBodyLeaksNothing(t *testing.T) {
+	h := newHarness(t)
+	tenant := h.newTenant("acme")
+	h.addProviderWithKeys(tenant.id, "primary", "upstream-key-1", "upstream-key-2")
+	h.putRoute(tenant.id, "test-small", "test-small", "test-large")
+
+	h.adapter.do = func(context.Context, provider.Credential, *provider.Request) (*provider.Response, error) {
+		return nil, errTestUpstreamDown
+	}
+
+	// A prompt distinctive enough that finding it is unambiguous. The default
+	// fixture says "ping", which is short enough to turn up inside a random
+	// request id and turn this assertion flaky.
+	req := chatRequest("test-small", false)
+	req["messages"] = []map[string]string{{"role": "user", "content": "sentinel-prompt-body"}}
+
+	res := h.do(http.MethodPost, "/v1/chat/completions", tenant.dataKey, req)
+	h.expectError(res, http.StatusBadGateway, apierr.CodeUpstreamExhausted)
+
+	for _, forbidden := range []string{
+		"upstream-key-1",            // a pooled provider credential
+		"upstream.invalid",          // the provider's base url
+		"sentinel-prompt-body",      // the prompt, per GW-14
+		errTestUpstreamDown.Error(), // the upstream's own error text
+	} {
+		if strings.Contains(string(res.body), forbidden) {
+			t.Errorf("the error body contains %q: %s", forbidden, res.body)
+		}
+	}
 }
 
 // An oversize response is fatal rather than a cascade trigger: the next provider

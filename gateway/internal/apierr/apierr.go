@@ -6,6 +6,10 @@
 //
 //	{"error": {"message": ..., "type": ..., "code": ..., "param": ...}}
 //
+// upstream_exhausted adds one key, "attempts", because GW-3.AC-5 requires the
+// cascade to be legible to the caller. Unknown keys are ignored by every SDK
+// that parses this shape, so the compatibility claim survives it.
+//
 // The (status, code) pairs below are a closed registry. Handlers pick a
 // constructor from this package rather than writing statuses inline, which is
 // what keeps the registry closed as the surface grows.
@@ -77,15 +81,39 @@ const (
 	CodeUpstreamStreamStalled = "upstream_stream_stalled"
 )
 
+// Attempt is one entry of a routing cascade, as GW-3.AC-5 requires the
+// upstream_exhausted body to enumerate them.
+//
+// The failure is the classification, never the upstream's own message: a
+// caller needs to know whether the chain died of rate limits or of 5xx, and
+// that is answerable from a closed vocabulary. Passing the upstream text
+// through instead would leak provider detail into a body GW-14 governs, and
+// would make the field unusable for branching.
+type Attempt struct {
+	Provider string `json:"provider"`
+	Model    string `json:"model"`
+	// Failure is a provider.FailureKind rendered as a string, or "breaker_open"
+	// for a candidate the circuit breaker skipped without dialling.
+	Failure string `json:"failure"`
+	// Status is the upstream's HTTP status, absent when there was never a
+	// response to take one from.
+	Status int `json:"status,omitempty"`
+}
+
 // Body is the wire shape. `param` is a pointer so it serialises as JSON null
 // rather than "" when a failure is not attributable to one field, which is what
 // OpenAI clients expect.
+//
+// `attempts` is CogniGate's one addition to OpenAI's shape. It is omitted from
+// every error but upstream_exhausted, and an SDK that does not know about it
+// ignores it, so GW-7's "stock error handling works" still holds.
 type Body struct {
-	Message   string  `json:"message"`
-	Type      string  `json:"type"`
-	Code      string  `json:"code"`
-	Param     *string `json:"param"`
-	RequestID string  `json:"request_id,omitempty"`
+	Message   string    `json:"message"`
+	Type      string    `json:"type"`
+	Code      string    `json:"code"`
+	Param     *string   `json:"param"`
+	RequestID string    `json:"request_id,omitempty"`
+	Attempts  []Attempt `json:"attempts,omitempty"`
 }
 
 // Envelope wraps Body under the single "error" key.
@@ -107,6 +135,9 @@ type Error struct {
 	// serialised: GW-14 forbids leaking upstream detail to callers, and an
 	// upstream error string can contain fragments of the prompt.
 	Wrapped error
+
+	// Attempts is the routing cascade, rendered only for upstream_exhausted.
+	Attempts []Attempt
 }
 
 func (e *Error) Error() string {
@@ -133,6 +164,7 @@ func (e *Error) Envelope(requestID string) Envelope {
 		Code:      e.Code,
 		Param:     param,
 		RequestID: requestID,
+		Attempts:  e.Attempts,
 	}}
 }
 
@@ -148,6 +180,13 @@ func (e *Error) WithParam(param string) *Error {
 func (e *Error) WithCause(err error) *Error {
 	c := *e
 	c.Wrapped = err
+	return &c
+}
+
+// WithAttempts attaches the routing cascade for rendering. Returns a copy.
+func (e *Error) WithAttempts(attempts []Attempt) *Error {
+	c := *e
+	c.Attempts = attempts
 	return &c
 }
 
@@ -276,7 +315,8 @@ func BudgetExceeded() *Error {
 // --- 502 -------------------------------------------------------------------
 
 // UpstreamExhausted is the end of a fallback cascade: every candidate was tried
-// and none produced a response.
+// and none produced a response. Callers pair it with WithAttempts, which is
+// what GW-3.AC-5 requires the body to enumerate.
 func UpstreamExhausted(attempts int) *Error {
 	return newErr(http.StatusBadGateway, TypeAPI, CodeUpstreamExhausted,
 		fmt.Sprintf("All %d routing candidates failed.", attempts))
