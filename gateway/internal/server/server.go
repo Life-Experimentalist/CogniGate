@@ -58,8 +58,11 @@ type Deps struct {
 	Metrics    *obs.Metrics
 	Telemetry  *obs.Telemetry
 	// Events delivers the GW-4/GW-1/GW-3 event registry to a tenant's webhooks.
-	// Nil disables emission entirely, which is what --dev does: a dev process has
-	// nowhere to deliver to and no reason to retry for five attempts.
+	// Nil disables emission entirely, which is a convenience for tests that do
+	// not assert on it. Every real process wires it, --dev included: a dev
+	// process that accepted a webhook registration on the admin plane and then
+	// silently never delivered would make the admin API lie about what it had
+	// just stored.
 	Events  Emitter
 	Logger  *slog.Logger
 	Version string
