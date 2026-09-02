@@ -26,6 +26,8 @@ import (
 func (s *Server) adminRoutes(g fiber.Router) {
 	g.Get("/meta", s.adminMeta)
 
+	g.Post("/catalog/refresh", s.refreshCatalog)
+
 	g.Post("/tenants", s.createTenant)
 	g.Get("/tenants", s.listTenants)
 	g.Get("/tenants/:tenant", s.getTenant)
@@ -137,6 +139,91 @@ func (s *Server) adminMeta(c *fiber.Ctx) error {
 // accepted and never delivered. It is the dispatcher's own list, so what the
 // admin API accepts and what delivery knows how to raise cannot drift apart.
 var eventRegistry = events.Registry
+
+// --- catalog ----------------------------------------------------------------
+
+// refreshCatalog is the on-demand poll GW-1 requires, so that a model added or
+// retired at a provider becomes visible without waiting out the TTL or
+// restarting anything.
+//
+// It is deliberately not under /tenants/:tenant. A root operator refreshing
+// after a provider-side change wants every tenant, and making them enumerate
+// tenants to do it would be the wrong shape for the one case that matters.
+// Naming a tenant narrows it; a tenant-scoped key is narrowed to its own.
+func (s *Server) refreshCatalog(c *fiber.Ctx) error {
+	var req struct {
+		Tenant string `json:"tenant"`
+	}
+	if len(c.Body()) > 0 {
+		if err := parse(c, &req); err != nil {
+			return httpx.Fail(c, err)
+		}
+	}
+	req.Tenant = strings.TrimSpace(req.Tenant)
+
+	key := httpx.Key(c)
+	if key == nil {
+		return httpx.Fail(c, apierr.InvalidAPIKey())
+	}
+
+	ctx, cancel := s.opContext(c)
+	defer cancel()
+
+	var targets []string
+	if key.Scope == store.ScopeRoot {
+		if req.Tenant != "" {
+			targets = []string{req.Tenant}
+		} else {
+			tenants, err := s.Store.ListTenants(ctx)
+			if err != nil {
+				return httpx.Fail(c, apierr.From(err))
+			}
+			for _, t := range tenants {
+				targets = append(targets, t.ID)
+			}
+		}
+	} else {
+		own := strings.TrimPrefix(key.Scope, "tenant:")
+		if req.Tenant != "" && req.Tenant != own {
+			return httpx.Fail(c, apierr.InsufficientScope())
+		}
+		targets = []string{own}
+	}
+
+	// A named tenant that does not exist is a 404, not an empty success. Without
+	// this check a typo would refresh nothing and report that it worked, since a
+	// tenant with no providers and an unknown tenant produce the same empty
+	// catalog.
+	if req.Tenant != "" {
+		if _, err := s.Store.GetTenant(ctx, req.Tenant); err != nil {
+			return httpx.Fail(c, storeErr(err, "tenant", req.Tenant))
+		}
+	}
+
+	// A provider that cannot be reached is reported per tenant rather than
+	// failing the call: refreshing ten tenants and telling the operator only
+	// about the first failure would hide the other nine results.
+	refreshed := make([]fiber.Map, 0, len(targets))
+	for _, id := range targets {
+		entry := fiber.Map{"tenant": id}
+		snap, err := s.Catalog.Refresh(ctx, id)
+		switch {
+		case err != nil:
+			entry["ok"] = false
+			entry["error"] = err.Error()
+		default:
+			entry["ok"] = !snap.Stale
+			entry["models"] = len(snap.Models)
+			entry["stale"] = snap.Stale
+			if len(snap.Errors) > 0 {
+				entry["errors"] = snap.Errors
+			}
+		}
+		refreshed = append(refreshed, entry)
+	}
+
+	return c.JSON(fiber.Map{"object": "catalog_refresh", "refreshed": refreshed})
+}
 
 // --- tenants ----------------------------------------------------------------
 

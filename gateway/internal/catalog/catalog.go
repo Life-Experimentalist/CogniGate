@@ -133,7 +133,36 @@ func (c *Catalog) Get(ctx context.Context, tenantID string) (*Snapshot, error) {
 	if st.snapshot != nil && st.snapshot.Age(c.now()) < c.opts.TTL && !st.snapshot.Stale {
 		return st.snapshot, nil
 	}
+	return c.reload(ctx, tenantID, st)
+}
 
+// Refresh polls every provider now, whatever the TTL says. It is the on-demand
+// refresh GW-1 requires the admin plane to expose, and it exists as a separate
+// method from Invalidate because the two mean different things: Invalidate
+// discards what is known, which is right when the tenant's configuration has
+// changed, while Refresh re-reads it and keeps the old snapshot if the read
+// fails. Invalidating in order to refresh would turn one unreachable provider
+// into a cold tenant and a 503.
+//
+// Only one refresh per tenant runs at a time, since the tenant's state lock is
+// held across the poll — and because providers are tenant-scoped, that is also
+// the "at most one in-flight refresh per provider" the spec asks for.
+func (c *Catalog) Refresh(ctx context.Context, tenantID string) (*Snapshot, error) {
+	st := c.state(tenantID)
+
+	st.mu.Lock()
+	defer st.mu.Unlock()
+
+	return c.reload(ctx, tenantID, st)
+}
+
+// reload polls and installs the result. The caller holds st.mu.
+//
+// A failed poll marks the existing snapshot stale rather than evicting it:
+// GW-1 requires serving a known-old catalog over serving none, because a
+// provider's listing endpoint being down is not a reason to stop routing
+// traffic that would otherwise succeed.
+func (c *Catalog) reload(ctx context.Context, tenantID string, st *tenantState) (*Snapshot, error) {
 	fresh, err := c.refresh(ctx, tenantID)
 	if err != nil {
 		if st.snapshot != nil {
