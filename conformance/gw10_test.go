@@ -201,7 +201,6 @@ func suiteTests(t *testing.T) map[string][]string {
 // without deleting its entry fails this criterion. The list can only shrink, and
 // it reaches zero when the specifications and the suite agree.
 var notYetCovered = map[string]bool{
-	"GW-11": true,
 	"GW-12": true,
 	"GW-13": true,
 	"GW-14": true,
