@@ -71,6 +71,13 @@ type Model struct {
 	OwnedBy         string `json:"owned_by"`
 	ContextWindow   int    `json:"context_window"`
 	MaxOutputTokens int    `json:"max_output_tokens"`
+	// Prices in USD per million tokens, published because a provider may. They
+	// are what makes GW-2's cost tiers testable: with every model at zero,
+	// "cheapest" falls through to the alphabetical tie-break, and a test that
+	// added a model whose id happened to sort first would pass without any of
+	// the cost machinery having run.
+	InputCostPerMTok  float64 `json:"input_cost_per_mtok,omitempty"`
+	OutputCostPerMTok float64 `json:"output_cost_per_mtok,omitempty"`
 }
 
 // SeedModels are present on every fresh mock. The ids are chosen for what the
@@ -78,12 +85,20 @@ type Model struct {
 // "transcribe" yields transcription only, "vision" adds vision to chat, and
 // anything else is chat plus tools. That spread is what the GW-2 alias tests
 // need in order to distinguish capability filtering from ordering.
+//
+// The prices are deliberately not in id order — mock-chat-b is both later in
+// the alphabet and cheaper than mock-chat-a — so a resolver that ignored cost
+// and sorted by id would pick the other one and be caught.
 func SeedModels() []Model {
 	return []Model{
-		{ID: "mock-chat-a", OwnedBy: "mock", ContextWindow: 128000, MaxOutputTokens: 4096},
-		{ID: "mock-chat-b", OwnedBy: "mock", ContextWindow: 32000, MaxOutputTokens: 4096},
-		{ID: "mock-vision", OwnedBy: "mock", ContextWindow: 128000, MaxOutputTokens: 4096},
-		{ID: "mock-embed", OwnedBy: "mock", ContextWindow: 8192},
+		{ID: "mock-chat-a", OwnedBy: "mock", ContextWindow: 128000, MaxOutputTokens: 4096,
+			InputCostPerMTok: 3.00, OutputCostPerMTok: 15.00},
+		{ID: "mock-chat-b", OwnedBy: "mock", ContextWindow: 32000, MaxOutputTokens: 4096,
+			InputCostPerMTok: 0.50, OutputCostPerMTok: 1.50},
+		{ID: "mock-vision", OwnedBy: "mock", ContextWindow: 128000, MaxOutputTokens: 4096,
+			InputCostPerMTok: 5.00, OutputCostPerMTok: 20.00},
+		{ID: "mock-embed", OwnedBy: "mock", ContextWindow: 8192,
+			InputCostPerMTok: 0.02},
 		{ID: "mock-transcribe", OwnedBy: "mock"},
 	}
 }
