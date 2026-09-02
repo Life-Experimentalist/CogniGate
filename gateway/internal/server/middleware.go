@@ -107,6 +107,9 @@ func (s *Server) observe() fiber.Handler {
 			slog.Int("prompt_tokens", out.PromptTokens),
 			slog.Int("completion_tokens", out.CompletionTokens),
 			slog.Int64("upstream_duration_ms", out.UpstreamMS),
+			// Empty unless the deployment enabled GW-12 and the caller opted
+			// in, which is the same silence the response header keeps.
+			slog.String("cache", out.CacheStatus),
 			slog.Int64("duration_ms", elapsed.Milliseconds()))
 
 		return err

@@ -23,7 +23,7 @@ hence: off by default, opt-in, and always labeled.
   - `temperature` is 0 (or omitted with `top_p` at 1 and `n` at 1 —
     i.e. the request is deterministic as expressed);
   - the request opted in: header `X-CogniGate-Cache: prefer` **or** the
-    tenant/alias has `cache: enabled` policy via GW-6;
+    tenant has a `cache: enabled` policy via GW-6;
   - response status 200.
 - `X-CogniGate-Cache: bypass` on a request MUST skip lookup and storage
   regardless of policy.
@@ -38,7 +38,16 @@ hence: off by default, opt-in, and always labeled.
   forbidden even for byte-identical requests (tenant isolation beats
   hit rate; see GW-14).
 - Default TTL 5 minutes, configurable per tenant up to a deployment
-  ceiling; storage is Redis with an LRU bound.
+  ceiling; storage is a byte-bounded LRU inside the gateway process.
+  This is a departure from the sketch this specification was first
+  written against, which put the cache in Redis. The gateway's tenants,
+  keys, aliases and routes are in-process, so a cache that outlived a
+  restart would be keyed on tenant ids that no longer exist. The trade
+  is that a multi-replica deployment caches per replica: the hit rate is
+  lower, and a flush clears the replica that serves it. Both are stated
+  here rather than hidden, because a cache that is wrong is worse than
+  no cache, and GW-12 is optional precisely so a deployment can decline
+  the trade.
 
 ### Serving
 
@@ -62,7 +71,14 @@ hence: off by default, opt-in, and always labeled.
 | `cache.default_ttl`          | `5m`    | Per-entry TTL when policy omits one |
 | `cache.max_ttl`              | `24h`   | Ceiling any tenant policy may request |
 | `cache.max_entry_bytes`      | `262144` | Responses larger than this are never cached |
-| Per-tenant / per-alias `cache` policy | off | Managed via GW-6 |
+| `cache.max_bytes`            | `67108864` | Total the cache may hold; the LRU evicts to stay inside it |
+| Per-tenant `cache` policy    | off     | `{enabled, ttl_seconds}`, managed via GW-6 |
+
+Per-*alias* cache policy is specified above but not implemented: no
+acceptance criterion exercises it, and an alias-level switch that only
+the specification knows about would be a capability claimed and not
+delivered. A tenant-level policy plus the per-request header covers
+every criterion here.
 
 ## Acceptance criteria
 
@@ -93,7 +109,8 @@ hence: off by default, opt-in, and always labeled.
 - No cross-tenant or cross-deployment cache sharing.
 - No persistent (disk-durable) cache; entries may vanish at any time
   and clients MUST NOT depend on a hit.
-- Prompt content in cache entries lives only in Redis under the
-  deployment's control and expires by TTL; this is distinct from the
+- Prompt content in cache entries lives only in the gateway's own
+  memory, under the deployment's control, and expires by TTL or with
+  the process, whichever comes first; this is distinct from the
   debug retention governed by GW-14, and the GW-14 log/telemetry
   content ban still applies.

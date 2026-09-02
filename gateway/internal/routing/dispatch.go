@@ -67,6 +67,29 @@ func NewDispatcher(r *Resolver, b *Breaker, reg *provider.Registry, s store.Stor
 // Breaker exposes the breaker for /v1/health and the state gauge.
 func (d *Dispatcher) Breaker() *Breaker { return d.breaker }
 
+// Primary is the candidate resolution would try first, worked out without
+// sending anything upstream.
+//
+// GW-12 keys its cache on the resolved provider and model. That is only known
+// after resolution and must be known before the upstream call — a lookup that
+// dispatched first to learn where to look would have nothing left to save. The
+// answer is the primary rather than whichever candidate eventually serves,
+// because only the primary is knowable in advance; the caller is expected to
+// store an entry only when the primary did in fact serve it.
+//
+// A cacheable request therefore resolves twice, once here and once inside
+// Dispatch. Resolve reads a cached catalog snapshot and the tenant's aliases and
+// routes, and emits no metric or event, so the repeat costs a little work and
+// changes nothing; carrying the first result into Dispatch would mean widening
+// its signature for every caller to save it.
+func (d *Dispatcher) Primary(ctx context.Context, tenantID, requested string) (Candidate, error) {
+	candidates, _, err := d.resolver.Resolve(ctx, tenantID, requested)
+	if err != nil {
+		return Candidate{}, err
+	}
+	return candidates[0], nil
+}
+
 // Dispatch sends one request, cascading on failure.
 //
 // `body` is the caller's JSON; the resolved model id is substituted into a copy

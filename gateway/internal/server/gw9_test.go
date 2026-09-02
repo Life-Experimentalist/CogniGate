@@ -119,18 +119,27 @@ func TestCapabilitiesOmitObservabilityWhenMetricsAreOff(t *testing.T) {
 	}
 }
 
-func TestCachingIsNotClaimedUntilItExists(t *testing.T) {
-	// GW-12 is optional and unimplemented. Listing it would be a conformance
-	// failure in its own right, and enabling the configuration key must not be
-	// enough to make the claim — only the implementation is.
-	h := newHarness(t, func(c *config.Config) { c.Cache.Enabled = true })
-	tenant := h.newTenant("acme")
+func TestCachingIsClaimedOnlyWhenEnabled(t *testing.T) {
+	// GW-12 is optional, and a deployment that declined it serves no cache
+	// header at all. Claiming the id there would tell a client to feature-detect
+	// something that is not present, which GW-9 makes a failure in its own right.
+	off := newHarness(t)
+	offTenant := off.newTenant("acme")
 
-	var meta metaResponse
-	h.do(http.MethodGet, "/v1/meta", tenant.dataKey, nil).decode(t, &meta)
+	var without metaResponse
+	off.do(http.MethodGet, "/v1/meta", offTenant.dataKey, nil).decode(t, &without)
+	if contains(without.Capabilities, "gw-12") {
+		t.Errorf("gw-12 is claimed with caching disabled: %v", without.Capabilities)
+	}
 
-	if contains(meta.Capabilities, "gw-12") {
-		t.Error("gw-12 is claimed; response caching is not implemented, and GW-9 makes claiming an unimplemented capability a failure")
+	// And the switch is what decides, rather than an id that is never listed.
+	on := newHarness(t, func(c *config.Config) { c.Cache.Enabled = true })
+	onTenant := on.newTenant("acme")
+
+	var with metaResponse
+	on.do(http.MethodGet, "/v1/meta", onTenant.dataKey, nil).decode(t, &with)
+	if !contains(with.Capabilities, "gw-12") {
+		t.Errorf("gw-12 is absent with caching enabled: %v", with.Capabilities)
 	}
 }
 

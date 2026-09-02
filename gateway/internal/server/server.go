@@ -23,6 +23,7 @@ import (
 	"github.com/valyala/fasthttp/fasthttpadaptor"
 
 	"github.com/cognigate/gateway/internal/apierr"
+	"github.com/cognigate/gateway/internal/cache"
 	"github.com/cognigate/gateway/internal/catalog"
 	"github.com/cognigate/gateway/internal/config"
 	"github.com/cognigate/gateway/internal/httpx"
@@ -91,6 +92,9 @@ type Server struct {
 	rates   *rateLimiter
 	health  *healthCache
 	quotas  *quotaCache
+	// cache is nil unless the deployment enabled GW-12. Nil is a working cache
+	// that never hits, so no call site has to ask whether caching is on.
+	cache *cache.Cache
 
 	// startedAt is when this process became able to serve, reported as
 	// gateway.uptime_seconds. It answers the first question asked of a gateway
@@ -121,6 +125,7 @@ func New(d Deps) *Server {
 		rates:     newRateLimiter(),
 		health:    &healthCache{ttl: d.Config.Health.CacheTTL},
 		quotas:    newQuotaCache(quotaCacheTTL),
+		cache:     newResponseCache(d.Config.Cache),
 		startedAt: time.Now(),
 	}
 

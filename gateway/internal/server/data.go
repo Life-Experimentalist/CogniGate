@@ -827,10 +827,16 @@ func (s *Server) capabilities() []string {
 	if s.Config.Metrics.Enabled {
 		caps = append(caps, "gw-8")
 	}
-	return append(caps,
-		"gw-9",  // versioning & compatibility
-		"gw-13", // size limits & time budgets
-	)
+	caps = append(caps, "gw-9") // versioning & compatibility
+	// Response caching is optional in the same way observability is switchable:
+	// a deployment that has not enabled it serves no X-CogniGate-Cache header at
+	// all, so there is nothing for a client to feature-detect and the id would
+	// be a claim about a capability this process does not have.
+	if s.Config.Cache.Enabled {
+		caps = append(caps, "gw-12") // response caching
+	}
+	caps = append(caps, "gw-13") // size limits & time budgets
+	return caps
 }
 
 // meta builds the document both planes serve. GW-9 requires /admin/v1/meta to

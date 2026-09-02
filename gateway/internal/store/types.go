@@ -38,6 +38,24 @@ type Tenant struct {
 	// overrides are all unset are the same tenant, and giving them two
 	// representations would only invite code that handles one of them.
 	Limits TenantLimits `json:"limits"`
+	// Cache is this tenant's GW-12 response-cache policy, a value for the same
+	// reason Limits is.
+	Cache TenantCache `json:"cache"`
+}
+
+// TenantCache is the per-tenant half of GW-12's caching policy.
+//
+// Enabled opts every eligible request into the cache without the caller having
+// to send X-CogniGate-Cache: prefer, which is what lets an operator turn
+// caching on for a workload whose client they do not control. TTLSeconds
+// narrows the deployment's default; the admin API rejects a value above
+// cache.max_ttl, so a tenant cannot hold an answer longer than the deployment
+// is willing to.
+//
+// A zero TTLSeconds means the deployment's default, not zero seconds.
+type TenantCache struct {
+	Enabled    bool `json:"enabled,omitempty"`
+	TTLSeconds int  `json:"ttl_seconds,omitempty"`
 }
 
 // TenantLimits are the per-tenant halves of GW-13's limit table. Each is a
@@ -71,6 +89,7 @@ type TenantPatch struct {
 	Name   *string
 	Status *string
 	Limits *TenantLimits
+	Cache  *TenantCache
 }
 
 // APIKey stores only a hash. The plaintext is returned once, at creation, and
