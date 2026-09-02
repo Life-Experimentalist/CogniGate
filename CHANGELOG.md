@@ -57,12 +57,17 @@ The first release has not been cut. Everything below is the state of `main`.
 - **Conformance suite (GW-10).** A black-box suite that runs against a
   deployment over HTTP and emits a machine-readable report, selecting which
   sections to run from what `/v1/meta` claims.
+- **Size limits and time budgets (GW-13).** A request body cap, an upstream
+  response cap, a total request budget spanning the fallback cascade, a
+  stream idle timeout, a per-tenant request rate and a per-key in-flight cap
+  — each with its own error code, each narrowable per tenant through the
+  `limits` block on `PATCH /admin/v1/tenants/{id}`, and each published in
+  `GET /v1/meta` so a client can size its requests against the figure that is
+  actually enforced.
 
 ### Not yet implemented
 
 Named here because the specifications are published and their absence is
-visible: response caching (GW-12), the full size-limit and time-budget surface
-(GW-13, whose 2 MiB request cap is enforced today but not yet certified), and
-the debug-capture side of the content-blind design (GW-14). None of these are
-listed in `/v1/meta`'s capabilities, which is the machine-readable form of the
-same statement.
+visible: response caching (GW-12) and the debug-capture side of the
+content-blind design (GW-14). Neither is listed in `/v1/meta`'s capabilities,
+which is the machine-readable form of the same statement.

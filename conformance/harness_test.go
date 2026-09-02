@@ -299,9 +299,21 @@ func tryMockControl(t *testing.T, method, path string, body any) *response {
 // so one test's fault can never leak into the next.
 func injectFault(t *testing.T, model, mode string, count int) {
 	t.Helper()
-	mockControl(t, http.MethodPost, "/_control/faults", map[string]any{
-		"model": model, "mode": mode, "count": count,
-	})
+	injectFaultWith(t, model, mode, count, nil)
+}
+
+// injectFaultWith is injectFault for a mode that needs more than a count: a
+// delay, or the body size the oversize mode produces. The extras are merged into
+// the control request rather than added as parameters because every one of them
+// applies to exactly one mode, and a signature carrying all of them would ask
+// every existing caller to pass values that mean nothing for the fault it wants.
+func injectFaultWith(t *testing.T, model, mode string, count int, extra map[string]any) {
+	t.Helper()
+	body := map[string]any{"model": model, "mode": mode, "count": count}
+	for k, v := range extra {
+		body[k] = v
+	}
+	mockControl(t, http.MethodPost, "/_control/faults", body)
 	t.Cleanup(func() {
 		mockControl(t, http.MethodPost, "/_control/faults", map[string]any{
 			"model": model, "mode": mockprovider.FaultNone,
@@ -1189,6 +1201,49 @@ func addMockProvider(t *testing.T, tn tenant) {
 		t.Fatalf("registering the mock for %s: status %d\n%s", tn.ID, resp.Status, truncate(resp.Body))
 	}
 	awaitModel(t, tn.Key, "mock-chat-a", true)
+}
+
+// narrowLimits replaces a tenant's GW-13 limit overrides.
+//
+// The block is replaced wholesale, so passing an empty map clears every
+// override. Callers patch last, after every other bit of provisioning: a tenant
+// narrowed to one request per second spends its only token on the very next
+// call, including the ones a helper makes on its behalf.
+func narrowLimits(t *testing.T, tenantID string, limits map[string]any) {
+	t.Helper()
+	resp := suite.client.admin(t, http.MethodPatch, "/admin/v1/tenants/"+tenantID,
+		map[string]any{"limits": limits})
+	if resp.Status != http.StatusOK {
+		t.Fatalf("narrowing the limits of %s: status %d\n%s", tenantID, resp.Status, truncate(resp.Body))
+	}
+}
+
+// publishedLimits reads the limits block a key is told it is held to.
+//
+// Every GW-13 criterion is a comparison between what /v1/meta says and what the
+// gateway does, so the tests read the figure rather than hard-coding the
+// deployment's default: a suite that asserted 2 MiB would pass against a gateway
+// that published 2 MiB and enforced a tenth of it.
+func publishedLimits(t *testing.T, key string) map[string]any {
+	t.Helper()
+	body := suite.client.do(t, http.MethodGet, "/v1/meta", key, nil).JSON(t)
+	limits, ok := body["limits"].(map[string]any)
+	if !ok {
+		t.Fatalf("limits is %T, want an object", body["limits"])
+	}
+	return limits
+}
+
+// limitInt reads one published limit, failing the test when it is missing or
+// not a positive number. A limit of zero is not a looser limit, it is a gateway
+// that has stopped publishing what it enforces.
+func limitInt(t *testing.T, limits map[string]any, name string) int {
+	t.Helper()
+	n, ok := limits[name].(float64)
+	if !ok || n < 1 {
+		t.Fatalf("limits.%s is %v, want a positive number", name, limits[name])
+	}
+	return int(n)
 }
 
 // --- provisioning -----------------------------------------------------------

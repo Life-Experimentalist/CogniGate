@@ -827,8 +827,10 @@ func (s *Server) capabilities() []string {
 	if s.Config.Metrics.Enabled {
 		caps = append(caps, "gw-8")
 	}
-	caps = append(caps, "gw-9") // versioning & compatibility
-	return caps
+	return append(caps,
+		"gw-9",  // versioning & compatibility
+		"gw-13", // size limits & time budgets
+	)
 }
 
 // meta builds the document both planes serve. GW-9 requires /admin/v1/meta to

@@ -145,7 +145,7 @@ func TestGW9_AC3_PublishedLimitsAreTheEnforcedOnes(t *testing.T) {
 	// A published limit nobody enforces is worse than no limit at all: a client
 	// sizes its batches against it. So the criterion is not that the field
 	// exists but that it is the figure the gateway actually rejects at.
-	if resp := c.do(t, http.MethodPost, "/v1/chat/completions", suite.dataKey, paddedRequest(limit+1)); resp.Status != http.StatusRequestEntityTooLarge {
+	if resp := c.do(t, http.MethodPost, "/v1/chat/completions", suite.dataKey, paddedRequest("conformance-oversize", limit+1)); resp.Status != http.StatusRequestEntityTooLarge {
 		t.Errorf("a request of max_request_bytes+1 (%d bytes) answered %d, want 413\n%s", limit+1, resp.Status, truncate(resp.Body))
 	} else if code := resp.ErrorCode(t); code != "request_too_large" {
 		t.Errorf("the oversize request was rejected with %q, want request_too_large", code)
@@ -155,7 +155,7 @@ func TestGW9_AC3_PublishedLimitsAreTheEnforcedOnes(t *testing.T) {
 	// size must fail for some reason of its own, or none, but never for being
 	// too large. Without this the criterion would pass on a gateway whose real
 	// limit was a tenth of what it advertised.
-	if resp := c.do(t, http.MethodPost, "/v1/chat/completions", suite.dataKey, paddedRequest(limit)); resp.Status == http.StatusRequestEntityTooLarge {
+	if resp := c.do(t, http.MethodPost, "/v1/chat/completions", suite.dataKey, paddedRequest("conformance-oversize", limit)); resp.Status == http.StatusRequestEntityTooLarge {
 		t.Errorf("a request of exactly max_request_bytes (%d) was rejected as too large; the enforced limit is below the published one", limit)
 	}
 }
@@ -266,16 +266,22 @@ func TestGW9_AC6_DeprecationsAreNamedInTheChangelog(t *testing.T) {
 // paddedRequest builds a syntactically valid chat request of exactly n bytes, so
 // a size limit can be probed on both sides of its boundary.
 //
+// The model is a parameter because two different criteria need two different
+// answers from it. GW-9.AC-3 only cares which side of the limit the body lands
+// on, so an unroutable name is fine; GW-13.AC-1 additionally requires that
+// nothing reached the upstream, and a name that would not have routed anyway
+// makes that assertion true for free.
+//
 // The padding is a run of one character. GW-14 forbids the gateway from storing
 // or logging request content, and a test that sent something resembling a prompt
 // would make a leak harder to spot rather than easier.
-func paddedRequest(n int) json.RawMessage {
-	const shell = `{"model":"conformance-oversize","messages":[{"role":"user","content":"%s"}]}`
-	pad := n - len(fmt.Sprintf(shell, ""))
+func paddedRequest(model string, n int) json.RawMessage {
+	const shell = `{"model":%q,"messages":[{"role":"user","content":"%s"}]}`
+	pad := n - len(fmt.Sprintf(shell, model, ""))
 	if pad < 0 {
 		pad = 0
 	}
-	return json.RawMessage(fmt.Sprintf(shell, strings.Repeat("A", pad)))
+	return json.RawMessage(fmt.Sprintf(shell, model, strings.Repeat("A", pad)))
 }
 
 // release is one section of the changelog: its heading and everything up to the
