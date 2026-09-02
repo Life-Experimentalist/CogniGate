@@ -46,6 +46,14 @@ func TestAuthWrongPlane(t *testing.T) {
 
 	res = h.do(http.MethodGet, "/admin/v1/tenants/"+tenant.id, tenant.dataKey, nil)
 	h.expectError(res, http.StatusUnauthorized, apierr.CodeWrongPlane)
+
+	// The bootstrap key is the case a prefix cannot cover: the operator chooses
+	// its value, so nothing about it says "admin" except that the deployment was
+	// configured with it. Pointed at the data plane it is still a misdirected
+	// key, and the operator holding it is the caller least helped by being told
+	// to go and check it for a typo.
+	res = h.do(http.MethodGet, "/v1/models", testBootstrapKey, nil)
+	h.expectError(res, http.StatusUnauthorized, apierr.CodeWrongPlane)
 }
 
 func TestAuthRejectsRevokedKey(t *testing.T) {
