@@ -72,6 +72,10 @@ type Store interface {
 	// evaluating a key-level quota. Keys are attributed by prefix because that
 	// is what a usage record carries: the key material never reaches the store.
 	KeyUsage(ctx context.Context, tenantID, keyPrefix string, since, until time.Time) (UsageTotals, error)
+	// UsageBreakdown groups the window's records by one dimension: "model",
+	// "provider", "key", or "client_request_id". Rows come back sorted by spend
+	// descending, so a caller that reads only the head of the list reads the
+	// part it opened the endpoint for.
 	UsageBreakdown(ctx context.Context, tenantID string, since, until time.Time, groupBy string) ([]UsageBucket, error)
 
 	// RecordAudit appends one entry to the admin audit log. The log is

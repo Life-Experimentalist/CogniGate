@@ -637,6 +637,16 @@ func (m *Memory) UsageBreakdown(_ context.Context, tenantID string, since, until
 			key = r.Provider
 		case "key":
 			key = r.KeyPrefix
+		case "client_request_id":
+			// Records the caller never labelled are left out rather than piled
+			// into a "" row. This grouping exists to answer "what did the request
+			// I called abc123 cost"; an unlabelled bucket answers nothing, and
+			// being the largest row by spend it would sort to the top of every
+			// response.
+			if r.ClientRequestID == "" {
+				continue
+			}
+			key = r.ClientRequestID
 		default:
 			return nil, fmt.Errorf("unsupported group_by %q", groupBy)
 		}

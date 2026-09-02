@@ -98,10 +98,15 @@ var suite suiteState
 // dependency on the implementation's own constants: a header renamed in the Go
 // code and not in the specification has to break this suite, not follow it.
 const (
-	headerServedBy      = "X-CogniGate-Served-By"
-	headerFallbackDepth = "X-CogniGate-Fallback-Depth"
-	headerQuotaState    = "X-CogniGate-Quota-State"
+	headerRequestID       = "X-CogniGate-Request-Id"
+	headerServedBy        = "X-CogniGate-Served-By"
+	headerFallbackDepth   = "X-CogniGate-Fallback-Depth"
+	headerQuotaState      = "X-CogniGate-Quota-State"
+	headerClientRequestID = "X-Client-Request-Id"
 )
+
+// maxClientRequestID is the bound GW-7 puts on the echoed correlation id.
+const maxClientRequestID = 128
 
 // The GW-4 quota states, likewise spelled out rather than imported.
 const (
@@ -156,6 +161,12 @@ func (c *client) do(t *testing.T, method, path, key string, body any) *response 
 }
 
 func (c *client) try(method, path, key string, body any) (*response, error) {
+	return c.tryWithHeaders(method, path, key, body, nil)
+}
+
+// tryWithHeaders is try with extra request headers, for the GW-7 tests that are
+// about what the caller sends rather than what it asks for.
+func (c *client) tryWithHeaders(method, path, key string, body any, headers map[string]string) (*response, error) {
 	var reader io.Reader
 	if body != nil {
 		encoded, err := json.Marshal(body)
@@ -174,6 +185,9 @@ func (c *client) try(method, path, key string, body any) (*response, error) {
 	}
 	if key != "" {
 		req.Header.Set("Authorization", "Bearer "+key)
+	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
 	}
 
 	raw, err := c.http.Do(req)
@@ -576,6 +590,20 @@ func chat(t *testing.T, key, model string) *response {
 	})
 }
 
+// chatWithHeaders is chat with extra request headers.
+func chatWithHeaders(t *testing.T, key, model string, headers map[string]string) *response {
+	t.Helper()
+	resp, err := suite.client.tryWithHeaders(http.MethodPost, "/v1/chat/completions", key,
+		map[string]any{
+			"model":    model,
+			"messages": []any{map[string]any{"role": "user", "content": "hi"}},
+		}, headers)
+	if err != nil {
+		t.Fatalf("POST /v1/chat/completions: %v", err)
+	}
+	return resp
+}
+
 // streamResult is what a streaming completion left behind.
 type streamResult struct {
 	Status int
@@ -798,6 +826,8 @@ type breakdownReport struct {
 		TotalTokens      int64   `json:"total_tokens"`
 		CostUSD          float64 `json:"cost_usd"`
 	} `json:"data"`
+	// Truncated says the deployment had more groups than it will return at once.
+	Truncated bool `json:"truncated"`
 }
 
 func usageBreakdown(t *testing.T, key, window, groupBy string) breakdownReport {
@@ -833,6 +863,27 @@ func awaitUsage(t *testing.T, key, window string, want func(usageReport) bool, d
 		if time.Now().After(deadline) {
 			encoded, _ := json.MarshalIndent(got, "", "  ")
 			t.Fatalf("GET /v1/usage never reported %s\n%s", describe, truncate(encoded))
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+}
+
+// awaitBreakdown polls GET /v1/usage/breakdown until the predicate holds, for
+// the same reason awaitUsage exists: the record a test is looking for is written
+// after the response that produced it was already returned.
+func awaitBreakdown(t *testing.T, key, window, groupBy string, want func(breakdownReport) bool, describe string) breakdownReport {
+	t.Helper()
+
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		got := usageBreakdown(t, key, window, groupBy)
+		if want(got) {
+			return got
+		}
+		if time.Now().After(deadline) {
+			encoded, _ := json.MarshalIndent(got, "", "  ")
+			t.Fatalf("GET /v1/usage/breakdown?group_by=%s never reported %s\n%s",
+				groupBy, describe, truncate(encoded))
 		}
 		time.Sleep(250 * time.Millisecond)
 	}
