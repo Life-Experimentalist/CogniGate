@@ -19,12 +19,45 @@ public class EncryptionService {
 
     private final byte[] masterKey;
 
-    public EncryptionService(@Value("${ENCRYPTION_MASTER_KEY:0123456789abcdef0123456789abcdef}") String masterKeyHex) {
-        // Decode hex string to bytes
-        this.masterKey = hexStringToByteArray(masterKeyHex);
-        if (this.masterKey.length != 32) {
-            throw new IllegalArgumentException("ENCRYPTION_MASTER_KEY must be exactly 256 bits (32 bytes) long as a hex string.");
+    private static final int KEY_LENGTH_BYTE = 32;
+    private static final int KEY_LENGTH_HEX = KEY_LENGTH_BYTE * 2;
+
+    /**
+     * There is deliberately no default master key: a built-in fallback would
+     * be public knowledge and every deployment that forgot to set the
+     * variable would encrypt provider keys under it. Absent or malformed
+     * configuration fails fast at startup instead.
+     */
+    public EncryptionService(@Value("${ENCRYPTION_MASTER_KEY:}") String masterKeyHex) {
+        this.masterKey = decodeMasterKey(masterKeyHex);
+    }
+
+    private static byte[] decodeMasterKey(String hex) {
+        if (hex == null || hex.isBlank()) {
+            throw new IllegalArgumentException(
+                "ENCRYPTION_MASTER_KEY is not set. It must be exactly 256 bits (32 bytes) "
+                    + "encoded as " + KEY_LENGTH_HEX + " hex characters. Generate one with: openssl rand -hex 32");
         }
+        if (hex.length() != KEY_LENGTH_HEX) {
+            throw new IllegalArgumentException(
+                "ENCRYPTION_MASTER_KEY must be exactly 256 bits (32 bytes) encoded as "
+                    + KEY_LENGTH_HEX + " hex characters, but was " + hex.length() + " characters.");
+        }
+        byte[] key = new byte[KEY_LENGTH_BYTE];
+        for (int i = 0; i < KEY_LENGTH_HEX; i += 2) {
+            int high = Character.digit(hex.charAt(i), 16);
+            int low = Character.digit(hex.charAt(i + 1), 16);
+            if (high < 0 || low < 0) {
+                // Character.digit returns -1 for non-hex input; without this
+                // check the key would silently decode to the wrong bytes.
+                throw new IllegalArgumentException(
+                    "ENCRYPTION_MASTER_KEY must be exactly 256 bits (32 bytes) encoded as "
+                        + KEY_LENGTH_HEX + " hex characters, but contains a non-hexadecimal character at index "
+                        + (high < 0 ? i : i + 1) + ".");
+            }
+            key[i / 2] = (byte) ((high << 4) + low);
+        }
+        return key;
     }
 
     public String encrypt(String plainText) {
@@ -69,15 +102,5 @@ public class EncryptionService {
         } catch (Exception e) {
             throw new RuntimeException("Error occurred during decryption", e);
         }
-    }
-
-    private static byte[] hexStringToByteArray(String s) {
-        int len = s.length();
-        byte[] data = new byte[len / 2];
-        for (int i = 0; i < len; i += 2) {
-            data[i / 2] = (byte) ((Character.digit(s.charAt(i), 16) << 4)
-                                 + Character.digit(s.charAt(i+1), 16));
-        }
-        return data;
     }
 }

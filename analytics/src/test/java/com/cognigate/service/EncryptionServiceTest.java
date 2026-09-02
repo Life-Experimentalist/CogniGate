@@ -24,14 +24,14 @@ class EncryptionServiceTest {
     @Test
     @DisplayName("encrypt() should produce a non-null, non-empty Base64 string")
     void encrypt_shouldProduceBase64Output() {
-        String ciphertext = encryptionService.encrypt("sk-ant-prod-key-12345");
+        String ciphertext = encryptionService.encrypt("EXAMPLE-PROVIDER-KEY-NOT-REAL");
         assertThat(ciphertext).isNotNull().isNotEmpty();
     }
 
     @Test
     @DisplayName("decrypt(encrypt(x)) should return the original plaintext")
     void encryptThenDecrypt_shouldReturnOriginal() {
-        String original = "sk-openai-very-secret-api-key";
+        String original = "EXAMPLE-PROVIDER-KEY-NOT-REAL";
         String ciphertext = encryptionService.encrypt(original);
         String decrypted = encryptionService.decrypt(ciphertext);
 
@@ -41,8 +41,8 @@ class EncryptionServiceTest {
     @ParameterizedTest
     @ValueSource(strings = {
         "short",
-        "a-medium-length-api-key-1234",
-        "sk-ant-api03-very-long-enterprise-key-with-lots-of-characters-abcdefghijklmnop1234567890"
+        "a-medium-length-example-value-1234",
+        "an-example-value-long-enough-to-span-several-AES-blocks-abcdefghijklmnop1234567890"
     })
     @DisplayName("encrypt/decrypt should handle various key lengths")
     void encryptDecrypt_variousLengths(String plaintext) {
@@ -73,11 +73,35 @@ class EncryptionServiceTest {
             .isInstanceOf(RuntimeException.class);
     }
 
-    @Test
-    @DisplayName("Constructor should throw when master key is not 32 bytes")
-    void constructor_withInvalidKeyLength_shouldThrow() {
-        assertThatThrownBy(() -> new EncryptionService("short_key"))
+    @ParameterizedTest
+    @ValueSource(strings = {
+        "short_key",                                                           // odd length
+        "0123456789abcdef0123456789abcdef",                                    // 16 bytes, not 32
+        "0011223344556677889900aabbccddeeff0011223344556677889900aabbccddee",  // 33 bytes
+        "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",    // 64 chars, not hex
+        "0011223344556677889900aabbccddeeff0011223344556677889900aabbccdX"     // one non-hex char
+    })
+    @DisplayName("Constructor should reject any master key that is not 64 hex characters")
+    void constructor_withInvalidKey_shouldThrow(String badKey) {
+        assertThatThrownBy(() -> new EncryptionService(badKey))
             .isInstanceOf(IllegalArgumentException.class)
             .hasMessageContaining("256 bits");
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"", "   "})
+    @DisplayName("Constructor should reject an unset master key rather than fall back to a default")
+    void constructor_withUnsetKey_shouldThrow(String unset) {
+        assertThatThrownBy(() -> new EncryptionService(unset))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("not set");
+    }
+
+    @Test
+    @DisplayName("Constructor should reject a null master key")
+    void constructor_withNullKey_shouldThrow() {
+        assertThatThrownBy(() -> new EncryptionService(null))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("not set");
     }
 }
