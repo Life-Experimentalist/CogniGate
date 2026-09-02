@@ -82,7 +82,7 @@
 				],
 				"body": {
 					"mode": "raw",
-					"raw": "{\n  \"providerName\": \"anthropic\",\n  \"apiKey\": \"sk-ant-prod-key-1234567\"\n}"
+					"raw": "{\n  \"providerName\": \"anthropic\",\n  \"apiKey\": \"EXAMPLE-PROVIDER-KEY-NOT-REAL\"\n}"
 				},
 				"url": {
 					"raw": "http://localhost:8081/api/admin/tenants/1/keys",
