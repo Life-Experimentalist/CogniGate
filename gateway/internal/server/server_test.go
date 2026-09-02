@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cognigate/gateway/internal/apierr"
 	"github.com/cognigate/gateway/internal/config"
@@ -173,6 +174,18 @@ func TestHealthzIsUnauthenticatedAndFailsWhileDraining(t *testing.T) {
 	res := h.do(http.MethodGet, "/healthz", "", nil)
 	if res.status != http.StatusOK {
 		t.Fatalf("/healthz status = %d, want 200 (body %s)", res.status, res.body)
+	}
+
+	// GW-5.AC-2: the unauthenticated probe must say nothing about who is on the
+	// deployment. It is reachable by anyone who can open a socket, so a tenant id
+	// or a provider name here is readable by anyone who can open a socket.
+	tenant := h.newTenant("acme")
+	h.addProvider(tenant.id, "vendor-of-record")
+	res = h.do(http.MethodGet, "/healthz", "", nil)
+	for _, secret := range []string{tenant.id, "vendor-of-record", "acme"} {
+		if strings.Contains(string(res.body), secret) {
+			t.Errorf("/healthz body names %q: %s", secret, res.body)
+		}
 	}
 
 	// GW-11: a load balancer must stop sending work the moment a drain starts,
@@ -464,8 +477,14 @@ func TestHealthReportsCatalogAndStore(t *testing.T) {
 	var report healthReport
 	h.do(http.MethodGet, "/v1/health", tenant.dataKey, nil).decode(t, &report)
 
-	if report.Status != "ok" {
-		t.Errorf("status = %q, want %q (report %+v)", report.Status, "ok", report)
+	// Degraded, not ok — and for exactly one reason. GW-2 requires the seeded
+	// alias set to include "transcribe", the test provider serves no
+	// transcription model, and GW-5 makes any unresolvable alias a degradation.
+	// So a chat-only deployment reporting itself degraded out of the box is the
+	// specified behaviour rather than a defect, and the report has to name which
+	// alias is responsible or the status is not actionable.
+	if report.Status != "degraded" {
+		t.Errorf("status = %q, want %q (report %+v)", report.Status, "degraded", report)
 	}
 	if !report.Store.Reachable {
 		t.Error("in-memory store reported unreachable")
@@ -473,8 +492,38 @@ func TestHealthReportsCatalogAndStore(t *testing.T) {
 	if report.Catalog.Models != 2 {
 		t.Errorf("catalog models = %d, want 2", report.Catalog.Models)
 	}
-	if len(report.Providers) != 1 || report.Providers[0].Name != "test" {
+	if len(report.Providers) != 1 || report.Providers[0].Provider != "test" {
 		t.Errorf("providers = %+v, want one named \"test\"", report.Providers)
+	}
+
+	// GW-5.AC-1 names providers[].breaker and providers[].catalog.age_seconds,
+	// and aliases[], as the fields a dashboard renders from.
+	if got := report.Providers[0].Breaker; got != "closed" {
+		t.Errorf("breaker = %q, want %q on a provider that has served nothing", got, "closed")
+	}
+	if report.Providers[0].Catalog.State != "fresh" {
+		t.Errorf("provider catalog state = %q, want %q", report.Providers[0].Catalog.State, "fresh")
+	}
+	if len(report.Aliases) == 0 {
+		t.Fatal("aliases[] is empty; the seeded aliases should be listed")
+	}
+	for _, a := range report.Aliases {
+		if a.Name == "transcribe" {
+			if a.State != "degraded" || a.Reason != routing.ReasonAliasUnresolvable {
+				t.Errorf("transcribe = %+v, want degraded with reason %q",
+					a, routing.ReasonAliasUnresolvable)
+			}
+			continue
+		}
+		if a.State != "ok" || a.ResolvesTo == "" {
+			t.Errorf("alias %+v: want state ok with a resolves_to", a)
+		}
+	}
+	if report.Quota.State != httpx.QuotaOK {
+		t.Errorf("quota state = %q, want %q with no quota configured", report.Quota.State, httpx.QuotaOK)
+	}
+	if report.Gateway.Version == "" {
+		t.Error("gateway.version is empty")
 	}
 }
 
@@ -543,19 +592,243 @@ func TestHealthReportsOnlyTheCallersBreakers(t *testing.T) {
 	if mine.Status != "degraded" {
 		t.Errorf("acme status = %q, want %q", mine.Status, "degraded")
 	}
-	// Reported without the tenant segment, so the key reads the same way as
-	// X-CogniGate-Served-By.
-	if state, ok := mine.Breakers["test/test-small"]; !ok || state != "open" {
-		t.Errorf("acme breakers = %v, want test/test-small open", mine.Breakers)
+	// The breaker is per provider/model; health rolls it up to the provider,
+	// since that is the unit an operator can act on.
+	acmeProvider := findProvider(t, mine, "test")
+	if acmeProvider.Breaker != "open" {
+		t.Errorf("acme provider breaker = %q, want %q", acmeProvider.Breaker, "open")
+	}
+	if acmeProvider.BreakerUntil == "" {
+		t.Error("an open breaker reported no breaker_until; a dashboard cannot say how long is left")
 	}
 
 	var theirs healthReport
 	h.do(http.MethodGet, "/v1/health", globex.dataKey, nil).decode(t, &theirs)
-	if len(theirs.Breakers) != 0 {
-		t.Errorf("globex sees %v; another tenant's breakers must not be disclosed", theirs.Breakers)
+	theirProvider := findProvider(t, theirs, "test")
+	if theirProvider.Breaker != "closed" || theirProvider.BreakerUntil != "" {
+		t.Errorf("globex provider = %+v, want a closed breaker; another tenant's outage leaked", theirProvider)
 	}
-	if theirs.Status != "ok" {
-		t.Errorf("globex status = %q, want %q; another tenant's outage must not degrade it",
-			theirs.Status, "ok")
+	if theirProvider.Error != "" {
+		t.Errorf("globex provider error = %q, want none", theirProvider.Error)
 	}
+}
+
+// TestHealthIsUnavailableOnlyWhenEveryModelIsOut pins GW-5.AC-4, and with it the
+// line between "unavailable" and "degraded".
+//
+// The provider row is a worst-of rollup, so a tenant whose only provider has one
+// tripped model already reads "breaker": "open". Deriving the status from that
+// row would answer 503 from a gateway that is still serving every other model —
+// and a 503 is what an orchestrator restarts on. So the status is derived from
+// whether any model is left instead, which is what makes tripping the second one
+// the moment the answer changes.
+func TestHealthIsUnavailableOnlyWhenEveryModelIsOut(t *testing.T) {
+	h := newHarness(t, pollableHealth)
+	tenant := h.newTenant("acme")
+	h.addProvider(tenant.id, "test")
+
+	breaker := h.srv.Dispatcher.Breaker()
+	trip := func(model string) {
+		t.Helper()
+		key := routing.Key(tenant.id, "test", model)
+		for i := 0; i < h.srv.Config.Routing.Breaker.ErrorThreshold; i++ {
+			breaker.Allow(key)
+			breaker.Failure(key)
+		}
+		if got := breaker.State(key); got != routing.StateOpen {
+			t.Fatalf("breaker for %q = %v, want open", model, got)
+		}
+	}
+
+	trip("test-small")
+	res := h.do(http.MethodGet, "/v1/health", tenant.dataKey, nil)
+	if res.status != http.StatusOK {
+		t.Fatalf("status = %d, want 200: test-large is still serving\n%s", res.status, res.body)
+	}
+	var half healthReport
+	res.decode(t, &half)
+	if half.Status != "degraded" {
+		t.Errorf("status = %q, want %q with one model of two out", half.Status, "degraded")
+	}
+	if got := findProvider(t, half, "test").Breaker; got != "open" {
+		t.Errorf("provider breaker = %q, want %q: the rollup should surface the tripped model", got, "open")
+	}
+
+	trip("test-large")
+	res = h.do(http.MethodGet, "/v1/health", tenant.dataKey, nil)
+	if res.status != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503 once every model is out\n%s", res.status, res.body)
+	}
+	var out healthReport
+	res.decode(t, &out)
+	if out.Status != "unavailable" {
+		t.Errorf("status = %q, want %q", out.Status, "unavailable")
+	}
+
+	// GW-5 asks for the per provider/model detail wherever the breaker is
+	// model-scoped, which here it always is. Without it the provider row cannot
+	// distinguish the two states this test just moved between.
+	p := findProvider(t, out, "test")
+	if len(p.Breakers) != 2 {
+		t.Fatalf("breakers = %+v, want both models listed", p.Breakers)
+	}
+	for _, b := range p.Breakers {
+		if b.Breaker != "open" || b.BreakerUntil == "" {
+			t.Errorf("model breaker %+v: want open with a breaker_until", b)
+		}
+	}
+}
+
+// TestHealthReportsAStaleCatalogAsDegraded pins GW-5.AC-6.
+func TestHealthReportsAStaleCatalogAsDegraded(t *testing.T) {
+	h := newHarness(t, func(c *config.Config) {
+		// Short enough that a test can wait it out, rather than the six-hour
+		// default. The TTL is left alone, so the snapshot is not refreshed out
+		// from under the assertion: age is the whole subject here.
+		c.Catalog.StaleWarnAfter = 25 * time.Millisecond
+	})
+	tenant := h.newTenant("acme")
+	h.addProvider(tenant.id, "test")
+
+	// Populate the catalog, then let it age past the warning threshold. The wait
+	// is generous because this is wall-clock arithmetic against a snapshot
+	// timestamp, and Windows resolves that to milliseconds rather than
+	// nanoseconds.
+	h.do(http.MethodGet, "/v1/models", tenant.dataKey, nil)
+	time.Sleep(150 * time.Millisecond)
+
+	res := h.do(http.MethodGet, "/v1/health", tenant.dataKey, nil)
+	if res.status != http.StatusOK {
+		t.Fatalf("status = %d, want 200: a stale catalog is a degradation, not an outage", res.status)
+	}
+	var report healthReport
+	res.decode(t, &report)
+
+	if report.Status != "degraded" {
+		t.Errorf("status = %q, want %q", report.Status, "degraded")
+	}
+	if report.Catalog.State != "stale" {
+		t.Errorf("catalog state = %q, want %q", report.Catalog.State, "stale")
+	}
+	// Stale by age, not because the snapshot was served from a failed refresh.
+	// The two are different conditions and the report must not conflate them.
+	if report.Catalog.Stale {
+		t.Error("catalog.stale is set; nothing here failed to refresh")
+	}
+	if got := findProvider(t, report, "test").Catalog.State; got != "stale" {
+		t.Errorf("provider catalog state = %q, want %q", got, "stale")
+	}
+}
+
+// TestHealthFlagsAnAliasWhosePinIsGone covers the case an alias survives and a
+// request would never notice: resolveAlias falls through to the constraints when
+// a pin is missing, so the alias keeps answering — with something other than what
+// the operator pinned. Health is the only place that difference is visible.
+func TestHealthFlagsAnAliasWhosePinIsGone(t *testing.T) {
+	h := newHarness(t, pollableHealth)
+	tenant := h.newTenant("acme")
+	h.addProvider(tenant.id, "test")
+	h.putAlias(tenant, "pinned", map[string]any{
+		"pin":          "test-large",
+		"capabilities": []string{"chat"},
+	})
+
+	var before healthReport
+	h.do(http.MethodGet, "/v1/health", tenant.dataKey, nil).decode(t, &before)
+	if a := findName(t, before.Aliases, "pinned"); a.State != "ok" {
+		t.Fatalf("alias %+v: want ok while the pin exists", a)
+	}
+
+	// The provider retires the pinned model. Nothing on the write path can see
+	// this: the alias was checked against the catalog of the day it was written.
+	h.adapter.models = defaultModels[:1]
+	h.srv.Catalog.Invalidate(tenant.id)
+
+	var after healthReport
+	h.do(http.MethodGet, "/v1/health", tenant.dataKey, nil).decode(t, &after)
+	if after.Status != "degraded" {
+		t.Errorf("status = %q, want %q", after.Status, "degraded")
+	}
+
+	a := findName(t, after.Aliases, "pinned")
+	if a.Reason != routing.ReasonPinUnresolvable {
+		t.Errorf("alias %+v: want reason %q", a, routing.ReasonPinUnresolvable)
+	}
+	if a.ResolvesTo != "test/test-small" {
+		t.Errorf("alias resolves_to = %q, want %q: a missing pin degrades the alias "+
+			"without stopping it serving", a.ResolvesTo, "test/test-small")
+	}
+}
+
+// TestHealthFlagsAChainAnAliasEditMadeRedundant covers GW-3.AC-8.
+//
+// GW-3 rejects a chain that names the same model twice, and it does so when the
+// chain is written. This is the version of that mistake it cannot catch: the
+// chain is still correct as written, and an edit to something else entirely — an
+// alias one of its positions goes through — is what made two adjacent positions
+// mean the same provider and model.
+func TestHealthFlagsAChainAnAliasEditMadeRedundant(t *testing.T) {
+	h := newHarness(t, pollableHealth)
+	tenant := h.newTenant("acme")
+	h.addProvider(tenant.id, "test")
+
+	h.putAlias(tenant, "primary", map[string]any{"pin": "test-large"})
+	res := h.do(http.MethodPut, "/admin/v1/tenants/"+tenant.id+"/routes", tenant.adminKey,
+		map[string]any{"match": "workhorse", "chain": []string{"primary", "test-small"}})
+	if res.status != http.StatusOK {
+		t.Fatalf("creating the route: status %d, body %s", res.status, res.body)
+	}
+
+	var before healthReport
+	h.do(http.MethodGet, "/v1/health", tenant.dataKey, nil).decode(t, &before)
+	if r := findName(t, before.Rules, "workhorse"); r.State != "ok" {
+		t.Fatalf("rule %+v: want ok while the two positions still differ", r)
+	}
+
+	h.putAlias(tenant, "primary", map[string]any{"pin": "test-small"})
+
+	var after healthReport
+	h.do(http.MethodGet, "/v1/health", tenant.dataKey, nil).decode(t, &after)
+	if after.Status != "degraded" {
+		t.Errorf("status = %q, want %q", after.Status, "degraded")
+	}
+	r := findName(t, after.Rules, "workhorse")
+	if r.Reason != routing.ReasonFallbackDuplicate {
+		t.Errorf("rule %+v: want reason %q", r, routing.ReasonFallbackDuplicate)
+	}
+}
+
+// pollableHealth turns the GW-5 health cache off. The tests that change state
+// and then read /v1/health twice inside one cache window would otherwise be
+// served the answer from before the change.
+func pollableHealth(c *config.Config) { c.Health.CacheTTL = 0 }
+
+func (h *harness) putAlias(tenant tenantFixture, name string, body map[string]any) {
+	h.t.Helper()
+	res := h.do(http.MethodPut, "/admin/v1/tenants/"+tenant.id+"/aliases/"+name, tenant.adminKey, body)
+	if res.status != http.StatusOK {
+		h.t.Fatalf("upserting alias %q: status %d, body %s", name, res.status, res.body)
+	}
+}
+
+func findProvider(t *testing.T, r healthReport, name string) providerHealth {
+	t.Helper()
+	for _, p := range r.Providers {
+		if p.Provider == name {
+			return p
+		}
+	}
+	t.Fatalf("provider %q missing from the health report: %+v", name, r.Providers)
+	return providerHealth{}
+}
+
+func findName(t *testing.T, states []routing.NameState, name string) routing.NameState {
+	t.Helper()
+	for _, s := range states {
+		if s.Name == name {
+			return s
+		}
+	}
+	t.Fatalf("%q missing from the health report: %+v", name, states)
+	return routing.NameState{}
 }

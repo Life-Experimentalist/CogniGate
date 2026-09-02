@@ -30,6 +30,33 @@ func (s State) String() string {
 	}
 }
 
+// Health is the GW-5 spelling of a state, which differs from String only in the
+// hyphen. The two are separate because String feeds the breaker.opened and
+// breaker.closed event payloads and the metrics labels — published contracts of
+// their own, which are not free to change to suit a third one.
+func (s State) Health() string {
+	if s == StateHalfOpen {
+		return "half-open"
+	}
+	return s.String()
+}
+
+// BlockRank orders states by how much traffic they stop, for rollups that need
+// a worst-of. It is deliberately not the numeric order of the constants: those
+// are numbered for the cognigate_breaker_state gauge, where half-open sits
+// above open, whereas a provider with one model open and another half-open is
+// most honestly described as open.
+func BlockRank(s State) int {
+	switch s {
+	case StateOpen:
+		return 2
+	case StateHalfOpen:
+		return 1
+	default:
+		return 0
+	}
+}
+
 // Breaker trips a provider+model pair out of rotation once it has failed often
 // enough, and keeps it out long enough for the upstream to recover.
 //
@@ -166,20 +193,36 @@ func (b *Breaker) State(key string) State {
 	return e.state
 }
 
+// Status is a breaker's position plus, while it is open, the moment it will
+// next admit a probe. GW-5 reports that deadline as breaker_until so a dashboard
+// can say how long the outage has left to run rather than only that there is
+// one.
+type Status struct {
+	State State
+	// Until is set only for StateOpen. A half-open breaker is already admitting
+	// probes, so there is nothing to wait for.
+	Until time.Time
+}
+
 // Snapshot returns every non-closed breaker, for GET /v1/health.
-func (b *Breaker) Snapshot() map[string]State {
+func (b *Breaker) Snapshot() map[string]Status {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	out := map[string]State{}
+	out := map[string]Status{}
 	now := b.now()
 	for key, e := range b.entries {
 		state := e.state
 		if state == StateOpen && now.Sub(e.openedAt) >= b.openFor {
 			state = StateHalfOpen
 		}
-		if state != StateClosed {
-			out[key] = state
+		if state == StateClosed {
+			continue
 		}
+		st := Status{State: state}
+		if state == StateOpen {
+			st.Until = e.openedAt.Add(b.openFor)
+		}
+		out[key] = st
 	}
 	return out
 }
