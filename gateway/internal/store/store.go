@@ -51,9 +51,12 @@ type Store interface {
 	ListRoutes(ctx context.Context, tenantID string) ([]*Route, error)
 	DeleteRoute(ctx context.Context, tenantID, id string) error
 
+	// The quota methods take a key id alongside the tenant. An empty key id
+	// addresses the tenant's own quota; a non-empty one addresses the quota
+	// that further constrains that single key.
 	SetQuota(ctx context.Context, q *Quota) (*Quota, error)
-	GetQuota(ctx context.Context, tenantID string) (*Quota, error)
-	DeleteQuota(ctx context.Context, tenantID string) error
+	GetQuota(ctx context.Context, tenantID, keyID string) (*Quota, error)
+	DeleteQuota(ctx context.Context, tenantID, keyID string) error
 
 	CreateWebhook(ctx context.Context, w *Webhook) (*Webhook, error)
 	ListWebhooks(ctx context.Context, tenantID string) ([]*Webhook, error)
@@ -63,6 +66,10 @@ type Store interface {
 	// path. It must not block: a slow store degrades the data plane.
 	RecordUsage(ctx context.Context, rec *UsageRecord) error
 	Usage(ctx context.Context, tenantID string, since, until time.Time) (UsageTotals, error)
+	// KeyUsage is Usage narrowed to the records one key produced, for
+	// evaluating a key-level quota. Keys are attributed by prefix because that
+	// is what a usage record carries: the key material never reaches the store.
+	KeyUsage(ctx context.Context, tenantID, keyPrefix string, since, until time.Time) (UsageTotals, error)
 	UsageBreakdown(ctx context.Context, tenantID string, since, until time.Time, groupBy string) ([]UsageBucket, error)
 
 	// Ping reports whether the backing store is reachable, for GET /v1/health.

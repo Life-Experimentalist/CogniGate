@@ -18,7 +18,9 @@ package apierr
 import (
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
+	"time"
 )
 
 // Envelope types. These reuse OpenAI's vocabulary rather than inventing a
@@ -138,6 +140,12 @@ type Error struct {
 
 	// Attempts is the routing cascade, rendered only for upstream_exhausted.
 	Attempts []Attempt
+
+	// RetryAfterSeconds becomes the Retry-After header. Zero leaves the
+	// boundary to pick a default, which is why a quota rejection sets it: the
+	// useful answer is the time until the window resets, and only the quota
+	// evaluation knows that.
+	RetryAfterSeconds int
 }
 
 func (e *Error) Error() string {
@@ -187,6 +195,18 @@ func (e *Error) WithCause(err error) *Error {
 func (e *Error) WithAttempts(attempts []Attempt) *Error {
 	c := *e
 	c.Attempts = attempts
+	return &c
+}
+
+// WithRetryAfter sets how long the caller should wait, in seconds. Anything
+// below one second is rounded up: a Retry-After of 0 invites an immediate retry
+// that is certain to fail again. Returns a copy.
+func (e *Error) WithRetryAfter(d time.Duration) *Error {
+	c := *e
+	c.RetryAfterSeconds = int(math.Ceil(d.Seconds()))
+	if c.RetryAfterSeconds < 1 {
+		c.RetryAfterSeconds = 1
+	}
 	return &c
 }
 

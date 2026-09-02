@@ -384,6 +384,10 @@ func (m *Memory) DeleteRoute(_ context.Context, tenantID, id string) error {
 
 // --- quotas ----------------------------------------------------------------
 
+// quotaKey addresses one quota. The NUL separator cannot occur in either id, so
+// no tenant/key pair can collide with another.
+func quotaKey(tenantID, keyID string) string { return tenantID + "\x00" + keyID }
+
 func (m *Memory) SetQuota(_ context.Context, q *Quota) (*Quota, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -391,15 +395,16 @@ func (m *Memory) SetQuota(_ context.Context, q *Quota) (*Quota, error) {
 		return nil, ErrNotFound
 	}
 	saved := *q
-	m.quotas[q.TenantID] = &saved
+	saved.UpdatedAt = m.now().UTC()
+	m.quotas[quotaKey(q.TenantID, q.KeyID)] = &saved
 	out := saved
 	return &out, nil
 }
 
-func (m *Memory) GetQuota(_ context.Context, tenantID string) (*Quota, error) {
+func (m *Memory) GetQuota(_ context.Context, tenantID, keyID string) (*Quota, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	q, ok := m.quotas[tenantID]
+	q, ok := m.quotas[quotaKey(tenantID, keyID)]
 	if !ok {
 		return nil, ErrNotFound
 	}
@@ -407,13 +412,14 @@ func (m *Memory) GetQuota(_ context.Context, tenantID string) (*Quota, error) {
 	return &out, nil
 }
 
-func (m *Memory) DeleteQuota(_ context.Context, tenantID string) error {
+func (m *Memory) DeleteQuota(_ context.Context, tenantID, keyID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if _, ok := m.quotas[tenantID]; !ok {
+	k := quotaKey(tenantID, keyID)
+	if _, ok := m.quotas[k]; !ok {
 		return ErrNotFound
 	}
-	delete(m.quotas, tenantID)
+	delete(m.quotas, k)
 	return nil
 }
 
@@ -476,6 +482,19 @@ func (m *Memory) Usage(_ context.Context, tenantID string, since, until time.Tim
 	var out UsageTotals
 	for _, r := range m.usage[tenantID] {
 		if !inWindow(r.RecordedAt, since, until) {
+			continue
+		}
+		addUsage(&out, r)
+	}
+	return out, nil
+}
+
+func (m *Memory) KeyUsage(_ context.Context, tenantID, keyPrefix string, since, until time.Time) (UsageTotals, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var out UsageTotals
+	for _, r := range m.usage[tenantID] {
+		if r.KeyPrefix != keyPrefix || !inWindow(r.RecordedAt, since, until) {
 			continue
 		}
 		addUsage(&out, r)
