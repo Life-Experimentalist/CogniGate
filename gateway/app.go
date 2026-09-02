@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/cognigate/gateway/internal/analytics"
 	"github.com/cognigate/gateway/internal/catalog"
 	"github.com/cognigate/gateway/internal/config"
 	"github.com/cognigate/gateway/internal/events"
@@ -71,16 +72,27 @@ func build(cfg config.Config, dev bool, logger *slog.Logger, version string) (*a
 	// its in-memory store. That is what makes `--dev` a single process, and it
 	// is also the honest behaviour for a misconfigured deployment — serving
 	// from memory and saying so in /v1/health beats refusing to start.
-	if cfg.Analytics.BaseURL != "" {
-		return nil, fmt.Errorf(
-			"analytics.base_url is set to %q but no durable store is implemented yet; "+
-				"leave it empty to run on the in-memory store", cfg.Analytics.BaseURL)
-	}
+	//
+	// With one configured, the usage plane moves there and everything else
+	// stays put. The gateway never waits on analytics to start: the client is
+	// built, not dialled, so a deployment whose analytics container is still
+	// coming up serves requests and buffers their metering until it answers.
 	mem := store.NewMemory(dev)
 	a.store = mem
+	sink := obs.Sink(mem)
+
+	if cfg.Analytics.BaseURL != "" {
+		client, err := analytics.NewClient(cfg.Analytics)
+		if err != nil {
+			return nil, err
+		}
+		composed := analytics.NewStore(mem, client)
+		a.store = composed
+		sink = composed
+	}
 
 	metrics := obs.NewMetrics()
-	a.telemetry = obs.NewTelemetry(mem, cfg.Telemetry.Buffer, logger, metrics)
+	a.telemetry = obs.NewTelemetry(sink, cfg.Telemetry.Buffer, logger, metrics)
 
 	// Events are delivered in every mode, dev included. A dev process that
 	// accepted webhook registrations on the admin plane and then silently never
@@ -126,9 +138,14 @@ func build(cfg config.Config, dev bool, logger *slog.Logger, version string) (*a
 		breakerObservers(metrics, events.BreakerHook(a.events)),
 	)
 
+	// The server gets the composed store: /v1/usage and the GW-4 quota
+	// aggregations are usage reads, and they must see what was written. Every
+	// other component below is handed mem directly, because none of them touch
+	// usage and routing a tenant lookup through analytics would put a network
+	// hop on the authentication path.
 	a.server = server.New(server.Deps{
 		Config:         cfg,
-		Store:          mem,
+		Store:          a.store,
 		Catalog:        cat,
 		Resolver:       resolver,
 		Dispatcher:     routing.NewDispatcher(resolver, breaker, registry, mem),

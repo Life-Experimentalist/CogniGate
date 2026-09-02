@@ -245,18 +245,42 @@ func TestBreakerEventsReachASubscribedWebhook(t *testing.T) {
 	}
 }
 
-// A configured analytics service is not yet implemented. Starting anyway would
-// serve from memory while an operator believed their data was being persisted,
-// so the failure has to be at boot and it has to say what to do instead.
-func TestBuildRefusesAConfiguredAnalyticsServiceItCannotHonour(t *testing.T) {
+// GW-11.AC-3: a configured analytics service moves the usage plane there. The
+// gateway must not dial it at boot — a compose deployment starts both containers
+// at once, and a gateway that waited would be down for as long as its dependency
+// took to come up.
+func TestBuildMovesUsageToAConfiguredAnalyticsService(t *testing.T) {
 	cfg := config.Default()
 	cfg.Admin.BootstrapKey = "a-long-enough-bootstrap-key"
-	cfg.Analytics.BaseURL = "http://analytics:8081"
+	// Deliberately not listening: build must succeed against a service that is
+	// not up yet.
+	cfg.Analytics.BaseURL = "http://analytics.invalid:8081"
+
+	a, err := build(cfg, false, testLogger(), "test")
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	defer a.Close()
+
+	// "analytics" alone would tell an operator the deployment is durable when a
+	// restart still loses every tenant and key.
+	if got := a.store.Kind(); got != "memory+analytics" {
+		t.Errorf("store kind = %q, want %q", got, "memory+analytics")
+	}
+}
+
+// A base URL the client cannot use is a misconfiguration, not a degraded mode:
+// there is no address to buffer towards, so the failure has to be at boot and it
+// has to name the setting at fault.
+func TestBuildRefusesAnUnusableAnalyticsBaseURL(t *testing.T) {
+	cfg := config.Default()
+	cfg.Admin.BootstrapKey = "a-long-enough-bootstrap-key"
+	cfg.Analytics.BaseURL = "analytics:8081"
 
 	a, err := build(cfg, false, testLogger(), "test")
 	if err == nil {
 		a.Close()
-		t.Fatal("build accepted an analytics base URL it cannot honour")
+		t.Fatal("build accepted an analytics base URL the client cannot use")
 	}
 	if !strings.Contains(err.Error(), "analytics.base_url") {
 		t.Errorf("error %q does not name the setting at fault", err)
