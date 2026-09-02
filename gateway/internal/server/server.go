@@ -166,7 +166,7 @@ func (s *Server) routes() {
 	v1.Get("/health", s.handleHealth)
 	v1.Get("/meta", s.handleMeta)
 
-	s.adminRoutes(s.app.Group("/admin/v1", s.auth(store.PlaneAdmin)))
+	s.adminRoutes(s.app.Group("/admin/v1", s.auth(store.PlaneAdmin), s.auditMutations()))
 
 	// Anything unmatched is an explicit 404 with code not_supported. GW-9 forbids
 	// passing an unknown OpenAI path through to a provider: a gateway whose

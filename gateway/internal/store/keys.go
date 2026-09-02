@@ -44,6 +44,7 @@ const (
 	IDWebhook  = "whk"
 	IDRequest  = "req"
 	IDEvent    = "evt"
+	IDAudit    = "aud"
 )
 
 // GenerateAPIKey mints a credential for one plane. `dev` inserts a visible

@@ -34,6 +34,14 @@ type Tenant struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+// TenantPatch is a partial update. Every field is a pointer so that "absent"
+// and "set to the zero value" stay distinguishable — without that, a PATCH
+// carrying only a status change would silently blank the name.
+type TenantPatch struct {
+	Name   *string
+	Status *string
+}
+
 // APIKey stores only a hash. The plaintext is returned once, at creation, and
 // is then unrecoverable — a stolen database yields no working credential.
 type APIKey struct {
@@ -74,6 +82,43 @@ type Provider struct {
 	// credentials are registered without ever returning one.
 	KeyPrefixes []string  `json:"key_prefixes"`
 	CreatedAt   time.Time `json:"created_at"`
+}
+
+// ProviderPatch is a partial update, with the same pointer convention as
+// TenantPatch. Keys is a slice rather than a pointer because a nil slice
+// already means "absent" and an empty one is refused by the handler: a provider
+// with no credentials could never serve a request, so accepting that write
+// would only produce a provider that fails at dispatch time instead of at the
+// moment someone made the mistake.
+type ProviderPatch struct {
+	BaseURL *string
+	Enabled *bool
+	Keys    []string
+}
+
+// AuditEntry is one line of the append-only admin log GW-6 requires.
+//
+// It records who did what to which resource and how it ended — never the
+// request body. An admin write can carry provider credentials, and a log that
+// captured them would hand an auditor a second copy of every secret the key
+// vault exists to protect. GW-14 applies here like anywhere else.
+type AuditEntry struct {
+	ID   string    `json:"id"`
+	At   time.Time `json:"at"`
+	// Actor is the credential's display prefix, not its id: the prefix is what
+	// an operator sees when listing keys, so it is what makes the log legible.
+	Actor      string `json:"actor"`
+	ActorKeyID string `json:"actor_key_id"`
+	ActorScope string `json:"actor_scope"`
+	Action     string `json:"action"` // create | update | upsert | delete
+	Resource   string `json:"resource"`
+	TenantID   string `json:"tenant_id,omitempty"`
+	// Status is the HTTP status the attempt produced. Refused writes are logged
+	// too: an attempt to reach another tenant is exactly what this log is read
+	// to find, and one that succeeded is not more interesting than one that did
+	// not.
+	Status    int    `json:"status"`
+	RequestID string `json:"request_id,omitempty"`
 }
 
 // Model is one catalog entry, as discovered from a provider (GW-1).

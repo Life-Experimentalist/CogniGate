@@ -15,6 +15,13 @@ import (
 // for a store that makes no durability promise anyway.
 const maxMemoryUsageRecords = 50_000
 
+// maxMemoryAuditEntries bounds the in-memory audit log for the same reason
+// maxMemoryUsageRecords bounds the usage one. It is far smaller because an
+// admin write is a rare event: a control plane doing thousands of them is
+// either under attack or being driven by a script that should be batching, and
+// in both cases the oldest entries are the least useful.
+const maxMemoryAuditEntries = 5_000
+
 // Memory is the dependency-free Store. It backs `cognigate --dev` (GW-11) and
 // the conformance suite's embedded mode, so the full admin plane works with no
 // Postgres and no Redis.
@@ -33,6 +40,7 @@ type Memory struct {
 	quotas     map[string]*Quota
 	webhooks   map[string][]*Webhook
 	usage      map[string][]*UsageRecord
+	audit      []*AuditEntry
 
 	// dev marks keys minted here with a visible dev- infix.
 	dev bool
@@ -130,8 +138,47 @@ func (m *Memory) ListTenants(context.Context) ([]*Tenant, error) {
 	for _, t := range m.tenants {
 		out = append(out, cloneTenant(t))
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
+	// The id breaks ties. Tenants are iterated out of a map, the clock is coarse
+	// enough that two created in the same test tick share a timestamp, and
+	// sort.Slice is not stable — without a total order the same collection could
+	// come back in a different order on the next call, which is exactly what a
+	// pagination cursor cannot survive.
+	sort.Slice(out, func(i, j int) bool {
+		if !out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].CreatedAt.Before(out[j].CreatedAt)
+		}
+		return out[i].ID < out[j].ID
+	})
 	return out, nil
+}
+
+// UpdateTenant applies a partial change. Renaming still has to clear the
+// uniqueness check, and a tenant renamed to what it is already called is not a
+// conflict with itself.
+func (m *Memory) UpdateTenant(_ context.Context, id string, patch TenantPatch) (*Tenant, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	t, ok := m.tenants[id]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	if patch.Name != nil {
+		name := strings.TrimSpace(*patch.Name)
+		if name == "" {
+			return nil, fmt.Errorf("%w: tenant name is required", ErrConflict)
+		}
+		for otherID, other := range m.tenants {
+			if otherID != id && strings.EqualFold(other.Name, name) {
+				return nil, fmt.Errorf("%w: a tenant named %q already exists", ErrConflict, name)
+			}
+		}
+		t.Name = name
+	}
+	if patch.Status != nil {
+		t.Status = *patch.Status
+	}
+	return cloneTenant(t), nil
 }
 
 // DeleteTenant removes the tenant and everything scoped to it. Leaving orphaned
@@ -201,7 +248,13 @@ func (m *Memory) ListAPIKeys(_ context.Context, tenantID string) ([]*APIKey, err
 			out = append(out, cloneKey(k))
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
+	// Total order, for the reason given in ListTenants.
+	sort.Slice(out, func(i, j int) bool {
+		if !out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].CreatedAt.Before(out[j].CreatedAt)
+		}
+		return out[i].ID < out[j].ID
+	})
 	return out, nil
 }
 
@@ -265,6 +318,40 @@ func (m *Memory) GetProvider(_ context.Context, tenantID, id string) (*Provider,
 		if p.ID == id || strings.EqualFold(p.Name, id) {
 			return cloneProvider(p), nil
 		}
+	}
+	return nil, ErrNotFound
+}
+
+// UpdateProvider rotates credentials, moves a base URL, or takes a provider out
+// of rotation without deleting it. Disabling rather than deleting is the point:
+// a deleted provider takes its id with it, so every routing rule naming it has
+// to be rewritten to bring it back.
+//
+// Replacing the key pool re-derives the display prefixes from the new material.
+// Deriving them anywhere else would let the two drift, and the prefixes are the
+// only view of the pool anyone outside this package ever gets.
+func (m *Memory) UpdateProvider(_ context.Context, tenantID, id string, patch ProviderPatch) (*Provider, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for _, p := range m.providers[tenantID] {
+		if p.ID != id && !strings.EqualFold(p.Name, id) {
+			continue
+		}
+		if patch.BaseURL != nil {
+			p.BaseURL = strings.TrimRight(*patch.BaseURL, "/")
+		}
+		if patch.Enabled != nil {
+			p.Enabled = *patch.Enabled
+		}
+		if patch.Keys != nil {
+			p.Keys = append([]string(nil), patch.Keys...)
+			p.KeyPrefixes = make([]string, 0, len(patch.Keys))
+			for _, raw := range patch.Keys {
+				p.KeyPrefixes = append(p.KeyPrefixes, maskProviderKey(raw))
+			}
+		}
+		return cloneProvider(p), nil
 	}
 	return nil, ErrNotFound
 }
@@ -460,6 +547,37 @@ func (m *Memory) DeleteWebhook(_ context.Context, tenantID, id string) error {
 		}
 	}
 	return ErrNotFound
+}
+
+// --- audit -----------------------------------------------------------------
+
+func (m *Memory) RecordAudit(_ context.Context, e *AuditEntry) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	saved := *e
+	saved.ID = NewID(IDAudit)
+	saved.At = m.now().UTC()
+	m.audit = append(m.audit, &saved)
+	if len(m.audit) > maxMemoryAuditEntries {
+		m.audit = m.audit[len(m.audit)-maxMemoryAuditEntries:]
+	}
+	return nil
+}
+
+// ListAudit returns the log newest first, which is the order it is read in: the
+// question is nearly always "what changed just now", not "what changed when
+// this deployment was new".
+func (m *Memory) ListAudit(context.Context) ([]*AuditEntry, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	out := make([]*AuditEntry, 0, len(m.audit))
+	for i := len(m.audit) - 1; i >= 0; i-- {
+		e := *m.audit[i]
+		out = append(out, &e)
+	}
+	return out, nil
 }
 
 // --- usage -----------------------------------------------------------------

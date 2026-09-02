@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
@@ -73,7 +74,52 @@ func TestAdminScopeRefusesForeignTenant(t *testing.T) {
 		{http.MethodDelete, "/admin/v1/tenants/" + other.id + "/quota", nil},
 	} {
 		res := h.do(tc.method, tc.path, acme.adminKey, tc.body)
-		h.expectError(res, http.StatusForbidden, apierr.CodeInsufficientScope)
+		h.expectError(res, http.StatusNotFound, apierr.CodeResourceNotFound)
+	}
+}
+
+// TestAdminForeignTenantIsIndistinguishableFromMissing is the point of
+// answering 404 rather than 403.
+//
+// A 403 confirms the tenant exists, which is the one fact the caller was not
+// entitled to learn: with it, anyone holding a single tenant's key can
+// enumerate every customer of the deployment by guessing ids and reading status
+// codes. The refusal only closes that if a real tenant and an invented one are
+// answered identically, so this pins the whole envelope — not just the status —
+// with the request id, which is unique per call, removed.
+func TestAdminForeignTenantIsIndistinguishableFromMissing(t *testing.T) {
+	h := newHarness(t)
+	acme := h.newTenant("acme")
+	other := h.newTenant("other")
+
+	// Both ids have the same shape; only one names a tenant that exists.
+	fabricated := strings.Replace(other.id, "ten_", "ten_0", 1)
+
+	body := func(id string) string {
+		res := h.do(http.MethodGet, "/admin/v1/tenants/"+id, acme.adminKey, nil)
+		if res.status != http.StatusNotFound {
+			t.Fatalf("GET tenant %s: status = %d, want 404", id, res.status)
+		}
+		var env struct {
+			Error map[string]any `json:"error"`
+		}
+		res.decode(t, &env)
+		delete(env.Error, "request_id")
+		// The id is echoed in the message, so substitute a constant for it:
+		// the comparison is about whether anything else differs.
+		if msg, ok := env.Error["message"].(string); ok {
+			env.Error["message"] = strings.ReplaceAll(msg, id, "<id>")
+		}
+		out, err := json.Marshal(env.Error)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		return string(out)
+	}
+
+	if real, missing := body(other.id), body(fabricated); real != missing {
+		t.Errorf("a real foreign tenant and a fabricated one are distinguishable:\n"+
+			" existing: %s\nfabricated: %s", real, missing)
 	}
 }
 
@@ -707,7 +753,7 @@ func TestCatalogRefreshRefusesAForeignTenant(t *testing.T) {
 
 	res := h.do(http.MethodPost, "/admin/v1/catalog/refresh", acme.adminKey,
 		map[string]any{"tenant": other.id})
-	h.expectError(res, http.StatusForbidden, apierr.CodeInsufficientScope)
+	h.expectError(res, http.StatusNotFound, apierr.CodeResourceNotFound)
 }
 
 // TestCatalogRefreshOnAnUnknownTenantIsNotFound: a tenant with no providers and
