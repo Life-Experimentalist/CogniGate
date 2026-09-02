@@ -21,7 +21,13 @@ import (
 // version is stamped at build time:
 //
 //	go build -ldflags "-X main.version=$(git describe --tags)"
-var version = "dev"
+//
+// The default is semver rather than the word "dev" because /v1/meta publishes it
+// as a version a client is entitled to compare (GW-9), and an unparseable one is
+// worse than an honest 0.0.0. The prerelease segment is what says "not a
+// release": it sorts below every released version, which is exactly right for a
+// build nobody tagged.
+var version = "0.0.0-dev"
 
 func main() {
 	if err := run(os.Args[1:], os.Stdout, os.Stderr); err != nil {

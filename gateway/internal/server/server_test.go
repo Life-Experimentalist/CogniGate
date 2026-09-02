@@ -283,21 +283,37 @@ func TestMetaDescribesTheImplementedSurface(t *testing.T) {
 
 	// Every advertised endpoint must actually route. An endpoint listed here and
 	// answered with not_supported is worse than one that was never advertised.
-	for _, endpoint := range meta.Endpoints {
-		method, path, ok := strings.Cut(endpoint, " ")
+	//
+	// GW-9 advertises families rather than routes, so the probe for each one is
+	// written down here instead of parsed out of the name. The two lists are
+	// checked against each other, which is the part that matters: a family added
+	// to meta without a probe fails rather than going untested.
+	probes := map[string]struct {
+		method string
+		path   string
+	}{
+		"chat.completions": {http.MethodPost, "/v1/chat/completions"},
+		"models":           {http.MethodGet, "/v1/models"},
+		"usage":            {http.MethodGet, "/v1/usage"},
+		"usage.breakdown":  {http.MethodGet, "/v1/usage/breakdown"},
+		"health":           {http.MethodGet, "/v1/health"},
+		"meta":             {http.MethodGet, "/v1/meta"},
+	}
+	if len(probes) != len(meta.Endpoints) {
+		t.Errorf("meta advertises %d endpoint families and this test probes %d: %v", len(meta.Endpoints), len(probes), meta.Endpoints)
+	}
+	for _, family := range meta.Endpoints {
+		probe, ok := probes[family]
 		if !ok {
-			t.Errorf("endpoint %q is not \"METHOD /path\"", endpoint)
+			t.Errorf("endpoint family %q is advertised but has no probe here", family)
 			continue
 		}
-		if strings.Contains(path, "{") {
-			continue // templated; covered by the models tests
-		}
-		res := h.do(method, path, tenant.dataKey, map[string]any{})
+		res := h.do(probe.method, probe.path, tenant.dataKey, map[string]any{})
 		if res.status == http.StatusNotFound {
 			var body errorBody
 			res.decode(t, &body)
 			if body.Error.Code == apierr.CodeNotSupported {
-				t.Errorf("%s is advertised by /v1/meta but answers not_supported", endpoint)
+				t.Errorf("%s (%s %s) is advertised by /v1/meta but answers not_supported", family, probe.method, probe.path)
 			}
 		}
 	}

@@ -730,18 +730,31 @@ func reachable(provider string, snap *catalog.Snapshot, open map[string]bool) bo
 
 // --- GET /v1/meta -----------------------------------------------------------
 
+// apiVersion is the major the URL prefixes carry. It moves only when a change
+// removes something or alters what it means; everything additive ships inside
+// it (GW-9).
+const apiVersion = "v1"
+
 // metaResponse tells a client what this deployment actually supports, so a
 // caller can discover the surface rather than infer it from documentation that
 // may describe a different version (GW-9).
+//
+// The first six fields are the shape GW-9 documents, and are what a client
+// feature-detects against. The rest are this implementation's own: a tolerant
+// reader ignores them, and nothing in the contract depends on them.
 type metaResponse struct {
-	Object    string            `json:"object"`
-	Version   string            `json:"version"`
-	Mode      string            `json:"mode"` // dev | server
-	Store     string            `json:"store"`
-	Planes    map[string]string `json:"planes"`
-	Endpoints []string          `json:"endpoints"`
-	Features  map[string]bool   `json:"features"`
-	Limits    metaLimits        `json:"limits"`
+	Name         string     `json:"name"`
+	Version      string     `json:"version"`
+	APIVersion   string     `json:"api_version"`
+	Capabilities []string   `json:"capabilities"`
+	Endpoints    []string   `json:"endpoints"`
+	Limits       metaLimits `json:"limits"`
+
+	Object   string            `json:"object"`
+	Mode     string            `json:"mode"` // dev | server
+	Store    string            `json:"store"`
+	Planes   map[string]string `json:"planes"`
+	Features map[string]bool   `json:"features"`
 }
 
 type metaLimits struct {
@@ -754,31 +767,95 @@ type metaLimits struct {
 }
 
 func (s *Server) handleMeta(c *fiber.Ctx) error {
+	return c.JSON(s.meta())
+}
+
+// capabilities is the list of requirement ids this deployment implements and has
+// enabled, in the gw-N spelling GW-9 fixes. It is the machine-readable half of
+// the compatibility contract: a client feature-detects on it, and the
+// conformance suite selects which sections to run from it.
+//
+// The bar for adding an id is that the requirement's conformance section passes
+// against this build. GW-9 makes claiming an unimplemented capability a
+// conformance failure in its own right, so an id is added in the commit that
+// makes it true and not in the one that intends to.
+//
+// GW-10 and GW-11 are never listed, whatever this deployment does. Neither is a
+// behaviour of the running gateway — one is the conformance suite itself, the
+// other a deployment's resource footprint — so a process has nothing to claim
+// about them, and the suite exempts them from capability gating rather than
+// looking for them here.
+func (s *Server) capabilities() []string {
+	caps := []string{
+		"gw-1", // dynamic model discovery
+		"gw-2", // capability aliases
+		"gw-3", // fallback chains
+		"gw-4", // quota & budget API
+		"gw-5", // health & honest degradation
+		"gw-6", // admin/config API
+		"gw-7", // client/SDK contract
+	}
+	// Observability is a capability a deployment can turn off, and one that is
+	// half-absent when it does: the request log survives, but the metric names
+	// GW-8 fixes are not exported at all. Half of a requirement is not a
+	// capability, so the id goes rather than being qualified.
+	if s.Config.Metrics.Enabled {
+		caps = append(caps, "gw-8")
+	}
+	caps = append(caps, "gw-9") // versioning & compatibility
+	return caps
+}
+
+// meta builds the document both planes serve. GW-9 requires /admin/v1/meta to
+// answer the same thing /v1/meta does, so there is one builder and no second
+// list of endpoints to fall out of step with the first.
+//
+// It is rebuilt per call rather than cached. Every field reads a value fixed at
+// startup — configuration, the build's version, the store's kind — so the
+// document is stable for the process's life either way, and building it costs a
+// few map allocations against a 50 ms budget.
+func (s *Server) meta() metaResponse {
 	mode := "server"
 	if s.Dev {
 		mode = "dev"
 	}
-	return c.JSON(metaResponse{
-		Object:  "meta",
-		Version: s.version(),
-		Mode:    mode,
-		Store:   s.Store.Kind(),
+	return metaResponse{
+		Name:         "cognigate",
+		Version:      s.version(),
+		APIVersion:   apiVersion,
+		Capabilities: s.capabilities(),
+		// Endpoint families, not routes. A client asking "can I request a
+		// completion here" wants one answer, not one per verb and path
+		// template — and the paths are already implied by api_version.
+		// Advertised as implemented, and nothing else: anything absent
+		// answers 404 not_supported rather than being quietly proxied.
+		Endpoints: []string{
+			"chat.completions",
+			"models",
+			"usage",
+			"usage.breakdown",
+			"health",
+			"meta",
+		},
+		Limits: metaLimits{
+			MaxRequestBytes:     s.Config.Limits.MaxRequestBytes,
+			MaxResponseBytes:    s.Config.Limits.MaxResponseBytes,
+			RequestTimeoutSec:   int(s.Config.Limits.RequestTimeout.Seconds()),
+			StreamIdleTimeout:   int(s.Config.Limits.StreamIdleTimeout.Seconds()),
+			MaxConcurrentPerKey: s.Config.Limits.MaxConcurrentPerKey,
+			MaxFallbackDepth:    s.Config.Routing.MaxFallbackDepth,
+		},
+		Object: "meta",
+		Mode:   mode,
+		Store:  s.Store.Kind(),
 		Planes: map[string]string{
 			"data":  store.DataKeyPrefix,
 			"admin": store.AdminKeyPrefix,
 		},
-		// Advertised as implemented, and nothing else. GW-9 makes this list the
-		// contract: anything absent answers 404 not_supported rather than being
-		// quietly proxied.
-		Endpoints: []string{
-			"POST /v1/chat/completions",
-			"GET /v1/models",
-			"GET /v1/models/{id}",
-			"GET /v1/usage",
-			"GET /v1/usage/breakdown",
-			"GET /v1/health",
-			"GET /v1/meta",
-		},
+		// Finer grained than capabilities, and not a substitute for it: these
+		// name sub-behaviours within a requirement — whether quotas reject or
+		// only report, whether a webhook can be registered — which a gw-N id
+		// is too coarse to express.
 		Features: map[string]bool{
 			"streaming":         true,
 			"aliases":           true,
@@ -790,13 +867,5 @@ func (s *Server) handleMeta(c *fiber.Ctx) error {
 			"metrics":           s.Config.Metrics.Enabled,
 			"quota_enforcement": s.Config.Quotas.Enforcement == "on",
 		},
-		Limits: metaLimits{
-			MaxRequestBytes:     s.Config.Limits.MaxRequestBytes,
-			MaxResponseBytes:    s.Config.Limits.MaxResponseBytes,
-			RequestTimeoutSec:   int(s.Config.Limits.RequestTimeout.Seconds()),
-			StreamIdleTimeout:   int(s.Config.Limits.StreamIdleTimeout.Seconds()),
-			MaxConcurrentPerKey: s.Config.Limits.MaxConcurrentPerKey,
-			MaxFallbackDepth:    s.Config.Routing.MaxFallbackDepth,
-		},
-	})
+	}
 }

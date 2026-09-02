@@ -154,19 +154,32 @@ func parse(c *fiber.Ctx, dst any) error {
 
 // --- meta -------------------------------------------------------------------
 
+// adminMetaResponse is /v1/meta's document with the two things only an admin key
+// can be told: which scope the calling key holds, and the closed list of event
+// types a webhook may subscribe to.
+//
+// The embedded document is the point. GW-9 requires an admin key to be able to
+// feature-detect exactly as a data key does, so every field it names is the same
+// value here, produced by the same builder. The additions are additions; a
+// client reading either plane's response for `capabilities` finds the same list.
+type adminMetaResponse struct {
+	metaResponse
+	Scope  string   `json:"scope"`
+	Events []string `json:"events"`
+}
+
 func (s *Server) adminMeta(c *fiber.Ctx) error {
 	key := httpx.Key(c)
 	scope := ""
 	if key != nil {
 		scope = key.Scope
 	}
-	return c.JSON(fiber.Map{
-		"object":  "admin_meta",
-		"version": s.version(),
-		"store":   s.Store.Kind(),
-		"scope":   scope,
-		"events":  eventRegistry,
-	})
+	meta := s.meta()
+	// The one field that differs, and it is not one GW-9 names: it says which
+	// route answered, which is worth keeping now that the two bodies are
+	// otherwise indistinguishable.
+	meta.Object = "admin_meta"
+	return c.JSON(adminMetaResponse{metaResponse: meta, Scope: scope, Events: eventRegistry})
 }
 
 // eventRegistry is the closed list of event types a webhook may subscribe to.

@@ -44,21 +44,32 @@ func requirementOf(id string) string {
 
 // --- capability gating ------------------------------------------------------
 
-// featureGate maps a requirement onto the /v1/meta feature flag that decides
-// whether the target claims it.
+// capabilityExempt names the requirements that are never gated on what the
+// target claims, because a running gateway has nothing to claim about them:
+// GW-10 is this suite, and GW-11 is a deployment's resource footprint. Both are
+// observed from outside the process rather than implemented inside it, so
+// /v1/meta will never list them and their sections must run regardless.
 //
-// The gateway advertises capabilities by feature name rather than by
-// requirement number, so this translation has to live somewhere; putting it in
-// the suite keeps the gateway from having to grow a vocabulary that exists only
-// for its own test suite. A requirement absent from this map is unconditional:
-// there is no version of CogniGate that may decline to implement its error
-// envelope or its admin API.
-var featureGate = map[string]string{
-	"GW-2":  "aliases",
-	"GW-3":  "fallback_chains",
-	"GW-4":  "quotas",
-	"GW-12": "response_cache",
+// Everything else is gated. GW-9 makes `capabilities` the target's own account
+// of what it implements, so the suite takes it at its word in both directions:
+// a claimed requirement is tested and must pass, and an unclaimed one is skipped
+// rather than failed.
+var capabilityExempt = map[string]bool{
+	"GW-10": true,
+	"GW-11": true,
 }
+
+// gatedOut reports whether the target's capability list excuses a requirement's
+// section from running. The argument is a "GW-3"-style id.
+func gatedOut(requirement string) bool {
+	if capabilityExempt[requirement] {
+		return false
+	}
+	return !suite.capabilities[capabilityID(requirement)]
+}
+
+// capabilityID turns "GW-3" into the "gw-3" that /v1/meta publishes.
+func capabilityID(requirement string) string { return strings.ToLower(requirement) }
 
 // begin registers the test for the report, skips it when the target does not
 // claim the capability it exercises, and hands back the client.
@@ -80,10 +91,27 @@ func begin(t *testing.T) *client {
 	if suite.provision != nil {
 		t.Fatalf("the suite could not provision against the target: %v", suite.provision)
 	}
-	if feature := featureGate[requirementOf(id)]; feature != "" && !suite.features[feature] {
-		t.Skipf("not claimed: /v1/meta does not advertise %q", feature)
+	if requirement := requirementOf(id); gatedOut(requirement) {
+		t.Skipf("not claimed: /v1/meta capabilities do not include %q", capabilityID(requirement))
 	}
 	return suite.client
+}
+
+// beginOffline registers a test that asserts a property of the repository
+// rather than of a deployment, and so has no target to skip for.
+//
+// GW-9.AC-6 is the only one of these: it is a release-process rule, checked in
+// CI against the changelog, because no running gateway can answer whether its
+// release notes said the right thing.
+func beginOffline(t *testing.T) {
+	t.Helper()
+
+	id := acID(t.Name())
+	if id == "" {
+		t.Fatalf("test name %q does not embed an acceptance-criterion id; "+
+			"conformance tests must be named TestGW<n>_AC<n>_<Description>", t.Name())
+	}
+	record(t, id)
 }
 
 // requireFeature skips a single test whose capability is narrower than its
@@ -226,6 +254,13 @@ func TestMain(m *testing.M) {
 
 	code := m.Run()
 
+	if err := checkCapabilityClaims(); err != nil {
+		fmt.Fprintf(os.Stderr, "conformance: %v\n", err)
+		if code == 0 {
+			code = 1
+		}
+	}
+
 	if err := deprovision(); err != nil {
 		fmt.Fprintf(os.Stderr, "conformance: teardown failed: %v\n", err)
 		if code == 0 {
@@ -252,17 +287,90 @@ func loadCapabilities() error {
 	}
 
 	var meta struct {
-		Version  string          `json:"version"`
-		Features map[string]bool `json:"features"`
+		Version      string          `json:"version"`
+		Capabilities []string        `json:"capabilities"`
+		Features     map[string]bool `json:"features"`
 	}
 	if err := json.Unmarshal(resp.Body, &meta); err != nil {
 		return fmt.Errorf("parsing /v1/meta: %w", err)
 	}
 
 	suite.version = meta.Version
+	suite.capabilities = map[string]bool{}
+	for _, id := range meta.Capabilities {
+		suite.capabilities[strings.ToLower(strings.TrimSpace(id))] = true
+	}
 	suite.features = meta.Features
 	if suite.features == nil {
 		suite.features = map[string]bool{}
 	}
 	return nil
+}
+
+// checkCapabilityClaims enforces the half of GW-9.AC-2 that no single test can
+// see, because it is a property of the whole run rather than of any one call:
+// every requirement the target claims must have been exercised and come back
+// clean, and every requirement it does not claim must have been skipped rather
+// than failed.
+//
+// The second half is what makes the first safe to enforce. A suite that quietly
+// failed the sections it had gated off would make the capability list useless as
+// a selector — and a suite that reported "pass" for a claimed requirement it
+// never ran would make it useless as a promise.
+func checkCapabilityClaims() error {
+	resultsMu.Lock()
+	defer resultsMu.Unlock()
+
+	// Per requirement: how many results, and how many of each status.
+	type tally struct{ pass, fail, skip int }
+	byRequirement := map[string]*tally{}
+	for _, r := range results {
+		req := requirementOf(r.ID)
+		t, ok := byRequirement[req]
+		if !ok {
+			t = &tally{}
+			byRequirement[req] = t
+		}
+		switch r.Status {
+		case "pass":
+			t.pass++
+		case "fail":
+			t.fail++
+		default:
+			t.skip++
+		}
+	}
+
+	var problems []string
+	for req, t := range byRequirement {
+		if capabilityExempt[req] {
+			continue
+		}
+		claimed := suite.capabilities[capabilityID(req)]
+		switch {
+		case claimed && t.pass == 0:
+			// Every criterion skipped, or none ran. Either way the claim went
+			// unverified, which GW-9 does not allow a claim to do.
+			problems = append(problems, fmt.Sprintf(
+				"%s is claimed by /v1/meta but nothing in its section passed (%d skipped, %d failed)", req, t.skip, t.fail))
+		case !claimed && t.fail > 0:
+			problems = append(problems, fmt.Sprintf(
+				"%s is not claimed by /v1/meta but %d of its criteria failed; an unclaimed requirement must skip", req, t.fail))
+		}
+	}
+
+	// A claim with no section at all is the same unverified promise, and does
+	// not appear in the loop above because it produced no results.
+	for id := range suite.capabilities {
+		req := strings.ToUpper(id)
+		if byRequirement[req] == nil {
+			problems = append(problems, fmt.Sprintf("%s is claimed by /v1/meta but the suite has no section for it", req))
+		}
+	}
+
+	if len(problems) == 0 {
+		return nil
+	}
+	sort.Strings(problems)
+	return fmt.Errorf("capability claims do not match the run (GW-9.AC-2):\n  %s", strings.Join(problems, "\n  "))
 }

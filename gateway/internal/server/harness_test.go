@@ -167,7 +167,10 @@ func newHarness(t *testing.T, mutate ...func(*config.Config)) *harness {
 		Telemetry:  telemetry,
 		Events:     events,
 		Logger:     logger,
-		Version:    "test",
+		// Semver, because GW-9 makes the published version a value a client may
+		// parse — a fixture that could not be a real deployment's would let a
+		// build ship a version no client can compare.
+		Version: "1.0.0-test",
 	})
 
 	return &harness{t: t, srv: srv, mem: mem, adapter: adapter, events: events, telemetry: telemetry}

@@ -255,9 +255,13 @@ func (s *Server) metricsAuth() fiber.Handler {
 	}
 }
 
+// version is the string /v1/health and /v1/meta report. The fallback is semver
+// so that a Server assembled without one still publishes something a client can
+// parse (GW-9); see main.version for why the prerelease segment is the honest
+// spelling of "untagged build".
 func (s *Server) version() string {
 	if s.Version == "" {
-		return "dev"
+		return "0.0.0-dev"
 	}
 	return s.Version
 }
