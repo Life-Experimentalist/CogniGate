@@ -195,10 +195,10 @@ Every tenant is created with the portable aliases `fast`, `balanced`, `best` and
 that constraint in the tenant's catalog, so a client can be written once and keep
 working as providers ship new models.
 
-An ordered fallback chain is a route:
+An ordered fallback chain is a routing rule:
 
 ```bash
-curl -s -X PUT http://localhost:8080/admin/v1/tenants/ten_.../routes \
+curl -s -X PUT http://localhost:8080/admin/v1/tenants/ten_.../routing-rules \
   -H "Authorization: Bearer $BOOTSTRAP" \
   -H "Content-Type: application/json" \
   -d '{"match":"gpt-4o","chain":["gpt-4o","claude-3-5-sonnet","gpt-4o-mini"]}'
