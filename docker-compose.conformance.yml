@@ -1,0 +1,57 @@
+# The conformance suite's upstreams, overlaid on the reference deployment.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.conformance.yml up -d --wait
+#
+# This is an overlay rather than part of docker-compose.yml because the mock is
+# a test double. The reference deployment is what an operator copies, and a
+# provider that can be told to return 500 on request does not belong in it.
+#
+# Two mocks, not one. GW-10.AC-3 requires two suite runs to pass concurrently
+# against the same deployment, and the suite's isolation — every tenant, key,
+# alias, model and webhook sink named after the run — holds for the gateway but
+# not for the mock: a fault on GET /models is global to a mock process, and the
+# seed models' call counters are shared by everything that calls them. So each
+# concurrent run gets a mock of its own, and the two never meet.
+#
+# The gateway reaches a mock by service name on cogni-net; a suite running on
+# the host reaches its control plane through the published port. Those are the
+# two halves of CONF_MOCK_PROVIDER and CONF_MOCK_CONTROL_URL. A suite running
+# *in* a container on cogni-net needs only the first, which is why GW-10 can
+# document a three-variable contract for the image.
+
+services:
+  mock-provider-a:
+    build:
+      context: .
+      dockerfile: conformance/Dockerfile
+      target: mock
+    command: ["-port", "9900"]
+    ports:
+      - "19900:9900"
+    networks:
+      - cogni-net
+    healthcheck:
+      # The control plane rather than the model listing: GW-1.AC-6 arranges a
+      # fault on GET /models for the length of a test, and a probe pointed at
+      # it would report the mock unhealthy for doing exactly what it was asked
+      # to do. /_control/state cannot be faulted.
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9900/_control/state"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  mock-provider-b:
+    build:
+      context: .
+      dockerfile: conformance/Dockerfile
+      target: mock
+    command: ["-port", "9900"]
+    ports:
+      - "19901:9900"
+    networks:
+      - cogni-net
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9900/_control/state"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
