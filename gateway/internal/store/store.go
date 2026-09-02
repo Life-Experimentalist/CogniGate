@@ -16,11 +16,14 @@ var (
 // Store is the gateway's whole persistence surface.
 //
 // The gateway owns the public /admin/v1 routes on both deployments; this
-// interface is what changes underneath. In a compose deployment it is backed by
-// the analytics service, which owns Postgres, the key vault and webhook
-// delivery. Under `cognigate --dev` it is backed by Memory, which is why the
-// dev binary needs no Redis and no database while still serving the full admin
-// plane (GW-11).
+// interface is what changes underneath. Under `cognigate --dev` it is Memory
+// throughout, which is why the dev binary needs no database while still serving
+// the full admin plane (GW-11). In a compose deployment analytics.Store wraps
+// Memory and sends only the four usage methods to the analytics service, which
+// owns Postgres: usage is the half that has to survive a restart and be summed
+// across replicas. Everything else — tenants, keys, providers, routing rules,
+// quotas, webhooks and events — still answers from memory, and outlasting a
+// restart is the work that turns this interface into a real database client.
 type Store interface {
 	// ResolveKey authenticates a plaintext credential. It returns ErrNotFound
 	// for unknown, revoked and expired keys alike: distinguishing them tells a

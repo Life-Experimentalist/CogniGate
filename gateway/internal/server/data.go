@@ -764,10 +764,35 @@ type metaLimits struct {
 	StreamIdleTimeout   int   `json:"stream_idle_timeout_seconds"`
 	MaxConcurrentPerKey int   `json:"max_concurrent_per_key"`
 	MaxFallbackDepth    int   `json:"max_fallback_depth"`
+	// The rate limit GW-13 pairs with the concurrency cap. Published for the
+	// same reason as the rest: a client that has to discover its own ceiling by
+	// being refused will discover it in production.
+	RequestsPerSecond int `json:"requests_per_second"`
+	BurstCapacity     int `json:"burst_capacity"`
+}
+
+// metaLimits publishes the limits this caller is actually held to, which is what
+// GW-13.AC-6 checks against the behaviour the rest of GW-13 observes.
+//
+// max_response_bytes is the deployment's, because it is the deployment's: it
+// bounds what the gateway will buffer from an upstream, which is a property of
+// the process rather than of whoever asked.
+func (s *Server) metaLimits(c *fiber.Ctx) metaLimits {
+	lim := s.limits(c)
+	return metaLimits{
+		MaxRequestBytes:     lim.MaxRequestBytes,
+		MaxResponseBytes:    s.Config.Limits.MaxResponseBytes,
+		RequestTimeoutSec:   int(lim.RequestTimeout.Seconds()),
+		StreamIdleTimeout:   int(lim.StreamIdleTimeout.Seconds()),
+		MaxConcurrentPerKey: lim.MaxConcurrentPerKey,
+		MaxFallbackDepth:    s.Config.Routing.MaxFallbackDepth,
+		RequestsPerSecond:   lim.RequestsPerSecond,
+		BurstCapacity:       lim.BurstCapacity,
+	}
 }
 
 func (s *Server) handleMeta(c *fiber.Ctx) error {
-	return c.JSON(s.meta())
+	return c.JSON(s.meta(c))
 }
 
 // capabilities is the list of requirement ids this deployment implements and has
@@ -810,11 +835,14 @@ func (s *Server) capabilities() []string {
 // answer the same thing /v1/meta does, so there is one builder and no second
 // list of endpoints to fall out of step with the first.
 //
-// It is rebuilt per call rather than cached. Every field reads a value fixed at
-// startup — configuration, the build's version, the store's kind — so the
-// document is stable for the process's life either way, and building it costs a
-// few map allocations against a 50 ms budget.
-func (s *Server) meta() metaResponse {
+// It is rebuilt per call rather than cached, and takes the request because the
+// limits block is the caller's own: GW-13 lets a tenant be held to lower
+// ceilings than the deployment, and a meta document that published the
+// deployment's would tell that tenant the wrong numbers about its own traffic.
+// Everything else in it reads a value fixed at startup — configuration, the
+// build's version, the store's kind — so building it costs a few map
+// allocations against a 50 ms budget.
+func (s *Server) meta(c *fiber.Ctx) metaResponse {
 	mode := "server"
 	if s.Dev {
 		mode = "dev"
@@ -837,14 +865,7 @@ func (s *Server) meta() metaResponse {
 			"health",
 			"meta",
 		},
-		Limits: metaLimits{
-			MaxRequestBytes:     s.Config.Limits.MaxRequestBytes,
-			MaxResponseBytes:    s.Config.Limits.MaxResponseBytes,
-			RequestTimeoutSec:   int(s.Config.Limits.RequestTimeout.Seconds()),
-			StreamIdleTimeout:   int(s.Config.Limits.StreamIdleTimeout.Seconds()),
-			MaxConcurrentPerKey: s.Config.Limits.MaxConcurrentPerKey,
-			MaxFallbackDepth:    s.Config.Routing.MaxFallbackDepth,
-		},
+		Limits:  s.metaLimits(c),
 		Object: "meta",
 		Mode:   mode,
 		Store:  s.Store.Kind(),

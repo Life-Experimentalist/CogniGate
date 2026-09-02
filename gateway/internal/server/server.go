@@ -88,6 +88,7 @@ type Server struct {
 
 	app     *fiber.App
 	limiter *concurrencyLimiter
+	rates   *rateLimiter
 	health  *healthCache
 	quotas  *quotaCache
 
@@ -117,6 +118,7 @@ func New(d Deps) *Server {
 	s := &Server{
 		Deps:      d,
 		limiter:   newConcurrencyLimiter(d.Config.Limits.MaxConcurrentPerKey),
+		rates:     newRateLimiter(),
 		health:    &healthCache{ttl: d.Config.Health.CacheTTL},
 		quotas:    newQuotaCache(quotaCacheTTL),
 		startedAt: time.Now(),
@@ -173,7 +175,7 @@ func (s *Server) routes() {
 		s.app.Get(metricsPath(s.Config.Metrics.Path), s.metricsAuth(), s.handleMetrics)
 	}
 
-	v1 := s.app.Group("/v1", s.auth(store.PlaneData), s.limitConcurrency())
+	v1 := s.app.Group("/v1", s.auth(store.PlaneData), s.limitTenant())
 	v1.Post("/chat/completions", s.handleChatCompletions)
 	v1.Get("/models", s.handleListModels)
 	v1.Get("/models/*", s.handleGetModel)
