@@ -91,6 +91,7 @@ jobs:
           cp .env.example .env
           sed -i "s|^ENCRYPTION_MASTER_KEY=.*|ENCRYPTION_MASTER_KEY=$(openssl rand -hex 32)|" .env
           sed -i "s|^GATEWAY_BOOTSTRAP_KEY=.*|GATEWAY_BOOTSTRAP_KEY=$(openssl rand -hex 24)|" .env
+          sed -i "s|^ANALYTICS_TOKEN=.*|ANALYTICS_TOKEN=$(openssl rand -hex 32)|" .env
 
       # --wait blocks until every service reports healthy, which is the same
       # signal an operator gets. The timeout is above GW-11's 60s budget on
@@ -216,6 +217,7 @@ jobs:
           cp .env.example .env
           sed -i "s|^ENCRYPTION_MASTER_KEY=.*|ENCRYPTION_MASTER_KEY=$(openssl rand -hex 32)|" .env
           sed -i "s|^GATEWAY_BOOTSTRAP_KEY=.*|GATEWAY_BOOTSTRAP_KEY=$(openssl rand -hex 24)|" .env
+          sed -i "s|^ANALYTICS_TOKEN=.*|ANALYTICS_TOKEN=$(openssl rand -hex 32)|" .env
 
       # The reference deployment plus the two mock upstreams the overlay adds.
       # The whole stack, not just the gateway: the criterion is about what an
