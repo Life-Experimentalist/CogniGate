@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/cognigate/gateway/internal/apierr"
+	"github.com/cognigate/gateway/internal/events"
 	"github.com/cognigate/gateway/internal/httpx"
 	"github.com/cognigate/gateway/internal/store"
 )
@@ -263,9 +264,9 @@ func (s *Server) emitQuotaTransition(
 		"soft_threshold_pct": quota.SoftThresholdPct,
 	}
 
-	event := "quota.threshold_crossed"
+	event := events.QuotaThresholdCrossed
 	if current.state == httpx.QuotaHardExceeded {
-		event = "quota.hard_cap_reached"
+		event = events.QuotaHardCapReached
 	}
 	s.Events.Emit(ctx, tenantID, event, data)
 }
