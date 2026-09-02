@@ -87,11 +87,12 @@ var defaultModels = []store.Model{
 }
 
 type harness struct {
-	t       *testing.T
-	srv     *Server
-	mem     *store.Memory
-	adapter *fakeAdapter
-	events  *recordingEmitter
+	t         *testing.T
+	srv       *Server
+	mem       *store.Memory
+	adapter   *fakeAdapter
+	events    *recordingEmitter
+	telemetry *obs.Telemetry
 }
 
 // recordingEmitter stands in for the webhook dispatcher so a test can assert an
@@ -144,21 +145,42 @@ func newHarness(t *testing.T, mutate ...func(*config.Config)) *harness {
 	)
 	events := &recordingEmitter{}
 
+	// Discarding logs keeps `go test` output readable; the tests assert on
+	// responses, which is the contract, not on log lines.
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	metrics := obs.NewMetrics()
+	// Telemetry writes back into the same in-memory store the request path reads
+	// from, so a test can serve a completion and then assert the usage row it
+	// produced — which is the only way the streaming path's accounting is
+	// observable at all.
+	telemetry := obs.NewTelemetry(mem, cfg.Telemetry.Buffer, logger, metrics)
+	t.Cleanup(telemetry.Close)
+
 	srv := New(Deps{
 		Config:     cfg,
 		Store:      mem,
 		Catalog:    cat,
 		Resolver:   resolver,
 		Dispatcher: routing.NewDispatcher(resolver, breaker, registry, mem),
-		Metrics:    obs.NewMetrics(),
+		Metrics:    metrics,
+		Telemetry:  telemetry,
 		Events:     events,
-		// Discarding logs keeps `go test` output readable; the tests assert on
-		// responses, which is the contract, not on log lines.
-		Logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
-		Version: "test",
+		Logger:     logger,
+		Version:    "test",
 	})
 
-	return &harness{t: t, srv: srv, mem: mem, adapter: adapter, events: events}
+	return &harness{t: t, srv: srv, mem: mem, adapter: adapter, events: events, telemetry: telemetry}
+}
+
+// flushTelemetry blocks until every usage record queued so far has reached the
+// store.
+//
+// It works by stopping the dispatcher, which drains the queue on its way out, so
+// it is terminal: nothing recorded after it will ever be persisted. Call it once,
+// after the last request a test cares about.
+func (h *harness) flushTelemetry() {
+	h.t.Helper()
+	h.telemetry.Close()
 }
 
 // --- request helpers --------------------------------------------------------
@@ -294,13 +316,20 @@ func (h *harness) newKey(tenantID string, plane store.Plane, scope string) strin
 // addProvider registers an upstream so the tenant's catalog is non-empty.
 func (h *harness) addProvider(tenantID, name string) {
 	h.t.Helper()
+	h.addProviderWithKeys(tenantID, name, "upstream-key-1")
+}
+
+// addProviderWithKeys is addProvider with an explicit credential pool, for the
+// tests that care what happens when one key in the pool is rate limited.
+func (h *harness) addProviderWithKeys(tenantID, name string, keys ...string) {
+	h.t.Helper()
 
 	res := h.do(http.MethodPost, "/admin/v1/tenants/"+tenantID+"/providers", testBootstrapKey,
 		map[string]any{
 			"name":     name,
 			"kind":     provider.KindOpenAI,
 			"base_url": "https://upstream.invalid/v1",
-			"keys":     []string{"upstream-key-1"},
+			"keys":     keys,
 		})
 	if res.status != http.StatusCreated {
 		h.t.Fatalf("creating provider %q: status %d, body %s", name, res.status, res.body)
