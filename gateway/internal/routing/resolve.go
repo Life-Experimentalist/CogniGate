@@ -29,16 +29,23 @@ var SeededAliases = []store.Alias{
 
 // Candidate is one resolved place a request can be sent.
 type Candidate struct {
+	// TenantID is who this candidate was resolved for. It carries no routing
+	// meaning — it is here so the breaker key can be tenant-scoped, since
+	// Provider is only unique within a tenant.
+	TenantID   string
 	Provider   string
 	ProviderID string
 	Model      string
 	Entry      catalog.Entry
 }
 
-// Key is the candidate's breaker key.
-func (c Candidate) Key() string { return Key(c.Provider, c.Model) }
+// Key is the candidate's breaker key, which is tenant-scoped.
+func (c Candidate) Key() string { return Key(c.TenantID, c.Provider, c.Model) }
 
-// ServedBy is the value of the X-CogniGate-Served-By header.
+// ServedBy is the value of the X-CogniGate-Served-By header. It is deliberately
+// not the breaker key: this is a published response header with a documented
+// "<provider>/<model>" shape, and it must not grow a tenant id that the caller
+// already knows and that no other tenant should ever see.
 func (c Candidate) ServedBy() string { return c.Provider + "/" + c.Model }
 
 // Resolver turns the model a caller asked for into the ordered list of places
@@ -100,6 +107,10 @@ func (r *Resolver) Resolve(ctx context.Context, tenantID, requested string) ([]C
 				continue
 			}
 			seen[cand.ServedBy()] = true
+			// Stamped here rather than in entryCandidate: the catalog entry a
+			// candidate is built from knows the provider, but only the resolver
+			// knows who asked.
+			cand.TenantID = tenantID
 			out = append(out, cand)
 			break // one candidate per chain position; the chain is the fallback
 		}

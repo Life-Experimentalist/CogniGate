@@ -8,6 +8,7 @@ import (
 	"github.com/cognigate/gateway/internal/apierr"
 	"github.com/cognigate/gateway/internal/config"
 	"github.com/cognigate/gateway/internal/httpx"
+	"github.com/cognigate/gateway/internal/routing"
 )
 
 // --- GW-6 two-plane authentication ------------------------------------------
@@ -489,5 +490,63 @@ func TestHealthDegradesButStillAnswers200(t *testing.T) {
 	res.decode(t, &report)
 	if report.Status != "degraded" {
 		t.Errorf("status = %q, want %q (report %+v)", report.Status, "degraded", report)
+	}
+}
+
+// TestHealthReportsOnlyTheCallersBreakers pins the tenant isolation of both the
+// breaker and the health report.
+//
+// Provider names are chosen per tenant, so "test" here names two unrelated
+// upstreams with different credentials. Two things must hold: one tenant's
+// outage must not trip the other's breaker, and one tenant must not be able to
+// read the other's provider names and failures out of a health response.
+func TestHealthReportsOnlyTheCallersBreakers(t *testing.T) {
+	h := newHarness(t)
+	acme := h.newTenant("acme")
+	globex := h.newTenant("globex")
+	h.addProvider(acme.id, "test")
+	h.addProvider(globex.id, "test")
+
+	// Take acme's provider out of rotation, exactly as a run of upstream
+	// failures on the request path would.
+	breaker := h.srv.Dispatcher.Breaker()
+	key := routing.Key(acme.id, "test", "test-small")
+	for i := 0; i < h.srv.Config.Routing.Breaker.ErrorThreshold; i++ {
+		breaker.Allow(key)
+		breaker.Failure(key)
+	}
+	if got := breaker.State(key); got != routing.StateOpen {
+		t.Fatalf("breaker state = %v, want open; the rest of this test proves nothing", got)
+	}
+
+	// The isolation itself, independent of how health reports it: globex named
+	// its provider "test" too, and its breaker must be untouched.
+	theirKey := routing.Key(globex.id, "test", "test-small")
+	if got := breaker.State(theirKey); got != routing.StateClosed {
+		t.Errorf("globex breaker state = %v, want closed; the two tenants share a breaker entry", got)
+	}
+	if !breaker.Allow(theirKey) {
+		t.Error("globex is being skipped by a breaker that acme's failures opened")
+	}
+
+	var mine healthReport
+	h.do(http.MethodGet, "/v1/health", acme.dataKey, nil).decode(t, &mine)
+	if mine.Status != "degraded" {
+		t.Errorf("acme status = %q, want %q", mine.Status, "degraded")
+	}
+	// Reported without the tenant segment, so the key reads the same way as
+	// X-CogniGate-Served-By.
+	if state, ok := mine.Breakers["test/test-small"]; !ok || state != "open" {
+		t.Errorf("acme breakers = %v, want test/test-small open", mine.Breakers)
+	}
+
+	var theirs healthReport
+	h.do(http.MethodGet, "/v1/health", globex.dataKey, nil).decode(t, &theirs)
+	if len(theirs.Breakers) != 0 {
+		t.Errorf("globex sees %v; another tenant's breakers must not be disclosed", theirs.Breakers)
+	}
+	if theirs.Status != "ok" {
+		t.Errorf("globex status = %q, want %q; another tenant's outage must not degrade it",
+			theirs.Status, "ok")
 	}
 }
