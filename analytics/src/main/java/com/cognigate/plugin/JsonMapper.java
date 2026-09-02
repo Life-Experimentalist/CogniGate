@@ -1,6 +1,6 @@
 package com.cognigate.plugin;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import java.util.Map;
 
 public class JsonMapper implements AiProviderHandler {

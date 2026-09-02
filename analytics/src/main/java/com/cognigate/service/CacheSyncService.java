@@ -3,7 +3,7 @@ package com.cognigate.service;
 import com.cognigate.entity.Tenant;
 import com.cognigate.entity.RoutingRule;
 import com.cognigate.entity.ProviderKey;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
