@@ -9,6 +9,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/cognigate/gateway/internal/apierr"
 	"github.com/cognigate/gateway/internal/config"
 	"github.com/cognigate/gateway/internal/store"
 )
@@ -112,6 +113,93 @@ func TestARecordedRequestIsNotAlsoHeldInMemory(t *testing.T) {
 	}
 	if inner.Requests != 0 {
 		t.Fatalf("the wrapped store recorded %d requests, want none", inner.Requests)
+	}
+}
+
+// down builds the composed store against an analytics service that is not
+// listening, which is what `docker compose stop analytics` looks like from here.
+func down(t *testing.T) *Store {
+	t.Helper()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	url := srv.URL
+	srv.Close() // the port is now closed, so every request fails to connect
+
+	client, err := NewClient(config.Analytics{BaseURL: url})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	return NewStore(store.NewMemory(false), client)
+}
+
+// GW-11.AC-3 keeps the data plane serving while analytics is down. The usage
+// endpoints cannot be answered at all in that state, but "cannot answer yet" and
+// "the gateway is broken" are different things to a client: one is retried and
+// one is escalated. Before the usage plane moved off the in-process store these
+// reads could not fail, so an unclassified error fell through to a 500.
+func TestAUsageReadWhileAnalyticsIsDownIs503(t *testing.T) {
+	s := down(t)
+	ctx := context.Background()
+
+	for _, tc := range []struct {
+		name string
+		call func() error
+	}{
+		{"Usage", func() error {
+			_, err := s.Usage(ctx, "t", since, until)
+			return err
+		}},
+		{"KeyUsage", func() error {
+			_, err := s.KeyUsage(ctx, "t", "cg-abcd", since, until)
+			return err
+		}},
+		{"UsageBreakdown", func() error {
+			_, err := s.UsageBreakdown(ctx, "t", since, until, "model")
+			return err
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.call()
+			if err == nil {
+				t.Fatal("no error from a closed analytics service")
+			}
+			var e *apierr.Error
+			if !errors.As(err, &e) {
+				t.Fatalf("error does not classify: %v", err)
+			}
+			if e.Status != http.StatusServiceUnavailable {
+				t.Errorf("status = %d, want 503", e.Status)
+			}
+			// GW-7.AC-6 reserves Retry-After for rate limits, and there is no
+			// honest number to put in it for a dependency that is down.
+			if e.RetryAfterSeconds != 0 {
+				t.Errorf("Retry-After = %ds on a 503 that is not a rate limit", e.RetryAfterSeconds)
+			}
+			// GW-14: the caller gets a fixed sentence; the transport error is
+			// attached for the log line only.
+			if strings.Contains(e.Msg, "connect") || strings.Contains(e.Msg, "127.0.0.1") {
+				t.Errorf("the caller-visible message quotes the transport error: %q", e.Msg)
+			}
+			if e.Wrapped == nil {
+				t.Error("the cause was dropped, so the log line cannot say what failed")
+			}
+		})
+	}
+}
+
+// The write path is deliberately not classified: obs.Telemetry reads Permanent()
+// off the client's own error to tell a malformed record from an outage, and an
+// *apierr.Error in front of it would make the two indistinguishable.
+func TestARecordUsageFailureStaysClassifiable(t *testing.T) {
+	s := down(t)
+
+	err := s.RecordUsage(context.Background(), &store.UsageRecord{RequestID: "r1", TenantID: "t"})
+	if err == nil {
+		t.Fatal("no error from a closed analytics service")
+	}
+	var e *apierr.Error
+	if errors.As(err, &e) {
+		t.Fatalf("RecordUsage returned an HTTP error: %v", err)
 	}
 }
 
