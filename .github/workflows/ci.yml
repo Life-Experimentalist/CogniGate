@@ -89,32 +89,83 @@ jobs:
       - name: Create .env from example
         run: |
           cp .env.example .env
-          KEY=$(openssl rand -hex 32)
-          sed -i "s/ENCRYPTION_MASTER_KEY=.*/ENCRYPTION_MASTER_KEY=${KEY}/" .env
+          sed -i "s|^ENCRYPTION_MASTER_KEY=.*|ENCRYPTION_MASTER_KEY=$(openssl rand -hex 32)|" .env
+          sed -i "s|^GATEWAY_BOOTSTRAP_KEY=.*|GATEWAY_BOOTSTRAP_KEY=$(openssl rand -hex 24)|" .env
 
-      - name: Build and start containers
-        run: docker-compose up --build -d
+      # --wait blocks until every service reports healthy, which is the same
+      # signal an operator gets. The timeout is above GW-11's 60s budget on
+      # purpose: that budget is for a warm image on real hardware, and a cold
+      # JVM on a shared runner is not the thing it describes.
+      - name: Build and start the stack
+        run: docker compose up --build -d --wait --wait-timeout 180
 
-      - name: Wait for services to be healthy
+      - name: Smoke — the gateway is live
+        run: curl -fsS http://localhost:8080/healthz | jq -e '.status == "ok"'
+
+      # There is no upstream provider in this stack, so a completion cannot be
+      # asserted end to end yet. What can be asserted is that the data plane
+      # refuses an unauthenticated caller in the documented envelope — which is
+      # a stronger check than the mock response this replaced, because nothing
+      # about it can pass unless authentication and error rendering are both
+      # really running.
+      - name: Smoke — the data plane refuses an unauthenticated request
         run: |
-          echo "Waiting for services..."
-          sleep 30
+          code=$(curl -s -o body.json -w '%{http_code}' \
+            -X POST http://localhost:8080/v1/chat/completions \
+            -H 'Content-Type: application/json' \
+            -d '{"model":"gpt-4o","messages":[{"role":"user","content":"hello"}]}')
+          if [ "$code" != "401" ]; then
+            echo "expected 401, got $code"; cat body.json; exit 1
+          fi
+          jq -e '.error.code == "invalid_api_key" and (.error.request_id | length) > 0' body.json
 
-      - name: Smoke test — Gateway health
-        run: curl -sf http://localhost:8080/health
-
-      - name: Smoke test — Chat completions endpoint
+      - name: Smoke — bootstrap reaches the admin plane and mints a working key
         run: |
-          curl -sf -X POST http://localhost:8080/v1/chat/completions \
-            -H "Authorization: Bearer test" \
-            -H "Content-Type: application/json" \
-            -d '{"model":"gpt-4","messages":[{"role":"user","content":"Hello!"}]}' \
-            | jq '.object' | grep "chat.completion"
+          set -euo pipefail
+          BOOTSTRAP=$(grep '^GATEWAY_BOOTSTRAP_KEY=' .env | cut -d= -f2-)
+
+          TENANT=$(curl -fsS -X POST http://localhost:8080/admin/v1/tenants \
+            -H "Authorization: Bearer ${BOOTSTRAP}" \
+            -H 'Content-Type: application/json' \
+            -d '{"name":"smoke"}' | jq -er '.id')
+
+          SECRET=$(curl -fsS -X POST "http://localhost:8080/admin/v1/tenants/${TENANT}/keys" \
+            -H "Authorization: Bearer ${BOOTSTRAP}" \
+            -H 'Content-Type: application/json' \
+            -d '{"name":"smoke","plane":"data"}' | jq -er '.secret')
+
+          # The freshly minted key must open the data plane it was issued for.
+          curl -fsS http://localhost:8080/v1/models \
+            -H "Authorization: Bearer ${SECRET}" | jq -e '.object == "list"'
+
+          # And must not open the other one.
+          code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/admin/v1/tenants \
+            -H "Authorization: Bearer ${SECRET}")
+          if [ "$code" != "401" ]; then
+            echo "a data key reached the admin plane: ${code}"; exit 1
+          fi
+
+          # An OpenAI path CogniGate does not implement is an explicit 404,
+          # never a silent proxy to whatever an upstream happens to serve
+          # (GW-9). This needs the key: without one it is a 401 first.
+          code=$(curl -s -o body.json -w '%{http_code}' -X POST http://localhost:8080/v1/embeddings \
+            -H "Authorization: Bearer ${SECRET}" \
+            -H 'Content-Type: application/json' -d '{}')
+          if [ "$code" != "404" ]; then
+            echo "expected 404, got ${code}"; cat body.json; exit 1
+          fi
+          jq -e '.error.code == "not_supported"' body.json
+
+      - name: Smoke — metrics are exposed
+        run: curl -fsS http://localhost:8080/metrics | grep -q '^# HELP cognigate_'
+
+      - name: Smoke — analytics is live
+        run: curl -fsS http://localhost:8081/actuator/health | jq -e '.status == "UP"'
 
       - name: Print logs on failure
         if: failure()
-        run: docker-compose logs
+        run: docker compose logs --no-color
 
       - name: Tear down
         if: always()
-        run: docker-compose down -v
+        run: docker compose down -v

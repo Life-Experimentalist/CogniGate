@@ -3,8 +3,14 @@
 # Copy `.env.example` to `.env` and fill it in before running:
 #   cp .env.example .env
 #   openssl rand -hex 32   # -> ENCRYPTION_MASTER_KEY
+#   openssl rand -hex 24   # -> GATEWAY_BOOTSTRAP_KEY
 #
 # Compose reads `.env` from this directory automatically.
+#
+#   docker compose up -d --wait
+#
+# Every service declares a healthcheck, so `--wait` returns only once the whole
+# stack is actually serving rather than merely started (GW-11).
 
 services:
   gateway:
@@ -14,12 +20,13 @@ services:
     ports:
       - "8080:8080"
     environment:
-      - REDIS_URL=redis:6379
+      # The one credential that exists before any tenant does: it is how the
+      # first tenant, and therefore the first API key, gets created. No default,
+      # because a reference deployment that ships with a known admin credential
+      # is a reference deployment nobody should copy.
+      - CG_ADMIN_BOOTSTRAP_KEY=${GATEWAY_BOOTSTRAP_KEY:?generate one with `openssl rand -hex 24`}
     networks:
       - cogni-net
-    depends_on:
-      redis:
-        condition: service_healthy
 
   analytics:
     build:
@@ -31,6 +38,8 @@ services:
       - SPRING_DATASOURCE_URL=jdbc:postgresql://postgres-db:5432/${POSTGRES_DB:-cognigate}
       - SPRING_DATASOURCE_USERNAME=${POSTGRES_USER:-cognigate_user}
       - SPRING_DATASOURCE_PASSWORD=${POSTGRES_PASSWORD:-cognigate_pass}
+      - SPRING_DATA_REDIS_HOST=redis
+      - SPRING_DATA_REDIS_PORT=6379
       # No default: AES-256-GCM requires exactly 32 bytes (64 hex chars).
       # Compose refuses to start rather than fall back to a guessable key.
       - ENCRYPTION_MASTER_KEY=${ENCRYPTION_MASTER_KEY:?must be a 64-char hex string; generate with `openssl rand -hex 32`}
@@ -38,6 +47,8 @@ services:
       - cogni-net
     depends_on:
       postgres-db:
+        condition: service_healthy
+      redis:
         condition: service_healthy
 
   postgres-db:

@@ -40,9 +40,13 @@ type Config struct {
 }
 
 type Gateway struct {
-	Port     int    `yaml:"port"`
-	RedisURL string `yaml:"redis_url"`
+	Port int `yaml:"port"`
 }
+
+// MinBootstrapKeyLen is the shortest admin bootstrap credential the gateway
+// will accept. It is a floor on entropy, not a policy: anything shorter is
+// almost certainly a placeholder copied out of an example file.
+const MinBootstrapKeyLen = 16
 
 type Admin struct {
 	// BootstrapKey is the one credential that exists before any tenant does,
@@ -154,7 +158,7 @@ type Debug struct {
 // a YAML file that omits a key leaves the default in place rather than a zero.
 func Default() Config {
 	return Config{
-		Gateway: Gateway{Port: 8080, RedisURL: "localhost:6379"},
+		Gateway: Gateway{Port: 8080},
 		Admin:   Admin{},
 		Analytics: Analytics{
 			Timeout: 10 * time.Second,
@@ -236,7 +240,6 @@ func applyEnv(cfg *Config) {
 			cfg.Gateway.Port = n
 		}
 	})
-	envStr("REDIS_URL", func(v string) { cfg.Gateway.RedisURL = v })
 	envStr("ADMIN_BOOTSTRAP_KEY", func(v string) { cfg.Admin.BootstrapKey = v })
 	envStr("ANALYTICS_URL", func(v string) { cfg.Analytics.BaseURL = v })
 	envStr("ANALYTICS_TOKEN", func(v string) { cfg.Analytics.Token = v })
@@ -251,8 +254,8 @@ func applyEnv(cfg *Config) {
 }
 
 // envStr calls set with the first non-empty of CG_<name> or <name>. The
-// unprefixed spelling exists because REDIS_URL and PORT are near-universal
-// container conventions and operators reach for them first.
+// unprefixed spelling exists because PORT is a near-universal container
+// convention and operators reach for it first.
 func envStr(name string, set func(string)) {
 	for _, key := range []string{"CG_" + name, name} {
 		if v := strings.TrimSpace(os.Getenv(key)); v != "" {
@@ -268,6 +271,14 @@ func envStr(name string, set func(string)) {
 func (c Config) Validate() error {
 	if c.Gateway.Port < 1 || c.Gateway.Port > 65535 {
 		return fmt.Errorf("gateway.port %d out of range", c.Gateway.Port)
+	}
+	// Empty is allowed — a deployment may choose to have no bootstrap credential
+	// at all and provision keys some other way. A short one is not: it is a
+	// placeholder that the admin plane would silently refuse on every request,
+	// leaving an operator to debug 401s from a key they believe they configured.
+	if n := len(c.Admin.BootstrapKey); n > 0 && n < MinBootstrapKeyLen {
+		return fmt.Errorf("admin.bootstrap_key is %d characters; at least %d are required",
+			n, MinBootstrapKeyLen)
 	}
 	if c.Routing.MaxFallbackDepth < 1 {
 		return fmt.Errorf("routing.max_fallback_depth must be at least 1")

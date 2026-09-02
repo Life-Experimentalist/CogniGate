@@ -39,6 +39,13 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-security</artifactId>
         </dependency>
+        <!-- Actuator is what makes the container health-checkable. GW-11 asks
+             for `docker compose up -d` to reach all-healthy inside 60s, and a
+             service with no health endpoint can never report healthy. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
 
         <!-- PostgreSQL Database Driver -->
         <dependency>

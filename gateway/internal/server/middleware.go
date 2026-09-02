@@ -12,6 +12,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 
 	"github.com/cognigate/gateway/internal/apierr"
+	"github.com/cognigate/gateway/internal/config"
 	"github.com/cognigate/gateway/internal/httpx"
 	"github.com/cognigate/gateway/internal/store"
 )
@@ -150,16 +151,15 @@ func (s *Server) bootstrapMatches(raw string) bool {
 	// A short bootstrap key is worse than none: it is a root credential on an
 	// unauthenticated-by-default surface. Refusing to honour it is safer than
 	// letting a placeholder become the deployment's admin password.
-	if len(want) < minBootstrapKeyLen {
+	// Configuration validation rejects a short-but-non-empty value at startup, so
+	// in a running process this only ever catches the empty case. It stays here
+	// anyway: the check that a credential is long enough belongs beside the
+	// comparison, not only in the code path that happened to run first.
+	if len(want) < config.MinBootstrapKeyLen {
 		return false
 	}
 	return store.ConstantTimeEqual(raw, want)
 }
-
-// minBootstrapKeyLen is the shortest admin bootstrap credential the gateway will
-// accept. It is a floor on entropy, not a policy: anything shorter is almost
-// certainly a placeholder copied out of an example.
-const minBootstrapKeyLen = 16
 
 // limitConcurrency caps simultaneous in-flight requests per credential (GW-13).
 //
