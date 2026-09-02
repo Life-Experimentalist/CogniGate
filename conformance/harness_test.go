@@ -93,6 +93,15 @@ var suite suiteState
 
 // --- HTTP ------------------------------------------------------------------
 
+// The GW-7 extension headers, spelled out rather than imported. The suite
+// exercises a gateway through its published contract only, so it takes no
+// dependency on the implementation's own constants: a header renamed in the Go
+// code and not in the specification has to break this suite, not follow it.
+const (
+	headerServedBy      = "X-CogniGate-Served-By"
+	headerFallbackDepth = "X-CogniGate-Fallback-Depth"
+)
+
 type client struct {
 	base string
 	http *http.Client
@@ -229,6 +238,20 @@ func mockControl(t *testing.T, method, path string, body any) *response {
 	return resp
 }
 
+// tryMockControl is mockControl without the status assertion, for a call whose
+// failure is not a test failure. Removing a model the test body already removed
+// is the case that matters: the mock answers 404, which is the correct answer
+// and not something a teardown should turn into a red run.
+func tryMockControl(t *testing.T, method, path string, body any) *response {
+	t.Helper()
+	ctrl := &client{base: suite.mockCtrl, http: &http.Client{Timeout: 10 * time.Second}}
+	resp, err := ctrl.try(method, path, "", body)
+	if err != nil {
+		t.Fatalf("mock control %s %s: %v", method, path, err)
+	}
+	return resp
+}
+
 // injectFault arranges an upstream condition and clears it when the test ends,
 // so one test's fault can never leak into the next.
 func injectFault(t *testing.T, model, mode string, count int) {
@@ -298,8 +321,10 @@ func addMockModelSpec(t *testing.T, spec map[string]any) {
 	t.Helper()
 	id, _ := spec["id"].(string)
 	mockControl(t, http.MethodPost, "/_control/models", spec)
+	// Tolerant, because an acceptance criterion about a model disappearing
+	// deletes it in the test body and this would then be the second delete.
 	t.Cleanup(func() {
-		mockControl(t, http.MethodDelete, "/_control/models/"+id, nil)
+		tryMockControl(t, http.MethodDelete, "/_control/models/"+id, nil)
 	})
 }
 
@@ -401,12 +426,13 @@ type modelEntry struct {
 	ID        string `json:"id"`
 	OwnedBy   string `json:"owned_by"`
 	CogniGate struct {
-		Provider      string   `json:"provider"`
-		Alias         bool     `json:"alias"`
-		ResolvesTo    string   `json:"resolves_to"`
-		ContextWindow int      `json:"context_window"`
-		Capabilities  []string `json:"capabilities"`
-		DiscoveredAt  string   `json:"discovered_at"`
+		Provider         string   `json:"provider"`
+		Alias            bool     `json:"alias"`
+		ResolvesTo       string   `json:"resolves_to"`
+		ContextWindow    int      `json:"context_window"`
+		Capabilities     []string `json:"capabilities"`
+		InputCostPerMTok float64  `json:"input_cost_per_mtok"`
+		DiscoveredAt     string   `json:"discovered_at"`
 	} `json:"cognigate"`
 }
 
@@ -432,6 +458,102 @@ func findModel(entries []modelEntry, id string) (modelEntry, bool) {
 		}
 	}
 	return modelEntry{}, false
+}
+
+// concreteModels drops the alias rows. GW-2 puts aliases in the same list as
+// the models they resolve to, so almost every assertion about "a model" has to
+// say which of the two kinds of row it means.
+func concreteModels(entries []modelEntry) []modelEntry {
+	out := make([]modelEntry, 0, len(entries))
+	for _, e := range entries {
+		if !e.CogniGate.Alias {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// servedModel is the model half of X-CogniGate-Served-By.
+//
+// The header is qualified as provider/model while /v1/models lists bare ids, so
+// comparing the two directly is the easiest way to write an assertion that can
+// never pass.
+func servedModel(t *testing.T, r *response) string {
+	t.Helper()
+
+	served := r.Header.Get(headerServedBy)
+	if served == "" {
+		t.Fatalf("the response carries no %s header (status %d)\n%s",
+			headerServedBy, r.Status, truncate(r.Body))
+	}
+	// Cut at the first separator: a provider name never contains one, and a
+	// model id occasionally does.
+	_, model, ok := strings.Cut(served, "/")
+	if !ok || model == "" {
+		t.Fatalf("%s = %q, want the qualified provider/model form", headerServedBy, served)
+	}
+	return model
+}
+
+// --- aliases and routes -----------------------------------------------------
+
+// tryPutAlias writes an alias without insisting the write succeeded, for the
+// acceptance criteria that are about a rejection.
+//
+// The removal is registered even when the write failed. Deleting an alias that
+// was never created is a 404 nobody reads, and making the cleanup conditional
+// would mean a test that stopped between the two calls left the alias behind.
+func tryPutAlias(t *testing.T, tenantID, name string, spec map[string]any) *response {
+	t.Helper()
+
+	if spec == nil {
+		spec = map[string]any{}
+	}
+	t.Cleanup(func() {
+		suite.client.admin(t, http.MethodDelete,
+			"/admin/v1/tenants/"+tenantID+"/aliases/"+name, nil)
+	})
+	return suite.client.admin(t, http.MethodPut,
+		"/admin/v1/tenants/"+tenantID+"/aliases/"+name, spec)
+}
+
+func putAlias(t *testing.T, tenantID, name string, spec map[string]any) {
+	t.Helper()
+
+	resp := tryPutAlias(t, tenantID, name, spec)
+	if resp.Status != http.StatusOK {
+		t.Fatalf("PUT alias %q: status %d\n%s", name, resp.Status, truncate(resp.Body))
+	}
+}
+
+// tryPutRoute writes a fallback chain without insisting the write succeeded.
+func tryPutRoute(t *testing.T, tenantID, match string, chain []string) *response {
+	t.Helper()
+	return suite.client.admin(t, http.MethodPut, "/admin/v1/tenants/"+tenantID+"/routes",
+		map[string]any{"match": match, "chain": chain})
+}
+
+// putRoute writes a fallback chain and removes it when the test ends.
+//
+// Routes are addressed by an assigned id rather than by their match, so the
+// cleanup cannot be written without the response body.
+func putRoute(t *testing.T, tenantID, match string, chain ...string) {
+	t.Helper()
+
+	resp := tryPutRoute(t, tenantID, match, chain)
+	if resp.Status != http.StatusOK {
+		t.Fatalf("PUT route %q: status %d\n%s", match, resp.Status, truncate(resp.Body))
+	}
+	var created struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(resp.Body, &created); err != nil || created.ID == "" {
+		t.Fatalf("the created route has no id: %s", truncate(resp.Body))
+	}
+	t.Cleanup(func() {
+		suite.client.admin(t, http.MethodDelete,
+			"/admin/v1/tenants/"+tenantID+"/routes/"+created.ID, nil)
+	})
 }
 
 // chat sends a minimal completion. The prompt is deliberately trivial: GW-14
