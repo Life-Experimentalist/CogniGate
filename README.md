@@ -1,7 +1,11 @@
 <div align="center">
 
+<p align="center">
+  <img src="docs/public/banner.png" alt="CogniGate Social Banner" width="100%" />
+</p>
+
 <h1>
-  <img src="https://raw.githubusercontent.com/Life-Experimentalist/CogniGate/main/docs/public/logo.svg" alt="CogniGate Logo" width="64" height="64" /><br/>
+  <img src="docs/public/logo.png" alt="CogniGate Logo" width="64" height="64" style="border-radius: 12px" /><br/>
   CogniGate
 </h1>
 
@@ -80,7 +84,7 @@ CogniGate is a **self-hosted enterprise AI infrastructure platform** that sits b
 └────────────────────┬────────────────────────────────────────────┘
          │ Forward   │  goroutine: POST /api/webhook/telemetry
          ▼           ▼
-  LLM Providers   Analytics  (Java 26 + Spring Boot 4.1)
+  LLM Providers   Analytics  (Java 25 LTS + Spring Boot 4.1)
   (OpenAI, etc.)     :8081
                       │
               ┌───────┴────────┐
@@ -224,7 +228,7 @@ curl -X POST http://localhost:8081/api/admin/plugins/upload \
 | Component | Technology |
 |---|---|
 | Edge Proxy | Go 1.26, Fiber v2, gofiber/fiber |
-| Domain Engine | Java 26, Spring Boot 4.1, Hibernate, Project Loom (Virtual Threads) |
+| Domain Engine | Java 25 LTS, Spring Boot 4.1, Hibernate, Project Loom (Virtual Threads) |
 | Plugin Compiler | Janino 3.1.12 (in-memory Java compilation) |
 | Cache & Pub/Sub | Redis 7 |
 | Database | PostgreSQL 16 |
