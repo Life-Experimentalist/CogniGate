@@ -113,6 +113,41 @@ func (s *Server) observe() fiber.Handler {
 	}
 }
 
+// refuseWhenDraining answers a request that arrives after shutdown began with
+// 503 and Connection: close (GW-11).
+//
+// Fiber stops accepting new connections the moment Shutdown is called, so the
+// requests this catches are the ones arriving on connections that were already
+// open — a client reusing a keep-alive socket, which has no way to know the
+// process on the other end is going away. Connection: close is the half that
+// makes the answer useful: without it the client keeps the socket and sends the
+// next request down a connection that is about to be closed underneath it.
+//
+// In-flight requests never reach here. They are past this middleware before
+// draining is set, and GW-11 requires them — open SSE streams included — to run
+// to completion.
+func (s *Server) refuseWhenDraining() fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		if !s.draining.Load() {
+			return c.Next()
+		}
+		// Two exemptions, both for endpoints whose job is to describe the drain
+		// rather than to be refused by it. /healthz already answers 503 with
+		// {"status":"draining"}, which is the signal GW-11 requires a load
+		// balancer to steer on, and refusing it here would replace that with a
+		// generic envelope. /metrics is how an operator watches the drain
+		// happen; a gateway that stops reporting the moment it starts shutting
+		// down is dark for exactly the interval worth observing.
+		switch c.Path() {
+		case "/healthz", metricsPath(s.Config.Metrics.Path):
+			return c.Next()
+		}
+		c.Set(fiber.HeaderConnection, "close")
+		c.Context().SetConnectionClose()
+		return httpx.Fail(c, apierr.Unavailable("The gateway is shutting down and is not accepting new requests."))
+	}
+}
+
 // auth enforces the two-plane credential rule.
 //
 // The plane is read from the credential's own prefix before any store lookup,
