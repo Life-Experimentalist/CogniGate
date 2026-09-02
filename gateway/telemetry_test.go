@@ -1,17 +1,13 @@
 package main
 
 import (
-	"sync"
 	"testing"
 	"time"
 )
 
 // TestDispatchTelemetry_NonBlocking verifies the goroutine fires and doesn't block
 func TestDispatchTelemetry_NonBlocking(t *testing.T) {
-	var wg sync.WaitGroup
-	wg.Add(1)
-
-	// Override the goroutine to signal us when it fires
+	// Signals when the dispatch call returns
 	done := make(chan struct{}, 1)
 
 	go func() {
@@ -25,8 +21,6 @@ func TestDispatchTelemetry_NonBlocking(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("DispatchTelemetry timed out — may be blocking unexpectedly")
 	}
-
-	_ = wg
 }
 
 // TestDispatchTelemetry_Payload verifies the payload struct is correctly populated
