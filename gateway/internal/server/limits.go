@@ -167,8 +167,61 @@ func (s *Server) limitTenant() fiber.Handler {
 		if !ok {
 			return httpx.Fail(c, apierr.ConcurrencyExceeded(lim.MaxConcurrentPerKey))
 		}
-		defer release()
+		// A streamed completion outlives this handler: Fiber runs the body writer
+		// after the middleware chain has returned, and the relay is the part of a
+		// stream that is actually in flight. So the slot is offered to the route
+		// rather than simply held here, and only released on the way out if
+		// nothing adopted it.
+		held := &slot{release: release}
+		c.Locals(slotKey, held)
+		defer held.releaseUnlessAdopted()
 		return c.Next()
+	}
+}
+
+// slot is one concurrency permit whose release can be handed to whatever ends up
+// owning the request.
+//
+// The two owners are the middleware, for a buffered response that finishes when
+// the handler returns, and the SSE writer, for a stream that does not. Adoption
+// is one-way and single-shot, so exactly one of them releases: counting a stream
+// as finished at the moment its first byte is sent would make
+// max_concurrent_per_key a limit on how fast streams can be *started*, which is
+// not a limit on anything GW-13 cares about.
+type slot struct {
+	adopted bool
+	// release is the limiter's own closure, which is already guarded by a
+	// sync.Once — so a double release is harmless and the flag below is about
+	// intent, not safety.
+	release func()
+}
+
+type slotKeyType struct{}
+
+var slotKey = slotKeyType{}
+
+// adoptSlot transfers the request's concurrency permit to the caller, which
+// becomes responsible for releasing it. It returns a no-op for a request that
+// never took one — an unauthenticated route, or a build where the middleware did
+// not run — so a caller can defer the result unconditionally.
+func adoptSlot(c *fiber.Ctx) func() {
+	held, _ := c.Locals(slotKey).(*slot)
+	if held == nil {
+		return func() {}
+	}
+	return held.take()
+}
+
+// take is called from the handler, which always runs before the middleware's
+// deferred release, so no lock is needed to order the two.
+func (s *slot) take() func() {
+	s.adopted = true
+	return s.release
+}
+
+func (s *slot) releaseUnlessAdopted() {
+	if !s.adopted {
+		s.release()
 	}
 }
 

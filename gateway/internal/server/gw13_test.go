@@ -1,13 +1,22 @@
 package server
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"strconv"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/cognigate/gateway/internal/apierr"
 	"github.com/cognigate/gateway/internal/config"
+	"github.com/cognigate/gateway/internal/provider"
 	"github.com/cognigate/gateway/internal/store"
 )
 
@@ -222,6 +231,125 @@ func TestMetaPublishesTheCallersOwnLimits(t *testing.T) {
 		t.Errorf("admin limits %+v differ from data limits %+v; GW-9 requires one document",
 			admin.Limits, meta.Limits)
 	}
+}
+
+func TestStreamHoldsItsConcurrencySlotUntilTheRelayEnds(t *testing.T) {
+	// GW-13 caps requests "in flight", and a stream is in flight for as long as
+	// it is relaying — not for the few milliseconds it takes to send the status
+	// line. Fiber runs the body writer after the handler returns, so without the
+	// permit moving into the writer this limit would count how fast streams can
+	// be started rather than how many are open.
+	h := newHarness(t, func(c *config.Config) { c.Limits.StreamIdleTimeout = time.Minute })
+	tenant := h.newTenant("acme")
+	h.addProvider(tenant.id, "primary")
+	patchLimits(t, h, tenant.id, map[string]any{"max_concurrent_per_key": 1})
+
+	held := newHeldStream("data: {\"choices\":[{\"delta\":{\"content\":\"pong\"}}]}\n\n")
+	h.adapter.do = func(context.Context, provider.Credential, *provider.Request) (*provider.Response, error) {
+		return &provider.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{},
+			Stream:     held,
+			Failure:    provider.FailNone,
+		}, nil
+	}
+
+	payload, err := json.Marshal(chatRequest("test-small", true))
+	if err != nil {
+		t.Fatalf("marshalling the request: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+tenant.dataKey)
+
+	done := make(chan error, 1)
+	go func() {
+		res, err := h.srv.App().Test(req, -1)
+		if err == nil {
+			_, err = io.Copy(io.Discard, res.Body)
+			res.Body.Close()
+		}
+		done <- err
+	}()
+
+	select {
+	case <-held.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the relay never read from the upstream stream")
+	}
+
+	// The only slot is spoken for, and it stays that way while the frames flow.
+	res := h.do(http.MethodGet, "/v1/meta", tenant.dataKey, nil)
+	h.expectError(res, http.StatusTooManyRequests, apierr.CodeConcurrencyExceeded)
+
+	held.finish()
+	if err := <-done; err != nil {
+		t.Fatalf("the streamed request failed: %v", err)
+	}
+
+	// And it is given back afterwards. A permit that leaked would make the first
+	// stream on a key the last request on it.
+	if again := h.do(http.MethodGet, "/v1/meta", tenant.dataKey, nil); again.status != http.StatusOK {
+		t.Errorf("status = %d after the stream finished, want 200: the slot was never released", again.status)
+	}
+}
+
+func TestGatewayTimeoutQuotesTheBudgetThatWasEnforced(t *testing.T) {
+	// The 504 message is the only place a caller learns what deadline it hit. A
+	// tenant narrowed to five seconds being told it had two minutes sends them
+	// looking for a hang that is not there.
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+
+	err := timeoutAware(ctx, 5*time.Second, apierr.UpstreamExhausted(2))
+	var e *apierr.Error
+	if !errors.As(err, &e) {
+		t.Fatalf("timeoutAware returned %T, want *apierr.Error", err)
+	}
+	if e.Status != http.StatusGatewayTimeout || e.Code != apierr.CodeGatewayTimeout {
+		t.Fatalf("status/code = %d/%s, want 504/%s", e.Status, e.Code, apierr.CodeGatewayTimeout)
+	}
+	if !strings.Contains(e.Msg, "5s") {
+		t.Errorf("message = %q, want the tenant's 5s budget", e.Msg)
+	}
+}
+
+// heldStream emits one frame and then blocks, so a test can hold a relay open
+// for as long as it needs to look at what the gateway is doing meanwhile.
+type heldStream struct {
+	frame   []byte
+	started chan struct{}
+	release chan struct{}
+	sent    bool
+	once    sync.Once
+}
+
+func newHeldStream(frame string) *heldStream {
+	return &heldStream{
+		frame:   []byte(frame),
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+}
+
+func (s *heldStream) Read(p []byte) (int, error) {
+	if !s.sent {
+		s.sent = true
+		close(s.started)
+		return copy(p, s.frame), nil
+	}
+	<-s.release
+	return 0, io.EOF
+}
+
+// finish lets the blocked Read return, ending the relay. Close does the same,
+// because the relay's stall watchdog has no other lever and a reader that ignored
+// Close would hang the test rather than end it — so both go through one Once.
+func (s *heldStream) finish() { s.once.Do(func() { close(s.release) }) }
+
+func (s *heldStream) Close() error {
+	s.finish()
+	return nil
 }
 
 // patchLimits sets a tenant's overrides through the admin API rather than by
