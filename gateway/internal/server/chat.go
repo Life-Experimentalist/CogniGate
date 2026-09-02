@@ -146,8 +146,18 @@ func (s *Server) streamCompletion(c *fiber.Ctx, tenantID, requested string, body
 				slog.String("request_id", requestID),
 				slog.String("served_by", result.Candidate.ServedBy()))
 		case relayErr != nil && !errors.Is(relayErr, io.EOF):
+			// The upstream died part-way through — a dropped connection, a reset,
+			// a provider that panicked. Without a terminal event this is
+			// indistinguishable from a completion that simply ended, and GW-3.AC-7
+			// forbids leaving the caller to guess: a truncated answer must announce
+			// itself. If the reason the relay stopped is that the *client* hung up,
+			// this frame goes to a closed socket and is discarded, which costs
+			// nothing and is not worth a special case.
+			writeStreamError(w, apierr.UpstreamError("The upstream ended the stream before it completed.").
+				WithCause(relayErr), apierr.CodeUpstreamError, requestID)
 			logger.Warn("stream relay ended early",
 				slog.String("request_id", requestID),
+				slog.String("served_by", result.Candidate.ServedBy()),
 				slog.String("error", relayErr.Error()))
 		}
 
