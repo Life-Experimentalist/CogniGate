@@ -40,7 +40,7 @@ func TestAdminScopeReachesOwnTenant(t *testing.T) {
 		"/admin/v1/tenants/" + tenant.id + "/keys",
 		"/admin/v1/tenants/" + tenant.id + "/providers",
 		"/admin/v1/tenants/" + tenant.id + "/aliases",
-		"/admin/v1/tenants/" + tenant.id + "/routes",
+		"/admin/v1/tenants/" + tenant.id + "/routing-rules",
 		"/admin/v1/tenants/" + tenant.id + "/webhooks",
 		"/admin/v1/tenants/" + tenant.id + "/usage",
 	} {
@@ -475,7 +475,7 @@ func TestRouteChainRejectsDuplicate(t *testing.T) {
 	h := newHarness(t)
 	tenant := h.newTenant("acme")
 
-	res := h.do(http.MethodPut, "/admin/v1/tenants/"+tenant.id+"/routes", tenant.adminKey,
+	res := h.do(http.MethodPut, "/admin/v1/tenants/"+tenant.id+"/routing-rules", tenant.adminKey,
 		map[string]any{"match": "gpt-4o", "chain": []string{"test-small", "test-large", "test-small"}})
 	h.expectError(res, http.StatusBadRequest, apierr.CodeFallbackDuplicate)
 }
@@ -492,7 +492,7 @@ func TestRouteChainRejectsOverDepth(t *testing.T) {
 		chain[i] = "model-" + string(rune('a'+i))
 	}
 
-	res := h.do(http.MethodPut, "/admin/v1/tenants/"+tenant.id+"/routes", tenant.adminKey,
+	res := h.do(http.MethodPut, "/admin/v1/tenants/"+tenant.id+"/routing-rules", tenant.adminKey,
 		map[string]any{"match": "gpt-4o", "chain": chain})
 	body := h.expectError(res, http.StatusBadRequest, apierr.CodeInvalidRequest)
 	expectParam(t, body, "chain")
@@ -501,7 +501,7 @@ func TestRouteChainRejectsOverDepth(t *testing.T) {
 func TestRouteRequiresMatchAndChain(t *testing.T) {
 	h := newHarness(t)
 	tenant := h.newTenant("acme")
-	path := "/admin/v1/tenants/" + tenant.id + "/routes"
+	path := "/admin/v1/tenants/" + tenant.id + "/routing-rules"
 
 	res := h.do(http.MethodPut, path, tenant.adminKey,
 		map[string]any{"match": "  ", "chain": []string{"test-small"}})
@@ -517,7 +517,7 @@ func TestRouteRequiresMatchAndChain(t *testing.T) {
 func TestRouteRoundTrips(t *testing.T) {
 	h := newHarness(t)
 	tenant := h.newTenant("acme")
-	path := "/admin/v1/tenants/" + tenant.id + "/routes"
+	path := "/admin/v1/tenants/" + tenant.id + "/routing-rules"
 
 	res := h.do(http.MethodPut, path, tenant.adminKey,
 		map[string]any{"match": "gpt-4o", "chain": []string{"test-large", "test-small"}})
@@ -990,7 +990,7 @@ func TestDeleteUnknownResourceIsNotFound(t *testing.T) {
 	for _, path := range []string{
 		base + "/keys/key_does_not_exist",
 		base + "/providers/prv_does_not_exist",
-		base + "/routes/rt_does_not_exist",
+		base + "/routing-rules/rt_does_not_exist",
 		base + "/webhooks/whk_does_not_exist",
 		base + "/quota",
 	} {
@@ -1010,13 +1010,47 @@ func TestDeleteTenantIsInvisibleToItsKeys(t *testing.T) {
 		t.Fatalf("data key does not work before deletion: status %d", res.status)
 	}
 
-	res := h.do(http.MethodDelete, "/admin/v1/tenants/"+tenant.id, testBootstrapKey, nil)
+	res := h.do(http.MethodDelete,
+		"/admin/v1/tenants/"+tenant.id+"?confirm="+tenant.id, testBootstrapKey, nil)
 	if res.status != http.StatusNoContent {
 		t.Fatalf("deleting tenant: status %d, body %s", res.status, res.body)
 	}
 
 	res = h.do(http.MethodGet, "/v1/meta", tenant.dataKey, nil)
 	h.expectError(res, http.StatusUnauthorized, apierr.CodeInvalidAPIKey)
+}
+
+// TestDeleteTenantRequiresMatchingConfirmation covers the guard GW-6 puts on the
+// one irreversible admin route. The interesting case is the third: a confirm
+// that names a different tenant is what a copied-and-half-edited URL looks like,
+// and it must not delete the tenant it happens to point at.
+func TestDeleteTenantRequiresMatchingConfirmation(t *testing.T) {
+	h := newHarness(t)
+	tenant := h.newTenant("acme")
+	other := h.newTenant("globex")
+
+	for _, tc := range []struct {
+		name  string
+		query string
+	}{
+		{"absent", ""},
+		{"empty", "?confirm="},
+		{"another tenant", "?confirm=" + other.id},
+		{"not an id", "?confirm=true"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			res := h.do(http.MethodDelete,
+				"/admin/v1/tenants/"+tenant.id+tc.query, testBootstrapKey, nil)
+			body := h.expectError(res, http.StatusBadRequest, apierr.CodeInvalidRequest)
+			expectParam(t, body, "confirm")
+		})
+	}
+
+	// The tenant is still there, which is the assertion the four refusals are
+	// actually about.
+	if res := h.do(http.MethodGet, "/v1/meta", tenant.dataKey, nil); res.status != http.StatusOK {
+		t.Fatalf("tenant did not survive the refused deletions: status %d", res.status)
+	}
 }
 
 // --- GW-7 malformed input ---------------------------------------------------

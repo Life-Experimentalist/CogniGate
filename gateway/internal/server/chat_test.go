@@ -154,7 +154,7 @@ func (h *harness) routeTenant(name string) tenantFixture {
 func (h *harness) putRoute(tenantID, match string, chain ...string) {
 	h.t.Helper()
 
-	res := h.do(http.MethodPut, "/admin/v1/tenants/"+tenantID+"/routes", testBootstrapKey,
+	res := h.do(http.MethodPut, "/admin/v1/tenants/"+tenantID+"/routing-rules", testBootstrapKey,
 		map[string]any{"match": match, "chain": chain})
 	if res.status != http.StatusOK && res.status != http.StatusCreated {
 		h.t.Fatalf("creating route %q: status %d, body %s", match, res.status, res.body)

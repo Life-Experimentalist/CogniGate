@@ -786,7 +786,7 @@ func TestHealthFlagsAChainAnAliasEditMadeRedundant(t *testing.T) {
 	h.addProvider(tenant.id, "test")
 
 	h.putAlias(tenant, "primary", map[string]any{"pin": "test-large"})
-	res := h.do(http.MethodPut, "/admin/v1/tenants/"+tenant.id+"/routes", tenant.adminKey,
+	res := h.do(http.MethodPut, "/admin/v1/tenants/"+tenant.id+"/routing-rules", tenant.adminKey,
 		map[string]any{"match": "workhorse", "chain": []string{"primary", "test-small"}})
 	if res.status != http.StatusOK {
 		t.Fatalf("creating the route: status %d, body %s", res.status, res.body)

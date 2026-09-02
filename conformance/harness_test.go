@@ -538,7 +538,7 @@ func putAlias(t *testing.T, tenantID, name string, spec map[string]any) {
 // tryPutRoute writes a fallback chain without insisting the write succeeded.
 func tryPutRoute(t *testing.T, tenantID, match string, chain []string) *response {
 	t.Helper()
-	return suite.client.admin(t, http.MethodPut, "/admin/v1/tenants/"+tenantID+"/routes",
+	return suite.client.admin(t, http.MethodPut, "/admin/v1/tenants/"+tenantID+"/routing-rules",
 		map[string]any{"match": match, "chain": chain})
 }
 
@@ -561,7 +561,7 @@ func putRoute(t *testing.T, tenantID, match string, chain ...string) {
 	}
 	t.Cleanup(func() {
 		suite.client.admin(t, http.MethodDelete,
-			"/admin/v1/tenants/"+tenantID+"/routes/"+created.ID, nil)
+			"/admin/v1/tenants/"+tenantID+"/routing-rules/"+created.ID, nil)
 	})
 }
 
@@ -1002,7 +1002,8 @@ func newTenant(t *testing.T, hint string) tenant {
 		t.Fatalf("the created tenant has no id: %s", truncate(created.Body))
 	}
 	t.Cleanup(func() {
-		suite.client.admin(t, http.MethodDelete, "/admin/v1/tenants/"+body.ID, nil)
+		suite.client.admin(t, http.MethodDelete,
+			"/admin/v1/tenants/"+body.ID+"?confirm="+body.ID, nil)
 	})
 
 	key := suite.client.admin(t, http.MethodPost, "/admin/v1/tenants/"+body.ID+"/keys",
@@ -1180,7 +1181,8 @@ func deprovision() error {
 		return nil
 	}
 
-	del, err := suite.client.try(http.MethodDelete, "/admin/v1/tenants/"+suite.tenantID, suite.cfg.AdminKey, nil)
+	del, err := suite.client.try(http.MethodDelete,
+		"/admin/v1/tenants/"+suite.tenantID+"?confirm="+suite.tenantID, suite.cfg.AdminKey, nil)
 	if err != nil {
 		return fmt.Errorf("deleting the tenant: %w", err)
 	}
