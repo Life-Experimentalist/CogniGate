@@ -305,6 +305,36 @@ jobs:
           jq -e '.summary.fail == 0 and (.results | length) > 0' \
             container-report/conformance-report.json
 
+      # GW-4.AC-8. Hard caps that only report are a different gateway from hard
+      # caps that reject, so this criterion is unreachable from the run above and
+      # certifying both modes costs two runs. Recreating just the gateway is
+      # enough — enforcement is read at startup, and nothing else in the stack
+      # depends on it. Placed after the container run so that one still exercises
+      # the enforcing deployment.
+      - name: GW-4.AC-8 — the suite passes against a gateway in quota observe mode
+        env:
+          CONF_BASE_URL: http://localhost:8080
+          CONF_MOCK_PROVIDER: http://mock-provider-a:9900
+          CONF_MOCK_CONTROL_URL: http://localhost:19900
+          CONF_LOG_PATH: ${{ github.workspace }}/gateway-observe.log
+          CONF_REPORT: ${{ github.workspace }}/conformance-report-observe.json
+        run: |
+          set -euo pipefail
+          QUOTA_ENFORCEMENT=observe             docker compose ${COMPOSE_FILES} up -d --wait --wait-timeout 180 gateway
+
+          # A replaced container needs a new follower: the one started earlier is
+          # still attached to the gateway that was just torn down, and GW-8 reads
+          # this file to check the request log.
+          nohup docker compose ${COMPOSE_FILES} logs -f --no-color --no-log-prefix gateway             > "${CONF_LOG_PATH}" 2>&1 &
+
+          go test -count=1 -timeout 25m ./conformance/...
+
+          # Asserted by name rather than inferred from the exit code. Every
+          # enforcement-dependent criterion skips in this mode, so a suite that
+          # skipped AC-8 as well would still be green while certifying nothing
+          # the first run had not already covered.
+          jq -e '.results[] | select(.id == "GW-4.AC-8") | .status == "pass"'             "${CONF_REPORT}"
+
       - name: Upload the conformance reports
         if: always()
         uses: actions/upload-artifact@v4
@@ -315,6 +345,7 @@ jobs:
             conformance-junit.xml
             container-report/conformance-report.json
             gateway.log
+            gateway-observe.log
           if-no-files-found: warn
 
       - name: Print logs on failure

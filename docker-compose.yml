@@ -38,6 +38,13 @@ services:
       # an outage in the other (GW-11.AC-3).
       - ANALYTICS_URL=http://analytics:8081
       - ANALYTICS_TOKEN=${ANALYTICS_TOKEN:?generate one with `openssl rand -hex 32`}
+      # Hard caps reject ("on") or are only reported ("observe"). Threaded
+      # through rather than left to the binary's default: "observe" is how an
+      # operator sizes quotas before turning them into rejections, and
+      # GW-4.AC-8 is only reachable against a gateway actually running in it.
+      # Certifying both modes takes two runs, which is the honest cost of a
+      # setting that changes what the gateway does.
+      - CG_QUOTA_ENFORCEMENT=${QUOTA_ENFORCEMENT:-on}
     networks:
       - cogni-net
 
