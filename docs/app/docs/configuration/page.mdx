@@ -1,0 +1,84 @@
+export const metadata = {
+    title: "Configuration",
+    description:
+        "Learn how to configure CogniGate using the unified configuration manifest and environment variables.",
+};
+
+# Configuration Guide
+
+CogniGate is configured using a unified configuration manifest file ([cognigate.config.yml](https://github.com/Life-Experimentalist/CogniGate/blob/main/cognigate.config.yml)) for defaults and structure, alongside environment variables in your `.env` file for secret values.
+
+## The Configuration Manifest
+
+The [cognigate.config.yml](https://github.com/Life-Experimentalist/CogniGate/blob/main/cognigate.config.yml) file serves as the single source of truth for defining port configurations, database credentials, database DDL strategy, caching behavior, billing parameters, and more. Here is the structure of the default file:
+
+```yaml
+cognigate:
+    version: "0.1.0"
+    environment: "development" # development | production
+
+    # Gateway (Go Edge Proxy)
+    gateway:
+        port: 8080
+        redis_url: "redis:6379"
+        fallback_cache_ttl_seconds: 300
+        rate_limit:
+            requests_per_second: 50
+            burst_capacity: 100
+
+    # Analytics (Spring Boot Domain Engine)
+    analytics:
+        port: 8081
+        datasource:
+            url: "jdbc:postgresql://postgres-db:5432/cognigate"
+            username: "cognigate_user"
+            password: "cognigate_pass"
+        jpa:
+            ddl_auto: "update"
+            show_sql: false
+        threads:
+            virtual_enabled: true # Java 25 Loom Virtual Threads
+        encryption:
+            master_key_env: "ENCRYPTION_MASTER_KEY"
+
+    # Redis config
+    redis:
+        image: "redis:7-alpine"
+        port: 6379
+        invalidation_channel: "cognigate:cache:invalidate"
+        tenant_key_prefix: "tenant:cfg:"
+
+    # Caching defaults
+    billing:
+        cost_per_thousand_tokens: 0.0015
+        cron_schedule: "0 0 0 1 * ?" # Monthly invoice schedule
+```
+
+## Environment Variables
+
+For secure deployments, secrets and dynamic variables are loaded from the environment or a local `.env` file. Create this file in the project root:
+
+```bash
+# Encryption Key (Must be 32-byte / 64-character hex key for AES-256-GCM)
+ENCRYPTION_MASTER_KEY=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+
+# Spring Datasource Configurations
+SPRING_DATASOURCE_URL=jdbc:postgresql://postgres-db:5432/cognigate
+SPRING_DATASOURCE_USERNAME=cognigate_user
+SPRING_DATASOURCE_PASSWORD=cognigate_pass
+
+# Redis Connection Configurations
+REDIS_URL=redis:6379
+
+# Gateway API Port
+PORT=8080
+
+# Domain Admin Port
+ANALYTICS_PORT=8081
+```
+
+## Configuration Properties Explained
+
+- **`cognigate.analytics.threads.virtual.enabled`**: Enables Java 25 Project Loom Virtual Threads to support highly concurrent non-blocking execution in the Spring Boot backend.
+- **`cognigate.gateway.fallback_cache_ttl_seconds`**: Local cache lifetime (in seconds) if the Redis caching cluster becomes unreachable.
+- **`cognigate.billing.cost_per_thousand_tokens`**: The default platform usage cost multiplier per 1,000 tokens for invoice generation.

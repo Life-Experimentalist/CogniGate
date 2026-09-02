@@ -1,0 +1,53 @@
+import { Mermaid } from "../../components/Mermaid";
+
+export const metadata = {
+    title: "Architecture",
+    description:
+        "Understand CogniGate's polyglot architectural design featuring a high-speed Go edge proxy and Java domain engine.",
+};
+
+# Architecture Overview
+
+CogniGate utilizes a polyglot architectural design that leverages the strengths of both Go and Java: Go 1.26 for high-speed, low-overhead request routing at the edge, and Java 25 with Spring Boot 4.1 for robust enterprise business logic and dynamic plug-in compilation.
+
+## System Topology
+
+<Mermaid chart={`
+flowchart TD
+  Client[Client Application]
+  GoProxy[Go Edge Proxy :8080]
+  Redis[Redis Cache]
+  JavaEngine[Java Domain Engine :8081]
+  Postgres[(PostgreSQL DB)]
+  LLM[LLM Providers]
+
+Client -->|1. Chat Request| GoProxy
+GoProxy -->|2. Check Cache| Redis
+GoProxy -->|3. Route Request| LLM
+GoProxy -.->|4. Telemetry Webhook| JavaEngine
+JavaEngine -->|5. Audit Log| Postgres
+JavaEngine -.->|6. Cache Sync / Invalidate| Redis
+`} />
+
+### System Elements Described:
+
+- **Client Application**: Downstream application sending chat completion requests.
+- **Go Edge Proxy (`:8080`)**: Written in Go 1.26 using Fiber v2. Intercepts incoming requests, processes authorization, rotates keys, handles circuit breakers, and directly proxies requests.
+- **Redis Cache (`:6379`)**: Acts as the fast configuration bridge between Go and Java. Distributes instant cache-invalidation events across edge instances via Pub/Sub.
+- **Java Domain Engine (`:8081`)**: Built on Spring Boot 4.1. Manages tenants, billing metrics, encrypted key storage, and compiles dynamic plugins in-memory via Janino. Runs on Project Loom virtual threads.
+- **PostgreSQL Database (`:5432`)**: The persistent storage source of truth for tenants, provider credentials, and usage records.
+- **LLM Providers**: Downstream services (OpenAI, Anthropic, etc.) where proxy requests are forwarded.
+
+## Request Lifecycle Flow
+
+1. **Authentication & Cache Lookup**: A client initiates a `POST /v1/chat/completions` request to the Go Edge Proxy using a tenant bearer token (`cg-...`). The proxy checks its local cache and Redis for tenant state and active provider keys.
+2. **Routing Selection**: The proxy selects the primary configured API key and model according to tenant rules. If a provider's endpoint fails or is rate-limited (e.g. 429 / 5xx), the circuit breaker trips, and the request is automatically routed to backup models.
+3. **API Execution**: The proxy forwards the request payload to the target LLM provider, streams the response chunk-by-chunk back to the client, and records exact token metrics.
+4. **Telemetry Attribution**: A background Goroutine dispatches usage metrics to the Java Domain Engine asynchronously, ensuring zero impact on user request latencies.
+5. **Persistence & Billing**: The Java engine ingests telemetry payload and writes usage stats to PostgreSQL for token auditing and monthly billing.
+
+## Data Synchronization & Pub/Sub
+
+When an administrator updates routing configurations or rolls an API key through the Domain Engine API, the engine persists the change to PostgreSQL and publishes a cache-invalidation event to the Redis `cognigate:cache:invalidate` channel.
+
+The Go Edge Proxy instances, which listen to this channel in a background loop, immediately purge the invalidated keys from their local in-memory caches, guaranteeing that updates propagate system-wide in milliseconds without restarting services.

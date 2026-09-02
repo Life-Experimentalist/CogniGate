@@ -1,0 +1,91 @@
+export const metadata = {
+    title: "Deployment Guide",
+    description:
+        "Learn how to deploy CogniGate in production using Docker Compose, scale Go Edge Proxy instances, and configure database persistence.",
+};
+
+# Deployment Guide
+
+CogniGate is designed to run in containerized environments and can easily be deployed on a single virtual machine using Docker Compose, or scaled horizontally on Kubernetes.
+
+## Docker Compose Deployment
+
+The quickest way to deploy CogniGate in production is using Docker Compose. The default [`docker-compose.yml`](https://github.com/Life-Experimentalist/CogniGate/blob/main/docker-compose.yml) file orchestrates all four core services:
+
+```yaml
+version: "3.8"
+
+services:
+    postgres-db:
+        image: postgres:16-alpine
+        environment:
+            POSTGRES_DB: cognigate
+            POSTGRES_USER: cognigate_user
+            POSTGRES_PASSWORD: \${SPRING_DATASOURCE_PASSWORD}
+        volumes:
+            - pgdata:/var/lib/postgresql/data
+        networks:
+            - cogni-net
+
+    redis:
+        image: redis:7-alpine
+        networks:
+            - cogni-net
+
+    analytics:
+        build:
+            context: ./analytics
+            dockerfile: Dockerfile
+        environment:
+            SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-db:5432/cognigate
+            SPRING_DATASOURCE_USERNAME: cognigate_user
+            SPRING_DATASOURCE_PASSWORD: \${SPRING_DATASOURCE_PASSWORD}
+            REDIS_URL: redis:6379
+            ENCRYPTION_MASTER_KEY: \${ENCRYPTION_MASTER_KEY}
+        ports:
+            - "8081:8081"
+        depends_on:
+            - postgres-db
+            - redis
+        networks:
+            - cogni-net
+
+    gateway:
+        build:
+            context: ./gateway
+            dockerfile: Dockerfile
+        environment:
+            REDIS_URL: redis:6379
+            PORT: 8080
+        ports:
+            - "8080:8080"
+        depends_on:
+            - redis
+        networks:
+            - cogni-net
+
+volumes:
+    pgdata:
+
+networks:
+    cogni-net:
+        driver: bridge
+```
+
+## Running in Detached Production Mode
+
+To pull dependencies, compile Docker images, and start the system in the background, run the setup script with the production flags:
+
+```bash
+# Linux / macOS
+./setup.sh --prod --detach
+
+# Windows (PowerShell)
+.\setup.ps1 -Mode prod -Detach
+```
+
+## Production Best Practices
+
+1. **Secure the Admin Panel**: The administration service (port `8081`) exposes endpoints for creating tenants and adding credentials. Do not expose port `8081` to the public internet. Restrict it via a firewall or bind it to localhost.
+2. **Database Strategy**: Change `cognigate.analytics.jpa.ddl_auto` in [cognigate.config.yml](https://github.com/Life-Experimentalist/CogniGate/blob/main/cognigate.config.yml) from `update` to `validate` in production. Use Liquibase or Flyway to manage database schema updates.
+3. **Horizontal Scaling**: The Go Edge Proxy is stateless. You can scale the `gateway` container horizontally (e.g. `docker compose up --scale gateway=3`) and place them behind a load balancer. Since they sync configurations via Redis Pub/Sub, they will scale seamlessly.

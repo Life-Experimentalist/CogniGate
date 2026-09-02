@@ -1,0 +1,40 @@
+export const metadata = {
+    title: "Billing & Cost Tracking",
+    description:
+        "Learn how CogniGate manages token usage tracking, non-blocking telemetry, and monthly tenant invoice generation.",
+};
+
+# Billing & Cost Tracking
+
+CogniGate includes a built-in billing engine designed to track model token consumption, attribute costs to specific tenants, and generate invoices.
+
+## Non-Blocking Telemetry
+
+To ensure that auditing usage does not degrade the performance of AI requests, the Go Edge Proxy processes token counts asynchronously:
+
+- **Asynchronous Dispatch**: When an LLM request completes, a background goroutine packages the token counts and fires them to the Java Domain Engine.
+- **Zero Impact on User Requests**: The client response is completed immediately; it does not block waiting for database writes.
+
+## Usage Logs
+
+The telemetry metrics are captured by the Domain Engine via the `/api/webhook/telemetry` endpoint and persisted in the `usage_metric` PostgreSQL table. Each record records:
+
+- **Tenant ID**: The organization that initiated the request.
+- **Model Name**: Downstream model used (e.g. `gpt-4`).
+- **Token Counts**: Explicit count of prompt, completion, and total tokens.
+- **Timestamp**: Exact time of completion.
+
+## Cost Multiplier & Invoicing
+
+CogniGate calculates costs using the configured token price multiplier defined in the unified configuration.
+
+- **Cost Multiplier**: Defined under `cognigate.billing.cost_per_thousand_tokens` (default is `$0.0015` per 1000 tokens).
+- **Cron Invoicing**: A Spring Boot cron scheduler runs automatically on the first of each month (configurable via `cognigate.billing.cron_schedule`) to aggregate usage logs per tenant and finalize monthly invoices.
+
+## Verifying Telemetry Ingest
+
+You can inspect the Java console logs to verify that telemetry events are being processed:
+
+```
+[Pool-1-worker-1] INFO  c.c.service.TelemetryService - Ingested usage telemetry for Tenant 1: 15 prompt tokens, 20 completion tokens.
+```

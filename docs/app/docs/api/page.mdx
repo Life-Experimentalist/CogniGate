@@ -1,0 +1,129 @@
+export const metadata = {
+    title: "API Reference",
+    description:
+        "API specifications for the CogniGate Edge Proxy (OpenAI-compatible) and the Java Domain Administration API.",
+};
+
+# API Reference
+
+CogniGate exposes two API planes: the High-Performance Edge Proxy for routing LLM traffic and the Admin Engine API for managing tenants, API keys, and routing rules.
+
+> [!TIP]
+> You can also download our [OpenAPI Specification](https://github.com/Life-Experimentalist/CogniGate/blob/main/openapi.yaml) or our [Postman Collection](https://github.com/Life-Experimentalist/CogniGate/blob/main/postman_collection.json) to easily import and test the APIs locally.
+
+## 1. Edge Proxy API (Port 8080)
+
+The Edge Proxy runs on port `8080` and provides a drop-in replacement for OpenAI's chat completion endpoint.
+
+### Route LLM Traffic
+
+**POST** `/v1/chat/completions`
+
+Requires Bearer authentication using your tenant's CogniGate API key (`Authorization: Bearer cg-...`).
+
+#### Request Example
+
+```bash
+curl -X POST http://localhost:8080/v1/chat/completions \
+  -H "Authorization: Bearer cg-a4f6d89201bd..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-4",
+    "messages": [
+      {
+        "role": "user",
+        "content": "What is the capital of France?"
+      }
+    ]
+  }'
+```
+
+#### Response Example
+
+```json
+{
+    "id": "chatcmpl-123",
+    "object": "chat.completion",
+    "created": 1677652288,
+    "model": "gpt-4",
+    "choices": [
+        {
+            "message": {
+                "role": "assistant",
+                "content": "The capital of France is Paris."
+            },
+            "finish_reason": "stop"
+        }
+    ],
+    "usage": {
+        "prompt_tokens": 9,
+        "completion_tokens": 7,
+        "total_tokens": 16
+    }
+}
+```
+
+---
+
+## 2. Admin API (Port 8081)
+
+The administration API is exposed by the Spring Boot engine on port `8081`.
+
+### Create a Tenant
+
+**POST** `/api/admin/tenants?name={name}`
+
+```bash
+curl -X POST "http://localhost:8081/api/admin/tenants?name=StarkCorp"
+
+# Response:
+{
+  "id": 1,
+  "name": "StarkCorp",
+  "cognigateApiKey": "cg-b29ad571120cd09..."
+}
+```
+
+### List Tenants
+
+**GET** `/api/admin/tenants`
+
+```bash
+curl http://localhost:8081/api/admin/tenants
+```
+
+### Add Provider API Key
+
+**POST** `/api/admin/tenants/{tenantId}/keys`
+
+```bash
+curl -X POST http://localhost:8081/api/admin/tenants/1/keys \
+  -H "Content-Type: application/json" \
+  -d '{
+    "providerName": "openai",
+    "apiKey": "sk-proj-..."
+  }'
+```
+
+### Add Model Routing Rule
+
+**POST** `/api/admin/tenants/{tenantId}/rules`
+
+```bash
+curl -X POST http://localhost:8081/api/admin/tenants/1/rules \
+  -H "Content-Type: application/json" \
+  -d '{
+    "modelName": "gpt-4",
+    "backupModelName": "claude-3-haiku",
+    "priority": 1
+  }'
+```
+
+### Upload Custom Plugin
+
+**POST** `/api/admin/plugins/upload?className={className}`
+
+```bash
+curl -X POST "http://localhost:8081/api/admin/plugins/upload?className=com.cognigate.plugin.MyCustomHandler" \
+  -F "file=@MyCustomHandler.java"
+```

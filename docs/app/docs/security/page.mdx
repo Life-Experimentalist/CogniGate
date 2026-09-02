@@ -1,0 +1,53 @@
+export const metadata = {
+    title: "Security",
+    description:
+        "Understand CogniGate's zero-trust security architecture, AES-256-GCM encryption vault, and credential isolation strategy.",
+};
+
+# Security Architecture
+
+CogniGate is built with a zero-trust model to protect your organization's API keys and keep client requests securely isolated.
+
+## AES-256-GCM Encryption Vault
+
+All downstream provider API keys (OpenAI, Anthropic, etc.) are encrypted at-rest before being saved to PostgreSQL.
+
+- **Encryption Standard**: AES-256-GCM (Galois/Counter Mode). GCM provides both data confidentiality and authenticated integrity, ensuring keys cannot be altered or decrypted without detection.
+- **In-Memory Decryption**: Keys are decrypted exclusively in-memory inside the Java Domain Engine during cache synchronization to Redis. The database never holds plaintext keys.
+
+## The Master Key
+
+The encryption process uses a 256-bit master key loaded from the `ENCRYPTION_MASTER_KEY` environment variable.
+
+<div
+    style={{
+        padding: "16px 20px",
+        background: "rgba(239,68,68,0.06)",
+        border: "1px solid rgba(239,68,68,0.2)",
+        borderRadius: 10,
+        fontSize: 14,
+        color: "#fca5a5",
+        lineHeight: 1.65,
+        marginBottom: 24,
+    }}
+>
+    <strong style={{ color: "#ef4444" }}>WARNING:</strong> Never hardcode the
+    `ENCRYPTION_MASTER_KEY` in configuration manifests (such as
+    [cognigate.config.yml](https://github.com/Life-Experimentalist/CogniGate/blob/main/cognigate.config.yml)).
+    Keep it out of git repositories. If you lose this key, all stored provider
+    keys will become unreadable and must be re-configured.
+</div>
+
+## Tenant API Key Isolation
+
+Every tenant has their own isolated config space.
+
+- **Key Attributions**: Every provider key is tied directly to a specific `Tenant` entity in the PostgreSQL schema.
+- **Bearer Authentication**: The Go Edge Proxy validates the bearer token (`cg-...`) in the request header against the Redis configuration cache before routing. If the token is invalid or does not belong to the requested model namespace, access is immediately blocked.
+
+## Network Security & Topology
+
+In a standard Docker Compose deployment, services run inside a dedicated bridge network:
+
+- **Private Database & Cache**: PostgreSQL and Redis do not expose ports to the public internet. They are reachable only by the Go Edge Proxy and Java Domain Engine containers on the internal bridge network.
+- **Isolated Admin Panel**: The Domain Administration API (port `8081`) should be firewalled or bound to localhost, allowing only the local dashboard or internal admins to manage tenants and upload plugins.
