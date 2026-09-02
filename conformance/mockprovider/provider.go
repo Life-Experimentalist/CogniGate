@@ -36,7 +36,24 @@ const (
 	FaultRateLimit   = "rate_limit"
 	FaultServerError = "server_error"
 	FaultTimeout     = "timeout"
+	// FaultClientError is a request-caused 400. It is a separate mode from the
+	// 404 an unknown model already produces because a gateway will not route to
+	// a model absent from its catalog at all, so that 404 is unreachable from a
+	// test — and GW-3 needs a client failure the gateway does reach in order to
+	// prove it does not cascade on one.
+	FaultClientError = "client_error"
+	// FaultStreamAbort dies after the stream has already begun. See
+	// abortMidStream for why a timeout is not a substitute.
+	FaultStreamAbort = "stream_abort"
 )
+
+// ListingTarget is the reserved value of the fault control's model field that
+// arranges a fault on GET /models rather than on a completion.
+//
+// It does not participate in the catch-all: a fault registered for every model
+// is about completions, and silently breaking catalog refresh as a side effect
+// of arranging one would make a whole class of test failures unreadable.
+const ListingTarget = "_listing"
 
 // ForeverCount asks for a fault that applies until it is cleared.
 const ForeverCount = -1
@@ -131,6 +148,28 @@ func (s *Server) Handler() http.Handler {
 // --- data plane -------------------------------------------------------------
 
 func (s *Server) listModels(w http.ResponseWriter, r *http.Request) {
+	// GW-1 requires a gateway to keep serving the last good catalog when a
+	// provider's listing endpoint goes away, which cannot be arranged unless the
+	// listing endpoint can be made to fail on its own — separately from
+	// completions, since the point of the test is that completions still work.
+	if mode, delay := s.takeFaultExact(ListingTarget); mode != FaultNone {
+		switch mode {
+		case FaultRateLimit:
+			w.Header().Set("Retry-After", "1")
+			writeProviderError(w, http.StatusTooManyRequests, "rate_limit_error", "rate limit exceeded")
+			return
+		case FaultServerError:
+			writeProviderError(w, http.StatusInternalServerError, "server_error", "the server had an error")
+			return
+		case FaultTimeout:
+			select {
+			case <-time.After(delay):
+			case <-r.Context().Done():
+			}
+			return
+		}
+	}
+
 	s.mu.Lock()
 	data := make([]Model, 0, len(s.order))
 	for _, id := range s.order {
@@ -158,9 +197,20 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Counted before anything can fail the request, and before the model is even
+	// known. "How many times did the gateway dial us, and with which pooled
+	// credential" is what GW-3 asserts on, and a faulted call is still a call:
+	// counting only successes would make "the breaker skipped this entry with
+	// zero upstream calls" indistinguishable from "the entry was tried and
+	// returned 500", which is exactly the distinction those tests exist to draw.
 	s.mu.Lock()
+	s.requests[req.Model]++
+	if cred := credential(r); cred != "" {
+		s.keys[cred]++
+	}
 	_, known := s.models[req.Model]
 	s.mu.Unlock()
+
 	if !known {
 		// The shape a real OpenAI-compatible upstream returns for an unknown
 		// model. It is a 404, which classifies as a client failure, so the
@@ -179,6 +229,10 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		case FaultServerError:
 			writeProviderError(w, http.StatusInternalServerError, "server_error", "the server had an error")
 			return
+		case FaultClientError:
+			writeProviderError(w, http.StatusBadRequest,
+				"invalid_request_error", "the request was not valid")
+			return
 		case FaultTimeout:
 			// Honour cancellation so a cleared-late fault does not pin a
 			// goroutine for the whole delay after the client has gone.
@@ -187,15 +241,11 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			case <-r.Context().Done():
 			}
 			return
+		case FaultStreamAbort:
+			s.abortMidStream(w, req.Model)
+			return
 		}
 	}
-
-	s.mu.Lock()
-	s.requests[req.Model]++
-	if cred := credential(r); cred != "" {
-		s.keys[cred]++
-	}
-	s.mu.Unlock()
 
 	if req.Stream {
 		s.streamCompletion(w, req.Model)
@@ -224,49 +274,85 @@ func usageBlock() map[string]any {
 	return map[string]any{"prompt_tokens": 11, "completion_tokens": 7, "total_tokens": 18}
 }
 
-func (s *Server) streamCompletion(w http.ResponseWriter, model string) {
+func streamChunk(model string, delta map[string]any, finish any) map[string]any {
+	return map[string]any{
+		"id":      "chatcmpl-mock",
+		"object":  "chat.completion.chunk",
+		"created": time.Now().Unix(),
+		"model":   model,
+		"choices": []any{map[string]any{
+			"index": 0, "delta": delta, "finish_reason": finish,
+		}},
+	}
+}
+
+// beginStream writes the SSE headers and returns a frame writer, or nil if the
+// response writer cannot stream.
+func beginStream(w http.ResponseWriter) func(map[string]any) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		writeProviderError(w, http.StatusInternalServerError, "server_error", "streaming unsupported")
-		return
+		return nil
 	}
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.WriteHeader(http.StatusOK)
 
-	chunk := func(payload map[string]any) {
+	return func(payload map[string]any) {
 		body, _ := json.Marshal(payload)
 		fmt.Fprintf(w, "data: %s\n\n", body)
 		flusher.Flush()
 	}
+}
 
-	base := func(delta map[string]any, finish any) map[string]any {
-		return map[string]any{
-			"id":      "chatcmpl-mock",
-			"object":  "chat.completion.chunk",
-			"created": time.Now().Unix(),
-			"model":   model,
-			"choices": []any{map[string]any{
-				"index": 0, "delta": delta, "finish_reason": finish,
-			}},
-		}
+func (s *Server) streamCompletion(w http.ResponseWriter, model string) {
+	chunk := beginStream(w)
+	if chunk == nil {
+		return
 	}
 
-	chunk(base(map[string]any{"role": "assistant"}, nil))
-	chunk(base(map[string]any{"content": completionText}, nil))
-	chunk(base(map[string]any{}, "stop"))
+	chunk(streamChunk(model, map[string]any{"role": "assistant"}, nil))
+	chunk(streamChunk(model, map[string]any{"content": completionText}, nil))
+	chunk(streamChunk(model, map[string]any{}, "stop"))
 
 	// A usage-bearing final chunk, as an upstream sends when the caller asked
 	// for stream_options.include_usage. It is sent unconditionally: the
 	// gateway has to account for a streamed request either way, and an
 	// upstream that volunteers usage is the easier case to be correct about.
-	final := base(map[string]any{}, nil)
+	final := streamChunk(model, map[string]any{}, nil)
 	final["choices"] = []any{}
 	final["usage"] = usageBlock()
 	chunk(final)
 
 	fmt.Fprint(w, "data: [DONE]\n\n")
-	flusher.Flush()
+	// The [DONE] frame was written through the same flusher beginStream
+	// captured, so it is already on the wire by the time this returns.
+}
+
+// abortMidStream opens a normal stream, emits real content, and then kills the
+// connection with no terminating frame.
+//
+// FaultTimeout cannot stand in for this. A timeout stalls before the first byte,
+// which is precisely the window in which GW-3 still permits the gateway to fall
+// back to another model; once a byte of content has reached the client,
+// switching models would splice two models' output into one response, which
+// GW-3.AC-7 forbids. The two failures look nearly identical to a gateway's error
+// handling and mean opposite things about what it is allowed to do next, so the
+// suite has to be able to produce each of them on demand.
+func (s *Server) abortMidStream(w http.ResponseWriter, model string) {
+	chunk := beginStream(w)
+	if chunk == nil {
+		return
+	}
+
+	chunk(streamChunk(model, map[string]any{"role": "assistant"}, nil))
+	chunk(streamChunk(model, map[string]any{"content": completionText}, nil))
+
+	// ErrAbortHandler is net/http's "drop this connection, and do not log a
+	// stack trace for it". The client sees the stream stop without a stop
+	// chunk and without [DONE], which is what a provider dying mid-response
+	// actually looks like.
+	panic(http.ErrAbortHandler)
 }
 
 // --- control plane ----------------------------------------------------------
@@ -342,11 +428,25 @@ func (s *Server) controlSetFault(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch req.Mode {
-	case FaultNone, FaultRateLimit, FaultServerError, FaultTimeout:
+	case FaultNone, FaultRateLimit, FaultServerError, FaultTimeout,
+		FaultClientError, FaultStreamAbort:
 	default:
 		writeJSON(w, http.StatusBadRequest, map[string]any{
 			"error": fmt.Sprintf("unknown fault mode %q", req.Mode)})
 		return
+	}
+	// Two of the modes describe things only a completion can do. Accepting them
+	// against the listing target and then ignoring them would leave a test
+	// arranged against an endpoint that never misbehaved, passing for the wrong
+	// reason.
+	if req.Model == ListingTarget {
+		switch req.Mode {
+		case FaultNone, FaultRateLimit, FaultServerError, FaultTimeout:
+		default:
+			writeJSON(w, http.StatusBadRequest, map[string]any{
+				"error": fmt.Sprintf("fault mode %q does not apply to %s", req.Mode, ListingTarget)})
+			return
+		}
 	}
 
 	delay := DefaultTimeoutDelay
@@ -396,20 +496,40 @@ func (s *Server) takeFault(model string) (string, time.Duration) {
 	defer s.mu.Unlock()
 
 	for _, key := range []string{model, ""} {
-		f, ok := s.faults[key]
-		if !ok {
-			continue
+		if mode, delay, ok := s.takeLocked(key); ok {
+			return mode, delay
 		}
-		if f.remaining == 0 {
-			delete(s.faults, key)
-			continue
-		}
-		if f.remaining > 0 {
-			f.remaining--
-		}
-		return f.mode, f.delay
 	}
 	return FaultNone, 0
+}
+
+// takeFaultExact is takeFault without the catch-all fallback, for targets that
+// are not models and so must not inherit an every-model arrangement.
+func (s *Server) takeFaultExact(key string) (string, time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if mode, delay, ok := s.takeLocked(key); ok {
+		return mode, delay
+	}
+	return FaultNone, 0
+}
+
+// takeLocked consumes one use of the fault at key, if there is a live one.
+// Called with the lock held.
+func (s *Server) takeLocked(key string) (string, time.Duration, bool) {
+	f, ok := s.faults[key]
+	if !ok {
+		return "", 0, false
+	}
+	if f.remaining == 0 {
+		delete(s.faults, key)
+		return "", 0, false
+	}
+	if f.remaining > 0 {
+		f.remaining--
+	}
+	return f.mode, f.delay, true
 }
 
 // credential identifies which of a provider's pooled keys served a request, so

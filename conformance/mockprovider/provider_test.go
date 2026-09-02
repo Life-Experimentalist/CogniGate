@@ -347,13 +347,22 @@ func TestRequestCountsAreTrackedPerModel(t *testing.T) {
 	}
 }
 
-// A faulted request must not be counted as served, or "did the gateway fall
-// back?" becomes unanswerable from the counts.
-func TestAFaultedRequestIsNotCountedAsServed(t *testing.T) {
+// The counts measure upstream calls, not successes. GW-3 asks whether an open
+// breaker skipped an entry with zero calls, and whether a client error was
+// retried; neither question can be answered from a counter that a 500 leaves
+// unchanged, because "not tried" and "tried and failed" would read the same.
+func TestAFaultedRequestIsStillCountedAsAnUpstreamCall(t *testing.T) {
 	srv := newMock(t)
 	setFault(t, srv, `{"model":"mock-chat-a","mode":"server_error","count":1}`)
 	post(t, srv.URL+"/chat/completions", `{"model":"mock-chat-a","messages":[]}`)
 
+	if got := requestCount(t, srv, "mock-chat-a"); got != 1 {
+		t.Errorf("mock-chat-a count = %d, want 1", got)
+	}
+}
+
+func requestCount(t *testing.T, srv *httptest.Server, model string) int {
+	t.Helper()
 	resp, err := http.Get(srv.URL + "/_control/state")
 	if err != nil {
 		t.Fatalf("GET /_control/state: %v", err)
@@ -366,7 +375,103 @@ func TestAFaultedRequestIsNotCountedAsServed(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&state); err != nil {
 		t.Fatalf("decoding state: %v", err)
 	}
-	if state.Requests["mock-chat-a"] != 0 {
-		t.Errorf("mock-chat-a count = %d, want 0", state.Requests["mock-chat-a"])
+	return state.Requests[model]
+}
+
+func TestTheClientErrorFaultIsA400(t *testing.T) {
+	srv := newMock(t)
+	setFault(t, srv, `{"model":"mock-chat-a","mode":"client_error"}`)
+
+	resp := post(t, srv.URL+"/chat/completions", `{"model":"mock-chat-a","messages":[]}`)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", resp.StatusCode)
+	}
+	body := decode(t, resp)
+	errObj, _ := body["error"].(map[string]any)
+	if errObj["type"] != "invalid_request_error" {
+		t.Errorf("error.type = %v, want invalid_request_error", errObj["type"])
+	}
+}
+
+// The abort has to come after content has been delivered. A stream that dies
+// before its first byte is the case a gateway may still fall back on; this is
+// the case it may not.
+func TestTheStreamAbortFaultDiesAfterContent(t *testing.T) {
+	srv := newMock(t)
+	setFault(t, srv, `{"model":"mock-chat-a","mode":"stream_abort"}`)
+
+	resp := post(t, srv.URL+"/chat/completions", `{"model":"mock-chat-a","stream":true,"messages":[]}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200; the abort must happen after the stream opens", resp.StatusCode)
+	}
+
+	var payloads []string
+	scanner := bufio.NewScanner(resp.Body)
+	for scanner.Scan() {
+		if line := strings.TrimPrefix(scanner.Text(), "data: "); line != scanner.Text() {
+			payloads = append(payloads, line)
+		}
+	}
+	if len(payloads) < 2 {
+		t.Fatalf("got %d data frames, want at least the role and content chunks", len(payloads))
+	}
+	if !strings.Contains(payloads[1], completionContentField) {
+		t.Errorf("second frame carries no content: %s", payloads[1])
+	}
+	for _, p := range payloads {
+		if p == "[DONE]" {
+			t.Fatal("the stream terminated cleanly; nothing was aborted")
+		}
+	}
+}
+
+// The gateway reads content out of delta.content, so that is the field an
+// aborted stream has to have already delivered for the abort to mean anything.
+const completionContentField = `"content"`
+
+func TestTheListingEndpointCanBeFaulted(t *testing.T) {
+	srv := newMock(t)
+	setFault(t, srv, `{"model":"`+mockprovider.ListingTarget+`","mode":"server_error"}`)
+
+	resp, err := http.Get(srv.URL + "/models")
+	if err != nil {
+		t.Fatalf("GET /models: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", resp.StatusCode)
+	}
+
+	// Completions must be unaffected: GW-1.AC-6 is about a gateway that keeps
+	// serving from a stale catalog, which it can only do if it can still serve.
+	if c := post(t, srv.URL+"/chat/completions", `{"model":"mock-chat-a","messages":[]}`); c.StatusCode != http.StatusOK {
+		t.Errorf("completion status = %d, want 200; the listing fault leaked", c.StatusCode)
+	}
+}
+
+// A catch-all fault is an arrangement about completions. If it also broke
+// catalog refresh, every fallback test would be quietly testing a gateway with
+// an empty catalog instead of a failing provider.
+func TestTheCatchAllFaultLeavesListingAlone(t *testing.T) {
+	srv := newMock(t)
+	setFault(t, srv, `{"mode":"server_error"}`)
+
+	resp, err := http.Get(srv.URL + "/models")
+	if err != nil {
+		t.Fatalf("GET /models: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+}
+
+func TestAModeThatCannotApplyToListingIsRejected(t *testing.T) {
+	srv := newMock(t)
+
+	resp := post(t, srv.URL+"/_control/faults",
+		`{"model":"`+mockprovider.ListingTarget+`","mode":"stream_abort"}`)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", resp.StatusCode)
 	}
 }
