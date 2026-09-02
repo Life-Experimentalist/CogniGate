@@ -1,0 +1,29 @@
+# EditorConfig is awesome: https://EditorConfig.org
+
+# top-most EditorConfig file
+root = true
+
+[*]
+indent_style = space
+indent_size = 4
+end_of_line = lf
+charset = utf-8
+trim_trailing_whitespace = true
+insert_final_newline = true
+
+# Executed by a POSIX shell — must stay LF. Mirrors .gitattributes.
+[*.{sh,bash}]
+end_of_line = lf
+
+# Executed by Windows — must stay CRLF. Mirrors .gitattributes.
+[*.{bat,cmd,ps1}]
+end_of_line = crlf
+
+[*.{yml,yaml,json}]
+indent_size = 2
+
+[Makefile]
+indent_style = tab
+
+[*.md]
+trim_trailing_whitespace = false
