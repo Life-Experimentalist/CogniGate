@@ -304,8 +304,17 @@ func TestModelsListsCatalogAndAliases(t *testing.T) {
 		if m.Object != "model" {
 			t.Errorf("%s object = %q, want %q", id, m.Object, "model")
 		}
-		if m.Alias {
+		if m.CogniGate.Alias {
 			t.Errorf("%s is marked as an alias", id)
+		}
+		// GW-1.AC-1 names owned_by and cognigate.provider specifically: they are
+		// what tells a caller which account a model is billed to.
+		if m.OwnedBy == "" || m.CogniGate.Provider == "" {
+			t.Errorf("%s: owned_by = %q, cognigate.provider = %q, want both set",
+				id, m.OwnedBy, m.CogniGate.Provider)
+		}
+		if m.CogniGate.DiscoveredAt == "" {
+			t.Errorf("%s has no cognigate.discovered_at", id)
 		}
 	}
 
@@ -316,10 +325,10 @@ func TestModelsListsCatalogAndAliases(t *testing.T) {
 		if !ok {
 			t.Fatalf("seeded alias %q missing from /v1/models", name)
 		}
-		if !m.Alias {
+		if !m.CogniGate.Alias {
 			t.Errorf("alias %q is not marked as an alias", name)
 		}
-		if m.AliasOf == "" {
+		if m.CogniGate.ResolvesTo == "" {
 			t.Errorf("alias %q resolved to nothing against a populated catalog", name)
 		}
 	}
@@ -335,8 +344,8 @@ func TestGetModel(t *testing.T) {
 	if model.ID != "test-large" {
 		t.Errorf("id = %q, want %q", model.ID, "test-large")
 	}
-	if model.ContextWindow != 128000 {
-		t.Errorf("context_window = %d, want 128000", model.ContextWindow)
+	if model.CogniGate.ContextWindow != 128000 {
+		t.Errorf("cognigate.context_window = %d, want 128000", model.CogniGate.ContextWindow)
 	}
 
 	// The provider-qualified form is addressable, so a caller can pin which
@@ -349,7 +358,7 @@ func TestGetModel(t *testing.T) {
 	// An alias resolves here too: this is how a caller finds out what "fast"
 	// currently means.
 	h.do(http.MethodGet, "/v1/models/fast", tenant.dataKey, nil).decode(t, &model)
-	if !model.Alias || model.AliasOf == "" {
+	if !model.CogniGate.Alias || model.CogniGate.ResolvesTo == "" {
 		t.Errorf("GET /v1/models/fast did not resolve the alias: %+v", model)
 	}
 
@@ -372,7 +381,7 @@ func TestModelsAreTenantIsolated(t *testing.T) {
 	h.do(http.MethodGet, "/v1/models", without.dataKey, nil).decode(t, &list)
 
 	for _, m := range list.Data {
-		if !m.Alias {
+		if !m.CogniGate.Alias {
 			t.Errorf("tenant with no providers sees model %q", m.ID)
 		}
 	}
