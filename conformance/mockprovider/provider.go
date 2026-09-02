@@ -121,6 +121,23 @@ type Delivery struct {
 	Signature string          `json:"signature"`
 	Tenant    string          `json:"tenant"`
 	Body      json.RawMessage `json:"body"`
+	// Status is what the sink answered. Rejected attempts are recorded too, so a
+	// test can tell "the gateway retried and we refused" apart from "the gateway
+	// never came back". An at-least-once assertion counts the accepted ones.
+	Status int `json:"status"`
+}
+
+// sinkFault makes a sink refuse its next few deliveries, so a test can arrange
+// the retry schedule GW-8 promises — reject twice, accept the third — and then
+// assert that the event arrived exactly once by id despite three attempts.
+//
+// Unlike an upstream fault this has no "until cleared" spelling: a sink that
+// refuses forever only proves the gateway eventually gives up, which no
+// acceptance criterion asks for, and it would cost a test the full backoff
+// schedule to find out.
+type sinkFault struct {
+	status    int
+	remaining int
 }
 
 // maxEventBody bounds what a sink will read. Nothing legitimate approaches it;
@@ -145,14 +162,18 @@ type Server struct {
 	// other's deliveries — which matters more here than anywhere else, since the
 	// assertion GW-4 asks for is "exactly one".
 	events map[string][]Delivery
+	// sinkFaults is keyed by sink name for the same reason events is: one run
+	// arranging a rejection must not make another run's sink refuse.
+	sinkFaults map[string]*sinkFault
 }
 
 func New() *Server {
 	s := &Server{
-		faults:   map[string]*fault{},
-		requests: map[string]int{},
-		keys:     map[string]int{},
-		events:   map[string][]Delivery{},
+		faults:     map[string]*fault{},
+		requests:   map[string]int{},
+		keys:       map[string]int{},
+		events:     map[string][]Delivery{},
+		sinkFaults: map[string]*sinkFault{},
 	}
 	s.seed()
 	return s
@@ -205,6 +226,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /_control/models/{id}", s.controlRemoveModel)
 	mux.HandleFunc("POST /_control/faults", s.controlSetFault)
 	mux.HandleFunc("GET /_control/events/{sink}", s.controlEvents)
+	mux.HandleFunc("POST /_control/events/{sink}/fault", s.controlSetSinkFault)
 	mux.HandleFunc("POST /_control/reset", s.controlReset)
 
 	return mux
@@ -468,10 +490,13 @@ func (s *Server) abortMidStream(w http.ResponseWriter, model string) {
 
 // receiveEvent records one webhook delivery under the sink named in the path.
 //
-// It answers 204 unconditionally, including for a body it could not parse: a
-// sink that returned 500 would put the delivery back in the gateway's retry
-// queue, and a test counting deliveries would then be counting the gateway's
-// retries of its own failure rather than the events it raised.
+// It answers 204 by default, including for a body it could not parse: a sink
+// that returned 500 of its own accord would put the delivery back in the
+// gateway's retry queue, and a test counting deliveries would then be counting
+// the gateway's retries of its own failure rather than the events it raised. A
+// rejection happens only when a test has asked for one through
+// /_control/events/{sink}/fault, and is recorded alongside the acceptance it
+// eventually becomes.
 func (s *Server) receiveEvent(w http.ResponseWriter, r *http.Request) {
 	sink := r.PathValue("sink")
 
@@ -497,16 +522,25 @@ func (s *Server) receiveEvent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.mu.Lock()
+	status := http.StatusNoContent
+	if f := s.sinkFaults[sink]; f != nil {
+		status = f.status
+		f.remaining--
+		if f.remaining <= 0 {
+			delete(s.sinkFaults, sink)
+		}
+	}
 	s.events[sink] = append(s.events[sink], Delivery{
 		Type:      envelope.Type,
 		EventID:   eventID,
 		Signature: r.Header.Get("X-CogniGate-Signature"),
 		Tenant:    envelope.Tenant,
 		Body:      json.RawMessage(body),
+		Status:    status,
 	})
 	s.mu.Unlock()
 
-	w.WriteHeader(http.StatusNoContent)
+	w.WriteHeader(status)
 }
 
 // controlEvents reports what one sink has received, in arrival order. A sink
@@ -522,6 +556,49 @@ func (s *Server) controlEvents(w http.ResponseWriter, r *http.Request) {
 	s.mu.Unlock()
 
 	writeJSON(w, http.StatusOK, map[string]any{"sink": sink, "data": got})
+}
+
+type sinkFaultRequest struct {
+	Status int `json:"status"`
+	Count  int `json:"count"`
+}
+
+// controlSetSinkFault arms a sink to reject its next Count deliveries with
+// Status, after which it accepts normally again. It replaces whatever was armed
+// before rather than adding to it, so a test that reruns is arranging the same
+// thing twice and not twice as much of it.
+func (s *Server) controlSetSinkFault(w http.ResponseWriter, r *http.Request) {
+	sink := r.PathValue("sink")
+
+	var req sinkFaultRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "malformed body"})
+		return
+	}
+	if req.Status == 0 {
+		req.Status = http.StatusInternalServerError
+	}
+	// Only a rejection is arrangeable. A 2xx is what the sink does anyway, and
+	// accepting one here would arm a fault that changes nothing — which reads, to
+	// whoever writes the test, exactly like a fault that failed to take.
+	if req.Status < 400 || req.Status > 599 {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"error": fmt.Sprintf("status %d is not a rejection; use 4xx or 5xx", req.Status)})
+		return
+	}
+	// Deliberately no "until cleared" spelling here, so an omitted count is a
+	// mistake rather than a sink that refuses for the rest of the run.
+	if req.Count < 1 {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"error": "count must be at least 1"})
+		return
+	}
+
+	s.mu.Lock()
+	s.sinkFaults[sink] = &sinkFault{status: req.Status, remaining: req.Count}
+	s.mu.Unlock()
+
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // --- control plane ----------------------------------------------------------
@@ -653,6 +730,7 @@ func (s *Server) controlReset(w http.ResponseWriter, r *http.Request) {
 	s.keys = map[string]int{}
 	s.listings = 0
 	s.events = map[string][]Delivery{}
+	s.sinkFaults = map[string]*sinkFault{}
 	s.mu.Unlock()
 
 	w.WriteHeader(http.StatusNoContent)

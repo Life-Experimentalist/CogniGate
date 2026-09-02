@@ -108,6 +108,57 @@ func New(s store.Store, registry *provider.Registry, opts Options) *Catalog {
 	}
 }
 
+// CatalogAge is how long ago the catalog behind one tenant's provider was last
+// refreshed.
+type CatalogAge struct {
+	TenantID string
+	Provider string
+	Age      time.Duration
+}
+
+// Ages reports the age of every cached snapshot, broken out per provider.
+//
+// It is computed on demand rather than recorded, because the caller is the
+// metrics scrape and the answer changes every second whether anything happens
+// or not. A tenant with no snapshot yet contributes nothing: an absent series
+// says "never loaded", where a zero would say "just refreshed".
+//
+// The breakdown is per provider even though a tenant's providers share one
+// refresh cycle and therefore one FetchedAt. That is what GW-8 asks for, and it
+// is the axis an operator alerts on — a provider whose models have stopped
+// appearing is the thing being watched for, not a tenant.
+func (c *Catalog) Ages() []CatalogAge {
+	now := c.now()
+
+	c.mu.Lock()
+	states := make(map[string]*tenantState, len(c.perTenant))
+	for id, st := range c.perTenant {
+		states[id] = st
+	}
+	c.mu.Unlock()
+
+	var out []CatalogAge
+	for tenantID, st := range states {
+		st.mu.Lock()
+		snap := st.snapshot
+		st.mu.Unlock()
+		if snap == nil {
+			continue
+		}
+
+		age := snap.Age(now)
+		seen := map[string]bool{}
+		for _, e := range snap.Models {
+			if e.Provider == "" || seen[e.Provider] {
+				continue
+			}
+			seen[e.Provider] = true
+			out = append(out, CatalogAge{TenantID: tenantID, Provider: e.Provider, Age: age})
+		}
+	}
+	return out
+}
+
 func (c *Catalog) state(tenantID string) *tenantState {
 	c.mu.Lock()
 	defer c.mu.Unlock()

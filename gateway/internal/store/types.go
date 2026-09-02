@@ -121,6 +121,30 @@ type AuditEntry struct {
 	RequestID string `json:"request_id,omitempty"`
 }
 
+// Event is one notification the gateway raised, as it was published.
+//
+// It is stored as well as delivered because GW-8 makes the two independent: a
+// tenant with no webhook registered, or one whose endpoint was down for the
+// five attempts a delivery gets, still has to be able to find out that its
+// breaker opened. Polling is the floor under at-least-once delivery, not an
+// alternative to it.
+//
+// Data is the same payload the webhook body carries, and is bound by the same
+// rule: it holds gateway facts — a model id, a provider name, a quota window —
+// and never request or response content (GW-14).
+//
+// The field tags match the webhook envelope's exactly, `data` included with no
+// omitempty. A reader comparing what it polled against what it was delivered is
+// the ordinary use of this endpoint, and a key that is present in one shape and
+// absent in the other makes that comparison harder for no gain.
+type Event struct {
+	ID       string         `json:"id"`
+	Type     string         `json:"type"`
+	Created  time.Time      `json:"created"`
+	TenantID string         `json:"tenant"`
+	Data     map[string]any `json:"data"`
+}
+
 // Model is one catalog entry, as discovered from a provider (GW-1).
 type Model struct {
 	ID                string   `json:"id"`

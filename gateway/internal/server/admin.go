@@ -78,6 +78,13 @@ func (s *Server) adminRoutes(g fiber.Router) {
 	t.Get("/webhooks", s.listWebhooks)
 	t.Delete("/webhooks/:id", s.deleteWebhook)
 
+	// Read-only, and next to the webhooks because it is the same data by
+	// another route: what a subscription would have pushed, a tenant can pull.
+	// GW-8 requires both, since a webhook that was never registered — or whose
+	// endpoint was down for all five attempts — must not be the difference
+	// between an event happening and a tenant being able to find out.
+	t.Get("/events", s.listEvents)
+
 	t.Get("/usage", s.adminUsage)
 	t.Get("/usage/breakdown", s.adminUsageBreakdown)
 }
@@ -1182,6 +1189,35 @@ func (s *Server) deleteWebhook(c *fiber.Ctx) error {
 		return httpx.Fail(c, storeErr(err, "webhook", id))
 	}
 	return c.SendStatus(fiber.StatusNoContent)
+}
+
+// listEvents serves GET /admin/v1/tenants/{id}/events: the tenant's recent
+// event history, newest first.
+//
+// It is the delivery-independent half of GW-8's notification contract. Webhook
+// delivery is at-least-once over five attempts, which is a promise about effort
+// rather than about arrival, so the history is what makes "the gateway told you"
+// true even when nothing was ever successfully posted anywhere. The bound is
+// store.MaxTenantEvents; a poller that falls further behind than that loses the
+// oldest, which is the trade a fixed-size backstop makes.
+//
+// Tenant-scoped like every other route under this group, so a tenant reads its
+// own events and no one else's. The payloads carry gateway facts only — a model
+// id, a provider name, a quota window — never request or response content
+// (GW-14).
+func (s *Server) listEvents(c *fiber.Ctx) error {
+	tenantID, err := s.tenantScope(c)
+	if err != nil {
+		return httpx.Fail(c, err)
+	}
+	ctx, cancel := s.opContext(c)
+	defer cancel()
+
+	list, err := s.Store.ListEvents(ctx, tenantID)
+	if err != nil {
+		return httpx.Fail(c, apierr.From(err))
+	}
+	return sendPage(c, list, func(e *store.Event) string { return e.ID })
 }
 
 func knownEvent(name string) bool {

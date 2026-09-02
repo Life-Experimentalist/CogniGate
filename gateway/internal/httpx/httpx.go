@@ -53,6 +53,7 @@ const (
 	localClientRequestID = "cg_client_request_id"
 	localAPIKey          = "cg_api_key"
 	localTenant          = "cg_tenant"
+	localOutcome         = "cg_outcome"
 )
 
 // NewRequestID mints the identifier that appears in the response header, the
@@ -129,11 +130,60 @@ func TenantID(c *fiber.Ctx) string {
 	return ""
 }
 
+// Outcome is what a handler learns about a request that the observability
+// middleware, which only sees the route and the status, cannot work out for
+// itself: which model actually served, how deep the cascade went, what it cost
+// in tokens, and why it failed.
+//
+// It exists so that GW-8.AC-1's "exactly one log line per request" and its
+// fifteen-field minimum are the same requirement. A handler that logged its own
+// share of the fields would satisfy the second by breaking the first, and an
+// operator reconstructing a request would be joining two lines on a request id.
+//
+// Every field here is gateway metadata. None of it is derived from the request
+// or response body, which is the line GW-14 actually draws: a model id is
+// routing, not content.
+type Outcome struct {
+	Provider         string
+	Model            string
+	Alias            string
+	FallbackDepth    int
+	PromptTokens     int
+	CompletionTokens int
+	UpstreamMS       int64
+	ErrorCode        string
+	CacheStatus      string
+}
+
+// SetOutcome attaches what a handler learned to the request.
+func SetOutcome(c *fiber.Ctx, o Outcome) { c.Locals(localOutcome, o) }
+
+// GetOutcome returns the handler's report, zero-valued for a request that never
+// reached one.
+func GetOutcome(c *fiber.Ctx) Outcome {
+	o, _ := c.Locals(localOutcome).(Outcome)
+	return o
+}
+
+// setErrorCode records the machine-readable code on the outcome without
+// disturbing whatever else a handler had already reported. An error can be
+// raised after a partial success — a cascade that served, then failed to
+// stream — and the log line should carry both halves.
+func setErrorCode(c *fiber.Ctx, code string) {
+	o := GetOutcome(c)
+	o.ErrorCode = code
+	c.Locals(localOutcome, o)
+}
+
 // Fail renders any error as the GW-7 envelope. This is the only place in the
 // gateway that writes an error body, which is what makes the envelope uniform
 // across both planes.
 func Fail(c *fiber.Ctx, err error) error {
 	e := apierr.From(err)
+	// Recorded here rather than at each raise site precisely because this is the
+	// only place every error passes through: a code that reached the client but
+	// not the log would be a code nobody can search for.
+	setErrorCode(c, e.Code)
 	// The header is set again here rather than assumed: an error raised before
 	// the request-id middleware ran would otherwise answer without one.
 	id := RequestID(c)

@@ -111,6 +111,7 @@ func (s *Server) streamCompletion(c *fiber.Ctx, tenantID, requested string, body
 	}
 
 	s.applyRoutingHeaders(c, result)
+	s.reportOutcome(c, result, requested, nil)
 	c.Set(fiber.HeaderContentType, "text/event-stream")
 	c.Set(fiber.HeaderCacheControl, "no-cache")
 	c.Set(fiber.HeaderConnection, "keep-alive")
@@ -272,8 +273,66 @@ func (s *Server) applyRoutingHeaders(c *fiber.Ctx, result *routing.Result) {
 	}
 }
 
+// reportOutcome hands the request-scoped facts to the observability middleware,
+// which sees only the route and the status and would otherwise log a completion
+// without saying what completed it.
+//
+// It must be called while the request is alive. On the streaming path that means
+// before the writer starts, which is why a stream reports no token counts: they
+// are not known until the upstream body has been relayed, and by then this
+// context has been recycled. The usage record, which is written from the writer
+// goroutine and carries its own copies, is where a stream's tokens are found.
+func (s *Server) reportOutcome(c *fiber.Ctx, result *routing.Result, requested string, usage *provider.Usage) {
+	out := httpx.GetOutcome(c)
+	out.Provider = result.Candidate.Provider
+	out.Model = result.Candidate.Model
+	out.FallbackDepth = result.Depth
+	out.UpstreamMS = result.Response.Latency.Milliseconds()
+	// Only an alias, never the resolved id: "requested" equal to the served
+	// model means the caller named the model directly, and repeating it in a
+	// field named alias would read as an alias that happens to share its name.
+	if requested != result.Candidate.Model {
+		out.Alias = requested
+	}
+	if usage != nil {
+		out.PromptTokens = usage.PromptTokens
+		out.CompletionTokens = usage.CompletionTokens
+	}
+	httpx.SetOutcome(c, out)
+}
+
+// meterCascade counts the hops a request took to reach the candidate that
+// served it, one row per hop rather than one per request.
+//
+// Per-hop is what makes the series answerable: "the chain from A ended at C"
+// says nothing about which link failed, whereas A→B and B→C say that A is the
+// one that broke. The reason comes from the failure enumeration, never from
+// upstream error text — that is unbounded as a label value, and under GW-14 it
+// may quote the request that produced it.
+func (s *Server) meterCascade(tenantID string, result *routing.Result) {
+	if result.Depth == 0 || len(result.Attempts) < 2 {
+		return
+	}
+	for i := 1; i < len(result.Attempts); i++ {
+		from, to := result.Attempts[i-1], result.Attempts[i]
+		s.Metrics.FallbackCascades.WithLabelValues(
+			tenantID, from.Candidate.Model, to.Candidate.Model, cascadeReason(from),
+		).Inc()
+	}
+}
+
+// cascadeReason names why one attempt handed off to the next, in the small
+// vocabulary a dashboard can group by.
+func cascadeReason(a routing.Attempt) string {
+	if a.Skipped {
+		return "breaker_open"
+	}
+	return a.Failure.String()
+}
+
 // meter records one served request: metrics now, usage row asynchronously.
 func (s *Server) meter(c *fiber.Ctx, result *routing.Result, requested string, usage *provider.Usage, streamed bool, status int, elapsed time.Duration) {
+	s.reportOutcome(c, result, requested, usage)
 	s.record(httpx.RequestID(c), httpx.ClientRequestID(c), httpx.TenantID(c), keyPrefix(c),
 		result, requested, usage, streamed, status, elapsed)
 }
@@ -315,9 +374,7 @@ func (s *Server) record(
 		if cost > 0 {
 			s.Metrics.Cost.WithLabelValues(tenantID, cand.Provider, cand.Model).Add(cost)
 		}
-		if result.Depth > 0 {
-			s.Metrics.FallbackCascades.WithLabelValues(tenantID, strconv.Itoa(result.Depth)).Inc()
-		}
+		s.meterCascade(tenantID, result)
 	}
 
 	rec := store.UsageRecord{
@@ -350,6 +407,13 @@ func (s *Server) record(
 // would distort every breakdown it appears in.
 func (s *Server) recordRejection(c *fiber.Ctx, requested string, err error) {
 	e := apierr.From(err)
+	// The model the caller asked for still belongs on the request line, even
+	// though nothing served it: "which alias is failing" is the first question
+	// asked about a cascade that never landed.
+	out := httpx.GetOutcome(c)
+	out.Alias = requested
+	httpx.SetOutcome(c, out)
+
 	s.Logger.Warn("request rejected",
 		slog.String("request_id", httpx.RequestID(c)),
 		slog.String("tenant", httpx.TenantID(c)),
