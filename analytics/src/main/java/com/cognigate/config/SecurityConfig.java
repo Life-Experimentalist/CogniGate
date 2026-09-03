@@ -26,11 +26,10 @@ public class SecurityConfig {
     private final String token;
 
     /**
-     * There is deliberately no default token, for the same reason there is no
-     * default master key: a built-in fallback would be public knowledge, and
-     * every deployment that forgot to set the variable would be publishing an
-     * open metering and administration API on a host port. Absent configuration
-     * fails fast at startup instead.
+     * There is deliberately no default token: a built-in fallback would be
+     * public knowledge, and every deployment that forgot to set the variable
+     * would be publishing an open metering API on a host port. Absent
+     * configuration fails fast at startup instead.
      */
     public SecurityConfig(@Value("${ANALYTICS_TOKEN:}") String token) {
         if (token == null || token.strip().length() < MIN_LENGTH) {

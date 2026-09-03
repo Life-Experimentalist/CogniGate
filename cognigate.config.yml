@@ -39,10 +39,6 @@ cognigate:
       show_sql: false
     threads:
       virtual_enabled: true        # Enable Java 25 Project Loom Virtual Threads
-    encryption:
-      # 32-byte hex key for AES-256-GCM provider key vault
-      # Set via ENCRYPTION_MASTER_KEY env var. Never store plaintext here.
-      master_key_env: "ENCRYPTION_MASTER_KEY"
 
   # =====================================================
   # PostgreSQL Configuration
@@ -53,15 +49,6 @@ cognigate:
     database: "cognigate"
     username: "cognigate_user"
     data_volume: "pgdata"
-
-  # =====================================================
-  # Redis Configuration
-  # =====================================================
-  redis:
-    image: "redis:7-alpine"
-    port: 6379
-    invalidation_channel: "cognigate:cache:invalidate"
-    tenant_key_prefix: "tenant:cfg:"
 
   # =====================================================
   # Billing Configuration

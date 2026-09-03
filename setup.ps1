@@ -92,12 +92,6 @@ function New-HexSecret([int]$Bytes) {
 }
 
 $envContent = Get-Content ".env" -Raw
-if ($envContent -match "(?m)^ENCRYPTION_MASTER_KEY=replace_" -or $envContent -notmatch "(?m)^ENCRYPTION_MASTER_KEY=") {
-    Write-Host "  [!] Generating ENCRYPTION_MASTER_KEY..." -ForegroundColor Yellow
-    $envContent = $envContent -replace "(?m)^ENCRYPTION_MASTER_KEY=.*", "ENCRYPTION_MASTER_KEY=$(New-HexSecret 32)"
-    Write-Host "  [OK] ENCRYPTION_MASTER_KEY generated." -ForegroundColor Green
-}
-
 if ($envContent -match "(?m)^GATEWAY_BOOTSTRAP_KEY=replace_" -or $envContent -notmatch "(?m)^GATEWAY_BOOTSTRAP_KEY=") {
     Write-Host "  [!] Generating GATEWAY_BOOTSTRAP_KEY..." -ForegroundColor Yellow
     $envContent = $envContent -replace "(?m)^GATEWAY_BOOTSTRAP_KEY=.*", "GATEWAY_BOOTSTRAP_KEY=$(New-HexSecret 24)"
@@ -138,7 +132,6 @@ if ($Detach) {
     Write-Host "  Gateway:        http://localhost:8080"
     Write-Host "  Analytics:      http://localhost:8081"
     Write-Host "  PostgreSQL:     localhost:5432 (db: cognigate)"
-    Write-Host "  Redis:          localhost:6379"
     Write-Host ""
     Write-Host "  Run: docker compose logs -f  (to tail logs)"
     Write-Host "  Run: docker compose down     (to stop)"

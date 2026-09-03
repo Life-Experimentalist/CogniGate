@@ -2,7 +2,6 @@
 #
 # Copy `.env.example` to `.env` and fill it in before running:
 #   cp .env.example .env
-#   openssl rand -hex 32   # -> ENCRYPTION_MASTER_KEY
 #   openssl rand -hex 32   # -> ANALYTICS_TOKEN
 #   openssl rand -hex 24   # -> GATEWAY_BOOTSTRAP_KEY
 #
@@ -13,8 +12,8 @@
 # Every service is health-checked, so `--wait` returns only once the whole stack
 # is actually serving rather than merely started (GW-11). The two images we build
 # carry their own `HEALTHCHECK` — gateway on /healthz, analytics on
-# /actuator/health — which compose honours; the two stock images are checked here
-# instead, because postgres and redis ship without one.
+# /actuator/health — which compose honours; postgres is checked here instead,
+# because the stock image ships without one.
 
 services:
   gateway:
@@ -66,22 +65,16 @@ services:
       - SPRING_DATASOURCE_URL=jdbc:postgresql://postgres-db:5432/${POSTGRES_DB:-cognigate}
       - SPRING_DATASOURCE_USERNAME=${POSTGRES_USER:-cognigate_user}
       - SPRING_DATASOURCE_PASSWORD=${POSTGRES_PASSWORD:-cognigate_pass}
-      - SPRING_DATA_REDIS_HOST=redis
-      - SPRING_DATA_REDIS_PORT=6379
-      # No default: AES-256-GCM requires exactly 32 bytes (64 hex chars).
-      # Compose refuses to start rather than fall back to a guessable key.
-      - ENCRYPTION_MASTER_KEY=${ENCRYPTION_MASTER_KEY:?must be a 64-char hex string; generate with `openssl rand -hex 32`}
-      # The same value the gateway is given above. Port 8081 is published to the
-      # host, and /api/** is how usage is written and tenants are created, so
-      # this is the only thing between that and anyone who can reach the port.
-      # No default, for the same reason ENCRYPTION_MASTER_KEY has none.
+      # The same value the gateway is given above. Port 8081 is published to
+      # the host and /api/** is how usage is written, so this is the only thing
+      # between that and anyone who can reach the port. No default, because a
+      # reference deployment that ships with a known credential is a reference
+      # deployment nobody should copy.
       - ANALYTICS_TOKEN=${ANALYTICS_TOKEN:?generate one with `openssl rand -hex 32`}
     networks:
       - cogni-net
     depends_on:
       postgres-db:
-        condition: service_healthy
-      redis:
         condition: service_healthy
 
   postgres-db:
@@ -100,18 +93,6 @@ services:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-cognigate_user} -d ${POSTGRES_DB:-cognigate}"]
       interval: 5s
       timeout: 5s
-      retries: 10
-
-  redis:
-    image: redis:7-alpine
-    ports:
-      - "6379:6379"
-    networks:
-      - cogni-net
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
       retries: 10
 
 networks:

@@ -32,6 +32,23 @@ public interface UsageMetricRepo extends JpaRepository<UsageMetric, Long> {
      */
     boolean existsByRequestId(String requestId);
 
+    /**
+     * Every tenant that sent traffic in a window, in a stable order.
+     *
+     * <p>This is the tenant set for anything that walks a period tenant by
+     * tenant. There is no tenant table to read instead: the gateway owns tenant
+     * identity and the only thing it tells this service is the identifier on
+     * each usage record.
+     */
+    @Query("""
+            select distinct u.tenantId
+            from UsageMetric u
+            where u.recordedAt >= :since and u.recordedAt < :until
+            order by u.tenantId asc
+            """)
+    List<String> tenantIdsWithUsage(@Param("since") Instant since,
+                                    @Param("until") Instant until);
+
     @Query("""
             select new com.cognigate.dto.UsageTotalsResponse(
                 count(u), sum(u.promptTokens), sum(u.completionTokens),
