@@ -45,6 +45,7 @@ const (
 	IDRequest  = "req"
 	IDEvent    = "evt"
 	IDAudit    = "aud"
+	IDCapture  = "cap"
 )
 
 // GenerateAPIKey mints a credential for one plane. `dev` inserts a visible

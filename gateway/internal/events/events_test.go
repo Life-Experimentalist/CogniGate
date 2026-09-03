@@ -458,6 +458,8 @@ func TestRegistryMatchesTheDocumentedTypes(t *testing.T) {
 		"catalog.model_removed",
 		"alias.degraded",
 		"rule.degraded",
+		"debug_capture.enabled",
+		"debug_capture.disabled",
 	}
 	if len(Registry) != len(want) {
 		t.Fatalf("registry has %d types, want %d", len(Registry), len(want))

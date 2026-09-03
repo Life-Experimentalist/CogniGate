@@ -173,9 +173,26 @@ type Log struct {
 // Debug governs GW-14 capture. MaxTTL is a ceiling the admin API refuses to
 // exceed: captured prompts are the most sensitive thing the gateway can hold,
 // so they expire in days, not indefinitely.
+//
+// None of these turns capture on. There is deliberately no deployment-wide
+// switch — GW-14 requires the decision to name a tenant — so what is configured
+// here is the shape of the window an operator may open, never whether one is
+// open.
+//
+// MaxBytesPerTenant bounds what capture can cost the process. It is per tenant
+// rather than global for the reason the capture package gives: a global budget
+// would make one tenant's volume decide how much of another's is kept.
 type Debug struct {
 	MaxTTL            time.Duration `yaml:"max_capture_ttl"`
+	DefaultTTL        time.Duration `yaml:"default_capture_ttl"`
 	DefaultSampleRate float64       `yaml:"default_sample_rate"`
+	MaxBytesPerTenant int64         `yaml:"max_capture_bytes_per_tenant"`
+	// SweepInterval is how often expired captures are hard-deleted. It is not a
+	// promise a client can observe — the admin plane never shows an expired
+	// capture regardless — but it bounds how long content that is already
+	// unreadable stays resident, which is the half of the TTL that matters to
+	// whoever operates the process.
+	SweepInterval time.Duration `yaml:"capture_sweep_interval"`
 }
 
 // Default returns the specification defaults. Every field is set here; loading
@@ -226,7 +243,13 @@ func Default() Config {
 		Metrics:   Metrics{Enabled: true, Path: "/metrics"},
 		Shutdown:  Shutdown{DrainTimeout: 30 * time.Second},
 		Log:       Log{Level: "info"},
-		Debug:     Debug{MaxTTL: 72 * time.Hour, DefaultSampleRate: 0.01},
+		Debug: Debug{
+			MaxTTL:            72 * time.Hour,
+			DefaultTTL:        24 * time.Hour,
+			DefaultSampleRate: 0.01,
+			MaxBytesPerTenant: 32 << 20,
+			SweepInterval:     time.Minute,
+		},
 	}
 }
 
@@ -359,6 +382,15 @@ func (c Config) Validate() error {
 	}
 	if c.Debug.DefaultSampleRate < 0 || c.Debug.DefaultSampleRate > 1 {
 		return fmt.Errorf("debug.default_sample_rate must be within 0..1")
+	}
+	if c.Debug.DefaultTTL > c.Debug.MaxTTL {
+		return fmt.Errorf("debug.default_capture_ttl exceeds debug.max_capture_ttl")
+	}
+	if c.Debug.MaxBytesPerTenant < 1 {
+		return fmt.Errorf("debug.max_capture_bytes_per_tenant must be positive")
+	}
+	if c.Debug.SweepInterval < time.Second {
+		return fmt.Errorf("debug.capture_sweep_interval must be at least 1s")
 	}
 	return nil
 }

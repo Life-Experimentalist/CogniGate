@@ -321,7 +321,28 @@ type completionRequest struct {
 	Stream   bool   `json:"stream"`
 	Messages []struct {
 		Role string `json:"role"`
+		// Raw because the field is a string in the simple case and an array of
+		// parts in the multimodal one. Decoding it as a string would turn a
+		// request this mock has no opinion about into a 400.
+		Content json.RawMessage `json:"content"`
 	} `json:"messages"`
+}
+
+// reply is what the mock answers with: the last message's text, echoed.
+//
+// GW-14 asserts that content does not leak, and half of "content" is the
+// completion. A mock that always answers the same dull word can only ever prove
+// the prompt half — the response half would pass by accident, because there was
+// nothing distinctive in it to find. Echoing lets one conformance test plant a
+// sentinel and then look for it on both sides of the exchange.
+func (r completionRequest) reply() string {
+	for i := len(r.Messages) - 1; i >= 0; i-- {
+		var text string
+		if json.Unmarshal(r.Messages[i].Content, &text) == nil && text != "" {
+			return text
+		}
+	}
+	return completionText
 }
 
 func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
@@ -409,7 +430,7 @@ func (s *Server) serveCompletion(w http.ResponseWriter, r *http.Request, allowed
 	}
 
 	if req.Stream {
-		s.streamCompletion(w, req.Model)
+		s.streamCompletion(w, req.Model, req.reply())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -419,16 +440,17 @@ func (s *Server) serveCompletion(w http.ResponseWriter, r *http.Request, allowed
 		"model":   req.Model,
 		"choices": []any{map[string]any{
 			"index":         0,
-			"message":       map[string]any{"role": "assistant", "content": completionText},
+			"message":       map[string]any{"role": "assistant", "content": req.reply()},
 			"finish_reason": "stop",
 		}},
 		"usage": usageBlock(),
 	})
 }
 
-// completionText is deliberately dull. GW-14 forbids the gateway from storing
-// or logging content, and a test that asserts on a memorable string invites
-// someone to satisfy it by capturing one.
+// completionText is what a request with nothing to echo is answered with, and
+// what the fault paths send. Deliberately dull: GW-14 forbids the gateway from
+// storing or logging content, and a test that asserts on a memorable string
+// invites someone to satisfy it by capturing one.
 const completionText = "ok"
 
 func usageBlock() map[string]any {
@@ -466,14 +488,14 @@ func beginStream(w http.ResponseWriter) func(map[string]any) {
 	}
 }
 
-func (s *Server) streamCompletion(w http.ResponseWriter, model string) {
+func (s *Server) streamCompletion(w http.ResponseWriter, model, text string) {
 	chunk := beginStream(w)
 	if chunk == nil {
 		return
 	}
 
 	chunk(streamChunk(model, map[string]any{"role": "assistant"}, nil))
-	chunk(streamChunk(model, map[string]any{"content": completionText}, nil))
+	chunk(streamChunk(model, map[string]any{"content": text}, nil))
 	chunk(streamChunk(model, map[string]any{}, "stop"))
 
 	// A usage-bearing final chunk, as an upstream sends when the caller asked

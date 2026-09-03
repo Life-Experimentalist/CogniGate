@@ -193,16 +193,15 @@ func suiteTests(t *testing.T) map[string][]string {
 
 // notYetCovered names the requirements whose tranche has not been written.
 //
-// The list exists so that an incomplete repository can still hold itself to the
-// 1:1 mapping for everything it has finished, rather than staying red until the
-// last tranche lands and enforcing nothing in the meantime. It is deliberately
-// spelled as an allowlist of *requirements* and checked in both directions: a
-// requirement named here must have no tests at all, so landing GW-14's tranche
-// without deleting its entry fails this criterion. The list can only shrink, and
-// it reaches zero when the specifications and the suite agree.
-var notYetCovered = map[string]bool{
-	"GW-14": true,
-}
+// It is empty, and the machinery is kept anyway. The list exists so that an
+// incomplete repository can still hold itself to the 1:1 mapping for everything
+// it has finished, rather than staying red until the last tranche lands and
+// enforcing nothing in the meantime; a requirement named here must have no tests
+// at all, so an entry that outlives its tranche fails this criterion rather than
+// quietly switching the enforcement back off. Empty is the state the mapping is
+// meant to reach — every specification under spec/ has its tests — and the next
+// requirement to be specified ahead of its suite has somewhere to be declared.
+var notYetCovered = map[string]bool{}
 
 // --- the criteria -----------------------------------------------------------
 
@@ -314,8 +313,12 @@ func TestGW10_AC2_EveryAcceptanceCriterionHasExactlyOneTest(t *testing.T) {
 		}
 	}
 
+	awaiting := "none"
+	if len(notYetCovered) > 0 {
+		awaiting = strings.Join(sortedKeys(notYetCovered), ", ")
+	}
 	t.Logf("%d acceptance criteria defined, %d covered, %d awaiting a tranche (%s)",
-		len(defined), len(covered), len(defined)-len(covered), strings.Join(sortedKeys(notYetCovered), ", "))
+		len(defined), len(covered), len(defined)-len(covered), awaiting)
 }
 
 // TestGW10_AC3_TheSuiteIsIsolatedFromAConcurrentRun asserts the mechanism that

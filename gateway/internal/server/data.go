@@ -836,6 +836,12 @@ func (s *Server) capabilities() []string {
 		caps = append(caps, "gw-12") // response caching
 	}
 	caps = append(caps, "gw-13") // size limits & time budgets
+	// Unconditional, unlike GW-12. The content ban is not a switch, and debug
+	// capture is enabled per tenant rather than per deployment, so every process
+	// implements GW-14 in full — what varies is whether any tenant has asked
+	// for the one exception, which is a question about that tenant and not
+	// about this deployment's capabilities.
+	caps = append(caps, "gw-14") // content-blind design
 	return caps
 }
 

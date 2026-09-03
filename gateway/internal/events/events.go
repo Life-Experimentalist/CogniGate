@@ -36,6 +36,15 @@ const (
 	CatalogModelRemoved   = "catalog.model_removed"
 	AliasDegraded         = "alias.degraded"
 	RuleDegraded          = "rule.degraded"
+	// GW-14 requires enabling capture to fire an events-visible record as well
+	// as an audit entry. The two answer different questions and neither
+	// substitutes for the other: the audit log says who turned retention on,
+	// and is readable by root alone; the event says that it is on, and reaches
+	// the tenant whose content is being retained. A tenant learning only from
+	// the response header that its prompts are being kept would be learning it
+	// one request at a time, from the plane least likely to be watched.
+	DebugCaptureEnabled  = "debug_capture.enabled"
+	DebugCaptureDisabled = "debug_capture.disabled"
 )
 
 // Registry is that list, in the order the documentation presents it. It is the
@@ -51,6 +60,8 @@ var Registry = []string{
 	CatalogModelRemoved,
 	AliasDegraded,
 	RuleDegraded,
+	DebugCaptureEnabled,
+	DebugCaptureDisabled,
 }
 
 // Envelope is the delivered body. It is the same shape for every event type;
