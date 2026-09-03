@@ -59,7 +59,7 @@ export function Nav() {
                 }}
             >
                 <Image
-                    src="/logo.png"
+                    src={`${process.env.NEXT_PUBLIC_BASE_PATH ?? ""}/logo.png`}
                     alt="CogniGate Logo"
                     width={32}
                     height={32}
