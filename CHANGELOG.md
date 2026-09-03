@@ -122,7 +122,10 @@ because the documentation was public and someone may have planned against it.
   format — Together, Groq, Fireworks, Azure OpenAI, OpenRouter, vLLM, Ollama
   — because only the base URL differs between them. A provider with its own
   protocol needs a translating proxy in front of it. The `/docs/plugins` page
-  is gone rather than left describing a feature that was never built.
+  is gone rather than left describing a feature that was never built, and
+  `ai_agent_instructions.md` — a root-level brief telling an AI agent to
+  implement `com.cognigate.plugin.AiProviderHandler` against Janino, an
+  interface no source file in this repository declares — went with it.
 - **Redis.** The same documentation described a Redis 7 fast-path cache and a
   `cognigate:cache:invalidate` Pub/Sub channel. The gateway holds its
   configuration in process memory; the deployment is three containers, not
