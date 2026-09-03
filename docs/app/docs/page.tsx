@@ -25,21 +25,14 @@ const sections = [
     {
         title: "Architecture",
         description:
-            "Deep dive into the polyglot design, Go proxy, and Java domain engine.",
+            "The two processes, what each owns, and the trade the split makes.",
         href: "/docs/architecture",
         icon: "🏗️",
     },
     {
-        title: "Plugin System",
-        description:
-            "Learn how to write and upload hot-swappable Java bytecode plugins.",
-        href: "/docs/plugins",
-        icon: "🔌",
-    },
-    {
         title: "Routing & Failover",
         description:
-            "Configure round-robin key rotation, circuit breakers, and cascades.",
+            "Configure capability aliases, fallback chains, and circuit breakers.",
         href: "/docs/routing",
         icon: "🔄",
     },
@@ -53,7 +46,7 @@ const sections = [
     {
         title: "Security & Keys",
         description:
-            "AES-256-GCM encryption vault details and network isolation.",
+            "How keys are stored and scoped, and how the two planes are isolated.",
         href: "/docs/security",
         icon: "🔐",
     },
@@ -65,23 +58,23 @@ const sections = [
         icon: "🛡️",
     },
     {
-        title: "Billing & Telemetry",
+        title: "Usage & Cost",
         description:
-            "Non-blocking token consumption tracking and monthly invoices.",
+            "Non-blocking metering, durable storage, and where the cost figure comes from.",
         href: "/docs/billing",
         icon: "💳",
     },
     {
         title: "Deployment Guide",
         description:
-            "Deploy to production virtual machines or Kubernetes clusters.",
+            "What to change before this faces real traffic, and what it still owes you.",
         href: "/docs/deployment",
         icon: "🚀",
     },
     {
         title: "Troubleshooting",
         description:
-            "Resolve encryption tag mismatches, cache sync, and compile issues.",
+            "Every error code, what it actually means, and which failures are by design.",
         href: "/docs/troubleshooting",
         icon: "🛠️",
     },

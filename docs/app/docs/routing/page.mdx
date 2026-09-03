@@ -3,92 +3,225 @@ import { Mermaid } from "../../components/Mermaid";
 export const metadata = {
     title: "Routing & Failover",
     description:
-        "Learn how CogniGate manages multi-tenant model routing, round-robin key rotation, circuit breakers, and backup model cascading.",
+        "How a model name becomes a provider call: aliases, fallback chains, key rotation, circuit breakers, and the one failure the gateway refuses to retry.",
 };
 
 # Routing & Failover
 
-CogniGate acts as a cognitive gateway, ensuring your application always has access to AI models even during provider outages, rate-limit exhaustion, or credential failures.
+A caller sends `{"model": "..."}`. Turning that into an upstream call is three
+steps — resolve the name, build the chain, run the cascade — and each one has a
+rule about what it will not do.
 
-## Key Rotation
+## 1. Resolving the name
 
-For any model request, CogniGate cycles through all active provider API keys registered for that tenant. This prevents hitting individual key rate limits and maximizes throughput.
+The name in the request is either a model in the tenant's catalog or one of the
+tenant's aliases. Every tenant is created with four:
 
-- **Round-Robin Cycling**: Requests are distributed evenly across active keys for the target provider.
-- **Hot-Swap Invalidation**: If an administrator adds or removes a key, the change propagates system-wide via Redis Pub/Sub, updating the rotation pool in milliseconds without request interruption.
+| Alias        | Means                                            |
+| ------------ | ------------------------------------------------ |
+| `fast`       | cheapest chat-capable model reachable            |
+| `balanced`   | same constraint set, cost-ordered                |
+| `best`       | most expensive chat-capable model reachable      |
+| `transcribe` | a model that advertises transcription            |
 
-## Failover Sequence
+An alias is a **constraint, not a pin**. It keeps meaning the same thing as
+providers ship new models, which is the point: a chain hardcoded to
+`gpt-3.5-turbo` decays, `fast` does not.
 
-<Mermaid chart={`
+An alias may carry a `pin`, a required capability set, a minimum context window,
+an ordered `provider_preference` and a `cost_tier`. Resolution applies them in
+that order:
+
+1. A `pin` that resolves wins outright. A pin that no longer exists in the
+   catalog falls through to the constraints rather than 404ing — the alias still
+   describes what the caller wants, and a retired model should not break it.
+2. Filter to models that advertise every required capability and meet the
+   minimum context window.
+3. Order by `provider_preference`, then by price: ascending for `cheapest` and
+   `balanced`, descending for `best`. Price is the only quality signal that
+   exists across providers, which is a crude thing for `best` to mean and an
+   honest one.
+4. Break ties on model id, so the same request resolves the same way twice. A
+   cache key depends on it.
+
+A provider not named in `provider_preference` sorts after every one that is
+without being excluded. A preference is an ordering, not an allowlist.
+
+```bash
+curl -X PUT http://localhost:8080/admin/v1/tenants/$TENANT/aliases/summarise \
+  -H "Authorization: Bearer $CG_ADMIN" \
+  -H "Content-Type: application/json" \
+  -d '{
+        "capabilities": ["chat"],
+        "min_context_window": 128000,
+        "provider_preference": ["together", "openai"],
+        "cost_tier": "cheapest"
+      }'
+```
+
+## 2. Building the chain
+
+A routing rule maps what the caller asked for to an ordered list of what to try.
+
+```bash
+curl -X PUT http://localhost:8080/admin/v1/tenants/$TENANT/routing-rules \
+  -H "Authorization: Bearer $CG_ADMIN" \
+  -H "Content-Type: application/json" \
+  -d '{
+        "match": "best",
+        "chain": ["gpt-4o", "llama-3.3-70b", "fast"]
+      }'
+```
+
+`match` is the model or alias the caller names; `chain` is tried left to right.
+Chain entries are themselves models or aliases, so a chain can end in a
+constraint rather than a specific model — a useful last resort.
+
+With no rule, the chain is one entry: whatever the caller asked for.
+
+Each chain position contributes at most **one** candidate. An alias that could
+expand to six models does not become six attempts; it becomes one, and the next
+attempt comes from the next position. That is what makes the chain the unit of
+fallback and keeps `X-CogniGate-Fallback-Depth` meaningful. A position that
+resolves to nothing at all is dropped rather than failing the request — surviving
+exactly that is why the chain exists.
+
+A chain longer than `routing.max_fallback_depth` (default 5) is refused when the
+rule is written, not silently truncated when it is used.
+
+## 3. Running the cascade
+
+<Mermaid
+    chart={`
 flowchart TD
-  Req[Incoming Request]
-  Keys{Active Key Pool?}
-  SelectKey[Select Next Key Round-Robin]
-  CallLLM[Call LLM Provider]
-  Success{Call Success?}
-  Cascade{Fallback Model?}
-  Unhealthy[Mark Key Unhealthy in Redis]
-  Return[Return Response]
-  TriggerFallback[Cascade to Backup Model]
-  Fail[Return 429 / 5xx Error]
+  Start[Candidate list, best first]
+  Breaker{Breaker closed?}
+  Skip[Skip: no upstream call]
+  Call[Call provider with next key]
+  Kind{Outcome}
+  Rotate{More keys in pool?}
+  Ok[Return response]
+  Fatal[Return the provider's own 4xx]
+  Next{More candidates?}
+  Exhausted[502 upstream_exhausted + attempts]
 
-Req --> Keys
-Keys -->|Yes| SelectKey
-SelectKey --> CallLLM
-CallLLM --> Success
-Success -->|Yes| Return
-Success -->|No| Unhealthy
-Unhealthy --> Cascade
-Keys -->|No| Cascade
-Cascade -->|Yes| TriggerFallback
-TriggerFallback --> Req
-Cascade -->|No| Fail
-`} />
+Start --> Breaker
+Breaker -->|no| Skip
+Skip --> Next
+Breaker -->|yes| Call
+Call --> Kind
+Kind -->|success| Ok
+Kind -->|client 4xx| Fatal
+Kind -->|429| Rotate
+Kind -->|5xx or transport| Next
+Rotate -->|yes| Call
+Rotate -->|no| Next
+Next -->|yes| Breaker
+Next -->|no| Exhausted
+`}
+/>
 
-### Failover Flow Elements Described:
+### Key rotation happens inside one candidate
 
-- **Incoming Request**: Client triggers `POST /v1/chat/completions` API call.
-- **Active Key Pool**: Gateway looks up if there are active provider keys matching the model rules.
-- **Select Next Key**: Picks the next rotating credential using round-robin distribution.
-- **Call LLM**: Performs downstream API execution against the target provider.
-- **Call Success**: Evaluates HTTP status. 200 outputs payload; any 429/5xx error routes to failure handling.
-- **Mark Key Unhealthy**: Sets the specific key as offline in Redis with a 300s TTL.
-- **Fallback Model**: Cascades to alternative models (e.g. falling back to `gpt-3.5-turbo` when `gpt-4` keys are exhausted).
+A provider is registered with a pool of keys. A `429` rotates to the next key in
+that pool and tries again — a per-key quota is not a provider outage, and
+cascading to a different model over one would be an overreaction. Only when
+every key in the pool has been rate-limited does the provider count as failing
+and the cascade move on.
 
-## Circuit Breakers
+Key rotation does not increment `X-CogniGate-Fallback-Depth`. The header counts
+candidates that failed, and a rotation stayed on the same one.
 
-To prevent downstream failures from slowing down your applications, the Go Edge Proxy implements active circuit breaking for every provider key:
+### The failure that is never retried
 
-1. **Interception**: When a request returns a failure status (such as a 429 Rate Limit, 401 Invalid Key, or 503 Service Unavailable), the proxy intercepts it.
-2. **Isolation**: The key is flagged as unhealthy in Redis with a configurable TTL (e.g., 300 seconds).
-3. **Recovery**: The unhealthy key is excluded from the rotation pool. Once the TTL expires, the key is placed back into a "half-open" state to verify if the downstream service has recovered.
+A `4xx` the request itself caused — a malformed body, an oversized prompt, a
+content-policy refusal — stops the cascade immediately, and the provider's own
+status and message are passed through rather than replaced.
 
-## Cascading Failover (Model Fallback)
+This is deliberate and it is the most important rule on this page. The same
+request would fail identically on every other model in the chain, so cascading
+would burn the whole chain to be told the same thing five times, and bill the
+caller for each. A bad request should cost one call.
 
-If all keys for a requested primary model are marked unhealthy, or if the primary model endpoint experiences systemic failure, CogniGate cascades the request to the tenant's configured backup model.
-
-For example, you can define a rule where requests to `gpt-4` fall back automatically to `gpt-3.5-turbo` or Anthropic's `claude-3-haiku`:
+### When everything fails
 
 ```json
 {
-    "modelName": "gpt-4",
-    "backupModelName": "gpt-3.5-turbo",
-    "priority": 1
+    "error": {
+        "type": "api_error",
+        "code": "upstream_exhausted",
+        "message": "All 3 routing candidates failed.",
+        "attempts": [
+            {
+                "provider": "openai",
+                "model": "gpt-4o",
+                "failure": "rate_limit",
+                "status": 429
+            },
+            {
+                "provider": "together",
+                "model": "llama-3.3-70b",
+                "failure": "server",
+                "status": 503
+            },
+            { "provider": "local", "model": "llama-3.1-70b", "failure": "breaker_open" }
+        ]
+    }
 }
 ```
 
-This cascading behavior happens transparently at the proxy layer, meaning client applications see zero downtime or 5xx responses.
+`breaker_open` is named apart from the provider-reported failures on purpose: it
+says the gateway never asked. That is what lets an operator tell "the provider is
+down" from "the gateway has already decided the provider is down".
 
-## Configuring Routing Rules
+Only the classification crosses this boundary. The upstream's own error text
+stays in the gateway's log line, because it can quote a request body and request
+content does not belong in a response the caller did not send it with.
 
-Routing rules can be customized through the Admin API:
+## Circuit breakers
 
-```bash
-curl -X POST http://localhost:8081/api/admin/tenants/1/rules \
-  -H "Content-Type: application/json" \
-  -d '{
-    "modelName": "gpt-4",
-    "backupModelName": "claude-3-opus",
-    "priority": 1
-  }'
+The breaker exists to stop the next several hundred requests from each paying a
+full timeout against a provider that is known to be down. It cannot save the
+request that is already failing.
+
+Its unit of isolation is `tenant / provider / model`:
+
+- **Per model**, so one model's outage does not take that provider's others out
+  of rotation.
+- **Per tenant**, because provider names are tenant-scoped. Two tenants that each
+  call their upstream `primary` are naming different accounts, and one tenant's
+  bad credential must not stop the other's traffic.
+
+```yaml
+routing:
+    breaker:
+        error_threshold: 5 # failures...
+        window: 30s # ...inside this window opens it
+        open_duration: 60s # ...for this long
 ```
+
+Failures older than `window` are dropped, so a slow trickle of errors spread over
+hours never accumulates into a trip.
+
+**Closed** → traffic flows. **Open** → candidates are skipped with zero upstream
+calls. After `open_duration`, **half-open** → exactly one request is let through
+as a probe while everyone else keeps waiting.
+
+A successful probe closes the breaker outright rather than decrementing a
+counter: the provider has demonstrably recovered. A failed probe re-opens
+immediately — one confirmation is enough, and spending another five requests to
+re-prove what the probe just showed would be the point of the breaker, missed.
+
+Every transition emits a `breaker.opened` or `breaker.closed` event, and
+`GET /v1/health` reports every breaker that is not closed, with `breaker_until`
+on the open ones so a dashboard can say how long the outage has left to run.
+
+## What the caller sees
+
+| Header                        | Says                                             |
+| ----------------------------- | ------------------------------------------------ |
+| `X-CogniGate-Served-By`       | `provider/model` that actually answered          |
+| `X-CogniGate-Fallback-Depth`  | how many candidates failed first; `0` is primary |
+
+A cascade is invisible to the client otherwise: a request that fell back twice
+returns `200` with the same body shape as one that did not.

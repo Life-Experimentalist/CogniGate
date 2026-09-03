@@ -10,7 +10,6 @@ export default function sitemap(): MetadataRoute.Sitemap {
         "/docs/configuration",
         "/docs/architecture",
         "/docs/explorer",
-        "/docs/plugins",
         "/docs/routing",
         "/docs/api",
         "/docs/security",

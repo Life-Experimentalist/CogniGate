@@ -1,53 +1,137 @@
 export const metadata = {
     title: "Security",
     description:
-        "Understand CogniGate's zero-trust security architecture, AES-256-GCM encryption vault, and credential isolation strategy.",
+        "What CogniGate does with credentials, how the two planes are separated, why request content stays out of logs, and what a deployment still has to do itself.",
 };
 
-# Security Architecture
+# Security
 
-CogniGate is built with a zero-trust model to protect your organization's API keys and keep client requests securely isolated.
+CogniGate exists so that an application can call a model without holding the
+provider's credential. Everything below follows from that.
 
-## AES-256-GCM Encryption Vault
+## Two planes, separated by the key
 
-All downstream provider API keys (OpenAI, Anthropic, etc.) are encrypted at-rest before being saved to PostgreSQL.
+Both planes are served by one listener on one port. What separates them is the
+credential, not the address:
 
-- **Encryption Standard**: AES-256-GCM (Galois/Counter Mode). GCM provides both data confidentiality and authenticated integrity, ensuring keys cannot be altered or decrypted without detection.
-- **In-Memory Decryption**: Keys are decrypted exclusively in-memory inside the Java Domain Engine during cache synchronization to Redis. The database never holds plaintext keys.
+| Prefix | Plane   | Reaches                                    |
+| ------ | ------- | ------------------------------------------ |
+| `cg-`  | data    | `/v1/*` — completions, models, usage       |
+| `cga-` | admin   | `/admin/v1/*` — tenants, keys, providers   |
 
-## The Master Key
+The plane is read from the credential itself, before any store lookup. A `cg-`
+key presented to `/admin/v1` is answered with `401 wrong_plane` — a specific,
+diagnosable refusal rather than a generic one, and never a partial success.
 
-The encryption process uses a 256-bit master key loaded from the `ENCRYPTION_MASTER_KEY` environment variable.
+Admin keys additionally carry a scope: `root`, or `tenant:<id>`.
 
-<div
-    style={{
-        padding: "16px 20px",
-        background: "rgba(239,68,68,0.06)",
-        border: "1px solid rgba(239,68,68,0.2)",
-        borderRadius: 10,
-        fontSize: 14,
-        color: "#fca5a5",
-        lineHeight: 1.65,
-        marginBottom: 24,
-    }}
->
-    <strong style={{ color: "#ef4444" }}>WARNING:</strong> Never hardcode the
-    `ENCRYPTION_MASTER_KEY` in configuration manifests (such as
-    [cognigate.config.yml](https://github.com/Life-Experimentalist/CogniGate/blob/main/cognigate.config.yml)).
-    Keep it out of git repositories. If you lose this key, all stored provider
-    keys will become unreadable and must be re-configured.
-</div>
+- A tenant-scoped key reaching another tenant's resources gets **404, not 403**.
+  A 403 confirms the tenant exists, which is not something one tenant should be
+  able to learn about another.
+- A tenant-scoped key cannot create or delete tenants at all.
+- A tenant admin asking to mint itself a `root` key is **refused**, not quietly
+  given a tenant-scoped one. Silently downgrading a privilege request hands back
+  a credential that does less than the caller believes, and the mistake only
+  surfaces later as an unexplained rejection from whatever was built on it.
 
-## Tenant API Key Isolation
+## How gateway keys are stored
 
-Every tenant has their own isolated config space.
+A minted key is 24 bytes of `crypto/rand` in an unpadded URL-safe alphabet — 192
+bits — so it survives being pasted into a shell, a URL, or a YAML file unquoted.
 
-- **Key Attributions**: Every provider key is tied directly to a specific `Tenant` entity in the PostgreSQL schema.
-- **Bearer Authentication**: The Go Edge Proxy validates the bearer token (`cg-...`) in the request header against the Redis configuration cache before routing. If the token is invalid or does not belong to the requested model namespace, access is immediately blocked.
+What the gateway keeps is a SHA-256 digest, compared in constant time. SHA-256
+rather than bcrypt or Argon2 is a deliberate choice, and the reasoning matters:
+those are built to slow down dictionary attacks against secrets a human chose.
+These are 192-bit random tokens with no dictionary to search, and the hash runs
+on every authenticated request. A deliberately slow hash here would buy nothing
+and cost throughput.
 
-## Network Security & Topology
+The one fragment kept in the clear is the **prefix** — the scheme plus eight
+characters — short enough to be useless as a credential and long enough to tell
+two of a tenant's keys apart in a listing or a usage record.
 
-In a standard Docker Compose deployment, services run inside a dedicated bridge network:
+There is no route that reads a secret back. The plaintext is returned exactly
+once, at creation, with a warning saying so. A lost key is re-minted.
 
-- **Private Database & Cache**: PostgreSQL and Redis do not expose ports to the public internet. They are reachable only by the Go Edge Proxy and Java Domain Engine containers on the internal bridge network.
-- **Isolated Admin Panel**: The Domain Administration API (port `8081`) should be firewalled or bound to localhost, allowing only the local dashboard or internal admins to manage tenants and upload plugins.
+## How provider credentials are handled
+
+The credentials you register for OpenAI, Together, a self-hosted vLLM or
+anything else are the things actually worth stealing. They are:
+
+- **Never returned by any route.** The field is `json:"-"` on the provider
+  record. The admin API answers with `key_prefixes` so an operator can see which
+  credentials are registered without any route being able to return one.
+- **Never written to disk.** The gateway's store is in memory. There is no
+  provider-credential column in PostgreSQL because there is no such table — the
+  analytics database holds usage rows and nothing else.
+- **Never logged.** See below.
+
+The trade is stated plainly on the [Architecture](/docs/architecture) page: a
+restart loses configuration, and it must be reapplied from wherever you keep it.
+That is the same property described from the operations side.
+
+## Request content is not observability data
+
+The structured log carries the route, the identities, the model that was routed
+to, and the counts. It carries nothing derived from a request or response body —
+not a parameter, and certainly not a message.
+
+This is enforced in the places it would otherwise leak:
+
+- A **panic value** routinely quotes the value being operated on, so the panic is
+  logged and the value is not surfaced to the caller.
+- The **upstream's own error text** stays in the gateway's log line and does not
+  reach the `attempts` array of a `502`. Only the classification crosses that
+  boundary.
+- A **cascade failure** reports provider, model, failure kind and status. Not
+  bodies.
+
+### The one exception, and its fences
+
+Debug capture stores prompt and completion content, and it is the only feature
+in the product that serves request content back out. It is therefore:
+
+- **Off by default**, per tenant, and opt-in through the admin plane.
+- **Sampled**, at a rate the tenant sets — 1% by default.
+- **TTL-bounded.** `debug.max_capture_ttl` may be lowered but never raised above
+  72 hours, and a configuration that tries is rejected at startup rather than
+  quietly clamped.
+- **Byte-bounded per tenant**, with a background sweep that expires captures.
+
+Turning it on is a decision about content retention. Treat it as one.
+
+## The bootstrap key
+
+The one credential that exists before any tenant does. It is refused if shorter
+than 16 characters, so a placeholder copied out of an example file cannot become
+a deployment's admin password. It has no default and no fallback value.
+
+It also cannot be revoked — it lives in the environment, not the store. So the
+first thing to do with it is mint a real admin key through
+`POST /admin/v1/admin-keys`, and then take it back out of the environment. An
+unrevocable root credential in a compose file is precisely what the rest of this
+page is trying to avoid.
+
+Every admin-plane mutation is written to an audit log, readable at
+`GET /admin/v1/audit`.
+
+## What the deployment still owes
+
+CogniGate cannot do these for you:
+
+1. **Keep PostgreSQL and port 8081 off the public internet.** The reference
+   compose file publishes 8081 so a first run can be inspected; a real
+   deployment should not. It holds every tenant's usage.
+2. **Terminate TLS.** A private network or an operator-owned reverse proxy is the
+   recommended shape. Where you have neither, `CG_TLS_CERT_FILE` and
+   `CG_TLS_KEY_FILE` turn the process to HTTPS — one listener serves both planes,
+   so the pair cannot leave one of them plaintext by accident.
+3. **Decide who may scrape `/metrics`.** It is unauthenticated by default, which
+   is what a Prometheus scrape on a private network expects and the wrong answer
+   anywhere else. `CG_METRICS_TOKEN` requires a bearer.
+4. **Rotate provider credentials.** A provider is a pool of keys; adding a new
+   one and removing the old is an admin-plane call that does not interrupt
+   traffic. Nothing does it on a schedule for you.
+
+Found something? [SECURITY.md](https://github.com/Life-Experimentalist/CogniGate/blob/main/.github/SECURITY.md)
+has the reporting process.

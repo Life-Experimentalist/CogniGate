@@ -4,9 +4,8 @@ Requirements contributed by and written for downstream consumers of
 CogniGate. They are deliberately **generic** — nothing here is specific
 to any one application — so that any product embedding CogniGate (a
 SaaS backend, an internal developer tool, a batch pipeline) can build
-against the same contract. They extend, not replace, the Phase-1
-scaffolding in [TODOS.md](TODOS.md) (key rotation, circuit breaker,
-vault, metering).
+against the same contract. Each has a full specification under
+[`spec/`](spec/) and a conformance test under [`conformance/`](conformance/).
 
 **IDs are stable.** Consumers reference requirements as `GW-<n>` and
 acceptance criteria as `GW-<n>.AC-<m>`; those identifiers never change
@@ -67,8 +66,10 @@ GW-10), and explicit non-goals.
 - **Truthful attribution.** Responses, usage records, and logs always
   name the model/provider that actually served — never the alias or the
   originally requested model (GW-2/GW-3).
-- **Config changes propagate in ≤ 10 s** without restart, via the
-  existing Redis `cognigate:cache:invalidate` channel (GW-6).
+- **Config changes take effect immediately** on the gateway process that
+  received them, without a restart — configuration is held in memory, so
+  there is no cache to invalidate. The corollary is that replicas do not
+  share it: an admin call lands on exactly one gateway (GW-6).
 - **Testability.** Every behavioral requirement has at least one
   acceptance criterion, and GW-10's suite maps 1:1 onto the AC ids —
   a requirement that can't be asserted against a live deployment
@@ -81,4 +82,5 @@ GW-10), and explicit non-goals.
 - `openapi.yaml` currently describes only `POST /v1/chat/completions`;
   it must grow to cover the full GW-1..GW-14 surface and become the
   artifact GW-10 validates response shapes against.
-- `conformance/` (GW-10) and the mock provider do not exist yet.
+- The analytics data model covers usage metering only; the GW-6 admin
+  entities and GW-8 event history are not persisted there yet.

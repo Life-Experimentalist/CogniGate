@@ -9,7 +9,7 @@
   CogniGate
 </h1>
 
-<p><strong>The Zero-Downtime Cognitive Router for Enterprise AI</strong></p>
+<p><strong>One endpoint in front of every model your applications use</strong></p>
 
 <p>
   <em>Self-hosted · Multi-tenant · OpenAI-compatible · Open Source</em>
@@ -43,55 +43,58 @@
 
 ## What Is CogniGate?
 
-CogniGate is a **self-hosted enterprise AI infrastructure platform** that sits between your applications and LLM providers (OpenAI, Anthropic, Groq, Mistral, etc.). It is the open-source alternative to OpenRouter and LiteLLM — built for organizations that need full control over their AI traffic.
+CogniGate is a **self-hosted, multi-tenant LLM gateway** that sits between your
+applications and the models they call. Your applications hold one CogniGate key
+and speak the OpenAI API; your provider credentials stay inside the deployment.
+It is an open-source alternative to OpenRouter and LiteLLM, for teams that would
+rather not route their traffic — or their keys — through someone else.
 
 ### Key Capabilities
 
 | Feature | Description |
 |---|---|
-| **OpenAI-Compatible API** | Drop-in replacement — zero client code changes |
-| **Zero-Downtime Key Rotation** | Redis-backed atomic key cycling with instant cache invalidation |
-| **Circuit Breaker & Failover** | Exponential backoff on 429/5xx with automatic cascade to backup models |
-| **Multi-Tenant Isolation** | Per-tenant routing rules, API keys, and billing — all fully isolated |
-| **AES-256-GCM Key Vault** | All provider API keys encrypted at rest, never stored in plaintext |
-| **Hot-Swap Plugin Engine** | Upload `.java` source at runtime — Janino compiles in-memory, zero restart |
-| **Enterprise Billing** | Automated monthly invoicing with per-tenant token cost tracking |
+| **OpenAI-Compatible API** | Point an existing SDK at CogniGate and change nothing else |
+| **Capability Aliases** | `fast`, `balanced`, `best` and `transcribe` resolve against the live catalogue, so a client outlives the model names it was written against |
+| **Fallback Chains** | An ordered cascade per tenant, rotating keys within a provider pool before moving to the next candidate |
+| **Circuit Breakers** | Exponential backoff on 429/5xx; an open breaker is skipped rather than retried, and the refusal names every attempt |
+| **Per-Tenant Quotas** | Token and spend caps with soft thresholds, plus an `observe` mode for sizing them before they refuse anything |
+| **Provider Keys Stay Put** | Held in memory, returned by no route, written to no disk, printed in no log line |
+| **Durable Usage Metering** | Every request recorded out-of-band in PostgreSQL and readable back per tenant, model, provider or key |
 
 ---
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                         External Clients                         │
-│           (OpenAI SDK / curl / LangChain / LlamaIndex)           │
-└───────────────────────────────┬─────────────────────────────────┘
-                                │ POST /v1/chat/completions
-                                │ Authorization: Bearer cg-xxx
-                                ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                    Gateway  (Go 1.26 + Fiber v2)                 │
-│                           :8080                                  │
-│  ┌──────────────┐  ┌───────────────┐  ┌──────────────────────┐  │
-│  │ Auth & Tenant │  │ Key Rotation  │  │  Circuit Breaker     │  │
-│  │  Resolution  │  │ (Round-Robin) │  │  (Exp. Backoff)      │  │
-│  └──────────────┘  └───────────────┘  └──────────────────────┘  │
-│         │                  │                    │                 │
-│  ┌──────▼──────────────────▼────────────────────▼─────────────┐  │
-│  │              Redis 7 — Fast-Path Cache + Pub/Sub            │  │
-│  │         key: tenant:cfg:{cognigateApiKey}                   │  │
-│  └─────────────────────────────────────────────────────────────┘  │
-└────────────────────┬────────────────────────────────────────────┘
-         │ Forward   │  goroutine: POST /api/webhook/telemetry
-         ▼           ▼
-  LLM Providers   Analytics  (Java 25 LTS + Spring Boot 4.1)
-  (OpenAI, etc.)     :8081
-                      │
-              ┌───────┴────────┐
-              │                │
-        PostgreSQL 16     Plugin Engine
-          :5432          (Janino + ClassLoader)
+                        External Clients
+              OpenAI SDK / curl / LangChain / LlamaIndex
+                                |
+                                |  POST /v1/chat/completions
+                                |  Authorization: Bearer cg-...
+                                v
+  +-------------------------------------------------------------+
+  |             Gateway   -   Go 1.26 + Fiber v2   -   :8080     |
+  |                                                             |
+  |   Auth & tenant      Alias & chain      Circuit breakers     |
+  |   resolution         resolution         + key rotation       |
+  |                                                             |
+  |   Quotas, rate limits, catalogue cache - all in memory       |
+  +-------------------------------------------------------------+
+           |                                    |
+           | proxied request                    | async, buffered
+           |                                    | POST /api/v1/usage
+           v                                    v
+  OpenAI-compatible providers          Analytics   -   :8081
+  OpenAI, Together, Groq,              Java 25 + Spring Boot 4.1
+  Fireworks, vLLM, Ollama,                        |
+  Azure OpenAI, OpenRouter                        v
+                                          PostgreSQL 16  -  :5432
 ```
+
+The two processes divide along a single line: the gateway owns the request path
+and holds its configuration in memory, and analytics owns everything durable.
+A request is never blocked on metering — if analytics is down the gateway keeps
+serving traffic and buffers what it cannot deliver.
 
 ---
 
@@ -122,8 +125,8 @@ cd CogniGate
 
 This single command:
 1. ✅ Copies `.env.example` → `.env`
-2. ✅ Auto-generates a secure `ENCRYPTION_MASTER_KEY` and `GATEWAY_BOOTSTRAP_KEY`
-3. ✅ Builds and starts all 4 services (Gateway, Analytics, PostgreSQL, Redis), waiting until each reports healthy
+2. ✅ Generates a `GATEWAY_BOOTSTRAP_KEY` and an `ANALYTICS_TOKEN`
+3. ✅ Builds and starts the three services (Gateway, Analytics, PostgreSQL), waiting until each reports healthy
 
 ### Verify It's Running
 
@@ -201,7 +204,7 @@ An ordered fallback chain is a routing rule:
 curl -s -X PUT http://localhost:8080/admin/v1/tenants/ten_.../routing-rules \
   -H "Authorization: Bearer $BOOTSTRAP" \
   -H "Content-Type: application/json" \
-  -d '{"match":"gpt-4o","chain":["gpt-4o","claude-3-5-sonnet","gpt-4o-mini"]}'
+  -d '{"match":"gpt-4o","chain":["gpt-4o","llama-3.3-70b","gpt-4o-mini"]}'
 ```
 
 ---
@@ -217,11 +220,10 @@ All configuration is documented in:
 | Variable | Default | Description |
 |---|---|---|
 | `GATEWAY_BOOTSTRAP_KEY` | *(auto-generated)* | Admin-plane bootstrap credential; min 16 characters, no default |
+| `ANALYTICS_TOKEN` | *(auto-generated)* | Shared secret between the two processes. Analytics refuses to start without it rather than expose an unauthenticated metering API |
 | `SPRING_DATASOURCE_URL` | `jdbc:postgresql://postgres-db:5432/cognigate` | PostgreSQL JDBC URL |
 | `SPRING_DATASOURCE_USERNAME` | `cognigate_user` | DB username |
 | `SPRING_DATASOURCE_PASSWORD` | `cognigate_pass` | DB password |
-| `SPRING_DATA_REDIS_HOST` | `redis` | Redis host for the analytics engine's config cache |
-| `ENCRYPTION_MASTER_KEY` | *(auto-generated)* | 64-char hex AES-256 master key |
 | `POSTGRES_DB` | `cognigate` | Database name |
 
 The gateway itself is configured from [`cognigate.config.yml`](cognigate.config.yml),
@@ -251,43 +253,32 @@ Full documentation is available at **[https://life-experimentalist.github.io/Cog
 | [Getting Started](https://life-experimentalist.github.io/CogniGate/docs/getting-started) | Installation, first run, quick test |
 | [Architecture](https://life-experimentalist.github.io/CogniGate/docs/architecture) | System design, data flows, component interactions |
 | [API Reference](https://life-experimentalist.github.io/CogniGate/docs/api) | All endpoints, request/response schemas |
-| [Plugin Development](https://life-experimentalist.github.io/CogniGate/docs/plugins) | Building custom providers |
-| [Security](https://life-experimentalist.github.io/CogniGate/docs/security) | Encryption, auth, tenant isolation |
-| [Billing](https://life-experimentalist.github.io/CogniGate/docs/billing) | Token tracking, invoicing, cost config |
-| [Deployment](https://life-experimentalist.github.io/CogniGate/docs/deployment) | Production hardening, TLS, Kubernetes |
+| [Routing](https://life-experimentalist.github.io/CogniGate/docs/routing) | Aliases, fallback chains, breakers, and how a model name is resolved |
+| [Security](https://life-experimentalist.github.io/CogniGate/docs/security) | Credential handling, the two planes, tenant isolation |
+| [Usage & Cost](https://life-experimentalist.github.io/CogniGate/docs/billing) | What is metered, how to read it back, where the cost figure comes from |
+| [Deployment](https://life-experimentalist.github.io/CogniGate/docs/deployment) | Production hardening, TLS, scaling, and what it still owes you |
 
 **AI Agent Context:** For AI-assisted troubleshooting and customization, pass the raw URL of [`COGNIGATE_AI_CONTEXT.md`](https://raw.githubusercontent.com/Life-Experimentalist/CogniGate/main/COGNIGATE_AI_CONTEXT.md) to your AI assistant.
 
 ---
 
-## Plugin System
+## Adding a Provider
 
-CogniGate supports two tiers of custom LLM provider integration:
+CogniGate ships one provider adapter, `openai`, and it covers every service
+that reimplements the OpenAI wire format — Together, Groq, Fireworks, Azure
+OpenAI, OpenRouter, vLLM, Ollama, LM Studio. Only the base URL differs, so
+registering one is a single admin call and needs no code:
 
-### Tier 1: JSON Mapper (No-Code)
-For OpenAI-compatible providers like Groq, TogetherAI, vLLM:
 ```bash
-curl -X POST http://localhost:8081/api/admin/plugins/upload \
-  -F "file=@groq.json" \
-  -F "className=json-mapper"
+curl -s -X POST http://localhost:8080/admin/v1/tenants/ten_.../providers \
+  -H "Authorization: Bearer $BOOTSTRAP" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"local","kind":"openai","base_url":"http://localhost:11434/v1","keys":["unused"]}'
 ```
 
-### Tier 2: Dynamic Java (Runtime Compilation)
-Upload `.java` source — Janino compiles it in memory:
-```java
-public class BedrockHandler implements AiProviderHandler {
-    @Override
-    public String handleRequest(String prompt, String apiKey) throws Exception {
-        // AWS SigV4 signing + Bedrock API call
-        return callBedrock(prompt, apiKey);
-    }
-}
-```
-```bash
-curl -X POST http://localhost:8081/api/admin/plugins/upload \
-  -F "file=@BedrockHandler.java" \
-  -F "className=BedrockHandler"
-```
+A provider that speaks its own protocol instead needs a translating proxy in
+front of it. There is no runtime plugin mechanism, and adding a second native
+adapter is a code change in `gateway/internal/provider/`.
 
 ---
 
@@ -295,14 +286,11 @@ curl -X POST http://localhost:8081/api/admin/plugins/upload \
 
 | Component | Technology |
 |---|---|
-| Edge Proxy | Go 1.26, Fiber v2, gofiber/fiber |
-| Domain Engine | Java 25 LTS, Spring Boot 4.1, Hibernate, Project Loom (Virtual Threads) |
-| Plugin Compiler | Janino 3.1.12 (in-memory Java compilation) |
-| Cache & Pub/Sub | Redis 7 |
+| Edge Gateway | Go 1.26, Fiber v2 |
+| Analytics Engine | Java 25 LTS, Spring Boot 4.1, Hibernate, virtual threads (Project Loom) |
 | Database | PostgreSQL 16 |
-| Encryption | AES-256-GCM (via Java JCA) |
 | Container Runtime | Docker, Docker Compose |
-| Docs Site | Next.js 15, shadcn/ui, Three.js / React Three Fiber |
+| Docs Site | Next.js 16, Tailwind CSS 4, Three.js / React Three Fiber |
 
 ---
 

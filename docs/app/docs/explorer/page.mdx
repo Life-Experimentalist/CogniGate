@@ -3,85 +3,117 @@ import { Mermaid } from "../../components/Mermaid";
 export const metadata = {
     title: "Codebase Explorer",
     description:
-        "An interactive and detailed guide to exploring CogniGate's codebase structure, files, and modules.",
+        "A map of the CogniGate repository: which package owns what, and where to look when you need to change something.",
 };
 
 # Codebase Explorer
 
-Explore the internal architecture and codebase structure of CogniGate.
+A map of the repository, package by package. It is here so that "where does
+this behaviour live" has an answer you can read in a minute.
 
-## High-Level Architecture
+## High-level architecture
 
 <Mermaid
     chart={`
 graph TD
-    Client[Client Requests] --> GoProxy[Go Edge Proxy :8080]
-    GoProxy --> Redis[(Redis Cache)]
-    GoProxy --> OpenAIApi[Downstream AI Providers]
-    Admin[Admin Users] --> JavaEngine[Java Domain Engine :8081]
-    JavaEngine --> Postgres[(PostgreSQL)]
-    JavaEngine --> Redis
-    JavaEngine --> Plugins[Dynamic Java Plugins]
+    Client[Client requests] --> Gateway[Go gateway :8080]
+    Admin[Administrators] --> Gateway
+    Gateway --> Providers[LLM providers]
+    Gateway -.->|async usage| Analytics[Java analytics :8081]
+    Analytics --> Postgres[(PostgreSQL)]
 `}
 />
 
-## Repository Tree
+The gateway serves both planes and holds its own configuration in memory. The
+analytics service stores usage and nothing else. See
+[Architecture](/docs/architecture) for why the line is drawn there.
 
-Welcome to the Codebase Explorer. This page acts as a comprehensive map of the CogniGate repository, detailing the function, structure, and integration of each file and folder in the project.
-
-## Repository Tree
+## Repository tree
 
 ```tree
 CogniGate/
-├── gateway/              # Go 1.26 Edge Proxy (Port 8080)
-│   ├── main.go           # Proxy bootstrap & Fiber app init
-│   ├── router.go         # Model routing, circuit breaking, key rotation
-│   ├── redis.go          # Redis connection pool & cache invalidation Pub/Sub
-│   ├── telemetry.go      # Non-blocking async telemetry dispatcher
-│   └── Dockerfile        # Multi-stage lightweight build for Go proxy
-├── analytics/            # Java 25 Domain Admin Engine (Port 8081)
-│   ├── pom.xml           # Maven dependencies & Java 25 compiler config
-│   ├── src/main/java/    # Spring Boot application code
-│   │   └── com/cognigate/
-│   │       ├── entity/        # JPA Database Entities (Tenant, Keys, Rules)
-│   │       ├── repository/    # Spring Data JPA repositories
-│   │       ├── service/       # Business logic (AES encryption, Redis sync)
-│   │       ├── controller/    # REST endpoints (Admin API, Telemetry receiver)
-│   │       └── plugin/        # Dynamic Janino hot-swap compiler service
-│   └── Dockerfile        # Multi-stage Java 25 build and JRE runner
-├── docs/                 # Next.js 15 Documentation Website (Port 3000)
-│   ├── app/              # Next.js App Router (Landing page & doc routes)
-│   └── public/           # Branding assets (logo.png, banner.png)
-├── cognigate.config.yml  # Unified configuration default manifest
-├── docker-compose.yml    # Full-stack orchestrator manifest
-├── setup.sh              # Bash script for Linux/macOS setup
-└── setup.ps1             # PowerShell script for Windows setup
+├── gateway/                 # Go edge gateway (port 8080)
+│   ├── main.go              # Flag parsing, config load, signal handling
+│   ├── app.go               # Wires config + store + providers into a server
+│   └── internal/
+│       ├── server/          # Every HTTP route, both planes
+│       ├── store/           # Tenants, keys, providers, rules, quotas (in memory)
+│       ├── routing/         # Alias resolution, fallback, circuit breakers
+│       ├── provider/        # Upstream clients and the provider interface
+│       ├── catalog/         # Model catalogue refresh and lookup
+│       ├── analytics/       # Usage client + the store wrapper that forwards to it
+│       ├── cache/           # Response cache
+│       ├── capture/         # Debug capture ring buffer
+│       ├── events/          # Event log and outbound webhooks
+│       ├── apierr/          # The single error envelope every route returns
+│       ├── obs/             # Structured logs, Prometheus metrics, tracing
+│       ├── httpx/           # Shared HTTP client construction
+│       └── config/          # File + environment configuration and validation
+├── analytics/               # Java Spring Boot usage store (port 8081)
+│   └── src/main/java/com/cognigate/
+│       ├── controller/      # UsageController — ingest, totals, breakdown
+│       ├── entity/          # UsageMetric
+│       ├── repository/      # UsageMetricRepo — every aggregate is a query
+│       ├── dto/             # Request and response records
+│       ├── service/         # BillingService — the monthly pricing job
+│       └── config/          # Security, the API token filter, thread config
+├── conformance/             # Black-box suite that drives the running stack
+├── spec/                    # GW-1..GW-14 acceptance criteria
+├── docs/                    # Next.js documentation site (port 3000)
+├── cognigate.config.yml     # Annotated default configuration
+├── docker-compose.yml       # Reference deployment
+├── openapi.yaml             # Machine-readable data-plane contract
+├── setup.sh / setup.ps1     # First-run setup for POSIX and Windows
+└── LICENSE                  # Apache-2.0
 ```
 
-## 1. Edge Proxy Module (Go)
+## 1. The gateway (Go)
 
-The edge proxy is designed for maximum speed and zero overhead:
+Everything a request touches is in `gateway/internal/`.
 
-- **`main.go`**: Launches a Fiber v2 server, connects to Redis, and registers the main chat completion endpoint (`POST /v1/chat/completions`).
-- **`router.go`**: Implements active round-robin key rotation and circuit breaking. Inspects downstream HTTP status codes and excludes unhealthy keys from the rotation pool.
-- **`redis.go`**: Launches a Redis connection pool. Spawns a background goroutine listening on the `cognigate:cache:invalidate` Pub/Sub channel to purge local memory caches.
-- **`telemetry.go`**: Spawns an asynchronous worker queue that dispatches usage data to the domain engine without blocking the user response.
+- **`server/`** — one file per concern, and the place to start. `chat.go` is the
+  completion path; `data.go` the rest of the data plane; `admin.go` the whole
+  `/admin/v1` surface; `middleware.go` authentication, request ids and the audit
+  trail; `limits.go` and `quota.go` the four ways a request can be refused with
+  a `429`.
+- **`routing/`** — `resolve.go` turns a requested model or capability alias into
+  an ordered chain of concrete provider/model pairs. `dispatch.go` walks that
+  chain, and `breaker.go` keeps a provider that is failing out of it until it
+  recovers. `diagnose.go` decides whether a given upstream failure is worth
+  falling back over at all.
+- **`store/`** — the in-memory implementation behind every configuration
+  resource, plus the key hashing in `keys.go`. Data keys are stored hashed;
+  the plaintext is returned once, at mint time, and never again.
+- **`analytics/`** — `client.go` speaks to the Java service on three endpoints.
+  `store.go` wraps the memory store and forwards only the usage methods to it,
+  which is how the same binary runs with or without an analytics backend.
+- **`obs/`** — structured logging, the Prometheus registry behind `/metrics`,
+  and OpenTelemetry spans.
 
-## 2. Domain Engine Module (Java)
+## 2. The analytics service (Java)
 
-The admin engine coordinates all state modifications, billing logic, and plugin execution:
+Eleven classes, and they are all about usage.
 
-- **JPA Entities (`entity/`)**:
-    - `Tenant`: Manages isolated client environments and master bearer keys.
-    - `ProviderKey`: Holds provider details and encrypted keys (AES-256-GCM).
-    - `RoutingRule`: Defines primary models, fallback models, and prioritization.
-    - `UsageMetric`: Captures token consumption audit records.
-- **Core Services (`service/`)**:
-    - `EncryptionService`: Performs AES-256-GCM encryption/decryption using `ENCRYPTION_MASTER_KEY`.
-    - `CacheSyncService`: Serializes configurations into JSON and pushes them to Redis.
-- **Plugin Manager (`plugin/`)**:
-    - Uses the Janino compiler to compile uploaded raw Java code in-memory, loading it dynamically into custom classloaders for hot-swappable routing extensions.
+- **`UsageController`** — `POST /api/v1/usage` to record, `GET
+  /api/v1/usage/totals` and `GET /api/v1/usage/breakdown` to read back. Nothing
+  else is exposed, because nothing else calls it.
+- **`UsageMetric`** — one row per completed request. `requestId` is unique,
+  which is what makes a retried delivery a no-op instead of a double charge. The
+  tenant is a plain string, deliberately: a foreign key would mean usage could
+  not be recorded until tenant rows had been synchronised here first.
+- **`UsageMetricRepo`** — every aggregate is a database query returning an
+  already-shaped DTO. Summing in Java would mean loading a billing period's
+  every request into heap to produce five numbers.
+- **`BillingService`** — a monthly scheduled job that prices each tenant's
+  window and logs the figure. Its tenant set comes from the usage rows
+  themselves; there is no tenant table here to read instead.
+- **`ApiTokenFilter` / `SecurityConfig`** — a single shared bearer token,
+  required, with no default. Absent configuration fails at startup rather than
+  publishing an open metering API.
 
-## 3. Unified Configuration (YAML)
+## 3. Configuration
 
-The [cognigate.config.yml](https://github.com/Life-Experimentalist/CogniGate/blob/main/cognigate.config.yml) file provides default values and schema documentation for all environment options, including database parameters, thread models (virtual threads enabled by default), billing schedules, and docs locations.
+[cognigate.config.yml](https://github.com/Life-Experimentalist/CogniGate/blob/main/cognigate.config.yml)
+carries the defaults and documents every option inline — listen addresses,
+timeouts, cache, quota mode, limits, debug capture and observability. See
+[Configuration](/docs/configuration) for the options that matter most.

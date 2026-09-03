@@ -97,11 +97,12 @@ else
   echo -e "${GREEN}✓ .env file exists${NC}"
 fi
 
-# Both credentials in .env.example are deliberately unusable: the analytics
-# engine refuses a master key that is not 32 bytes of hex, and the gateway
-# refuses a bootstrap key shorter than 16 characters. That makes an unedited
-# copy fail loudly at startup rather than becoming a deployment whose secrets
-# are published in this repository — so this is where it gets edited.
+# Both credentials in .env.example are placeholders, and both are replaced
+# here. Leaving either as shipped would mean a deployment whose secrets are
+# published in this repository: the bootstrap key opens the admin plane, and
+# the analytics token is the only thing in front of every tenant's usage on
+# port 8081. The gateway refuses a bootstrap key shorter than 16 characters,
+# so that one at least fails loudly; the token would simply work.
 # shellcheck disable=SC1091
 source .env 2>/dev/null || true
 
@@ -121,6 +122,12 @@ if [ -z "${GATEWAY_BOOTSTRAP_KEY:-}" ] || [ "${GATEWAY_BOOTSTRAP_KEY}" = "replac
   echo -e "${YELLOW}⚠ GATEWAY_BOOTSTRAP_KEY is not set or is still the placeholder. Generating one...${NC}"
   set_env GATEWAY_BOOTSTRAP_KEY "$(randhex 24)"
   echo -e "${GREEN}✓ GATEWAY_BOOTSTRAP_KEY generated and saved to .env${NC}"
+fi
+
+if [ -z "${ANALYTICS_TOKEN:-}" ] || [ "${ANALYTICS_TOKEN}" = "replace_me" ]; then
+  echo -e "${YELLOW}⚠ ANALYTICS_TOKEN is not set or is still the placeholder. Generating one...${NC}"
+  set_env ANALYTICS_TOKEN "$(randhex 32)"
+  echo -e "${GREEN}✓ ANALYTICS_TOKEN generated and saved to .env${NC}"
 fi
 
 # --- Clean Volumes (optional) ---

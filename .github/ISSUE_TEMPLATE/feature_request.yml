@@ -23,9 +23,10 @@ body:
       label: Feature Area
       options:
         - "Gateway Routing / Circuit Breaker"
-        - "Plugin System"
+        - "Provider Support"
         - "Admin API"
-        - "Billing Engine"
+        - "Usage Metering & Cost"
+        - "Quotas / Rate Limiting"
         - "Authentication / Security"
         - "Observability / Monitoring"
         - "Documentation / Docs Site"

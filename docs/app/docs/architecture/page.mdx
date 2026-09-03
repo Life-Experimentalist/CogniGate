@@ -3,51 +3,106 @@ import { Mermaid } from "../../components/Mermaid";
 export const metadata = {
     title: "Architecture",
     description:
-        "Understand CogniGate's polyglot architectural design featuring a high-speed Go edge proxy and Java domain engine.",
+        "How CogniGate is put together: a Go edge gateway that owns every request, and a Java service that owns the one thing a restart must not lose.",
 };
 
 # Architecture Overview
 
-CogniGate utilizes a polyglot architectural design that leverages the strengths of both Go and Java: Go 1.26 for high-speed, low-overhead request routing at the edge, and Java 25 with Spring Boot 4.1 for robust enterprise business logic and dynamic plug-in compilation.
+CogniGate is two processes with an unusually sharp line between them. The Go
+gateway serves every request a client ever makes and holds all of its own
+configuration in memory. The Java analytics service stores usage records in
+PostgreSQL and does nothing else.
 
-## System Topology
+The line is drawn where it is because of what each side must survive. A gateway
+that cannot answer until a database answers is a gateway with a database's
+availability, and routing traffic is the job it cannot fail at. Metering is the
+opposite: a usage record that is lost is money that cannot be billed, so it
+needs somewhere durable to live. Neither requirement is served well by the same
+store, so they do not share one.
+
+## System topology
 
 <Mermaid chart={`
 flowchart TD
-  Client[Client Application]
-  GoProxy[Go Edge Proxy :8080]
-  Redis[Redis Cache]
-  JavaEngine[Java Domain Engine :8081]
-  Postgres[(PostgreSQL DB)]
-  LLM[LLM Providers]
+  Client[Client application]
+  Admin[Administrator]
+  Gateway[Go gateway :8080]
+  Analytics[Java analytics :8081]
+  Postgres[(PostgreSQL :5432)]
+  LLM[LLM providers]
 
-Client -->|1. Chat Request| GoProxy
-GoProxy -->|2. Check Cache| Redis
-GoProxy -->|3. Route Request| LLM
-GoProxy -.->|4. Telemetry Webhook| JavaEngine
-JavaEngine -->|5. Audit Log| Postgres
-JavaEngine -.->|6. Cache Sync / Invalidate| Redis
+Client -->|POST /v1/chat/completions| Gateway
+Admin -->|/admin/v1/*| Gateway
+Gateway -->|upstream call, with fallback| LLM
+Gateway -.->|usage records, buffered and retried| Analytics
+Analytics --> Postgres
 `} />
 
-### System Elements Described:
+- **Go gateway (`:8080`)** — the whole data plane and the whole admin plane.
+  Authentication, model catalogues, capability aliases, fallback chains,
+  circuit breakers, quotas, budgets, rate and size limits, response caching,
+  events, webhooks and the audit log all live here, in process.
+- **Java analytics (`:8081`)** — one endpoint the gateway writes to and two it
+  reads from, and a scheduled job that prices a window of usage. It has no
+  configuration API and no other consumer.
+- **PostgreSQL (`:5432`)** — usage records. Nothing else is stored here, because
+  nothing else is sent here.
+- **LLM providers** — whatever a tenant has credentials for. CogniGate reaches
+  them over their own APIs; it does not run models.
 
-- **Client Application**: Downstream application sending chat completion requests.
-- **Go Edge Proxy (`:8080`)**: Written in Go 1.26 using Fiber v2. Intercepts incoming requests, processes authorization, rotates keys, handles circuit breakers, and directly proxies requests.
-- **Redis Cache (`:6379`)**: Acts as the fast configuration bridge between Go and Java. Distributes instant cache-invalidation events across edge instances via Pub/Sub.
-- **Java Domain Engine (`:8081`)**: Built on Spring Boot 4.1. Manages tenants, billing metrics, encrypted key storage, and compiles dynamic plugins in-memory via Janino. Runs on Project Loom virtual threads.
-- **PostgreSQL Database (`:5432`)**: The persistent storage source of truth for tenants, provider credentials, and usage records.
-- **LLM Providers**: Downstream services (OpenAI, Anthropic, etc.) where proxy requests are forwarded.
+## Request lifecycle
 
-## Request Lifecycle Flow
+1. **Authentication.** A client sends `POST /v1/chat/completions` with a data
+   key. The gateway resolves the key to a tenant from its own store — no
+   network call, no cache to be stale.
+2. **Resolution.** The requested `model` may be a real model id or a capability
+   alias (`fast`, `best`, whatever the tenant defined). The alias resolves
+   against the tenant's live catalogue, which the gateway refreshes from each
+   configured provider.
+3. **Routing and fallback.** The resolved model has an ordered chain behind it.
+   The gateway tries the first provider; on a failure that a retry could fix it
+   moves to the next, up to a bounded depth, and reports how far it got in
+   `X-CogniGate-Fallback-Depth`. A provider that keeps failing has its breaker
+   opened and is skipped until it recovers.
+4. **Execution.** The request is forwarded, and the response is streamed back
+   chunk by chunk if it was a streaming request. Token counts come from the
+   provider's own `usage` block.
+5. **Metering.** The usage record is dispatched asynchronously. The client's
+   response has already been completed by then; a slow or absent analytics
+   service costs latency to nobody.
 
-1. **Authentication & Cache Lookup**: A client initiates a `POST /v1/chat/completions` request to the Go Edge Proxy using a tenant bearer token (`cg-...`). The proxy checks its local cache and Redis for tenant state and active provider keys.
-2. **Routing Selection**: The proxy selects the primary configured API key and model according to tenant rules. If a provider's endpoint fails or is rate-limited (e.g. 429 / 5xx), the circuit breaker trips, and the request is automatically routed to backup models.
-3. **API Execution**: The proxy forwards the request payload to the target LLM provider, streams the response chunk-by-chunk back to the client, and records exact token metrics.
-4. **Telemetry Attribution**: A background Goroutine dispatches usage metrics to the Java Domain Engine asynchronously, ensuring zero impact on user request latencies.
-5. **Persistence & Billing**: The Java engine ingests telemetry payload and writes usage stats to PostgreSQL for token auditing and monthly billing.
+## What the gateway keeps, and where
 
-## Data Synchronization & Pub/Sub
+Every configuration resource — tenants, keys, providers, aliases, routing
+rules, quotas, webhooks, events, the audit log, cached responses and debug
+captures — lives in the gateway process. This is stated plainly rather than
+buried, because it has consequences an operator has to plan around:
 
-When an administrator updates routing configurations or rolls an API key through the Domain Engine API, the engine persists the change to PostgreSQL and publishes a cache-invalidation event to the Redis `cognigate:cache:invalidate` channel.
+- **A restart loses them.** The reference deployment is a single gateway and
+  the bootstrap admin key recreates the first tenant; a deployment that needs
+  configuration to outlive a restart supplies it at startup.
+- **Replicas do not share them.** Two gateways are two independent
+  configurations, two caches and two capture buffers. The gateway is
+  horizontally scalable in the sense that any replica can serve any request it
+  has been configured for — not in the sense that configuring one configures
+  the rest.
 
-The Go Edge Proxy instances, which listen to this channel in a background loop, immediately purge the invalidated keys from their local in-memory caches, guaranteeing that updates propagate system-wide in milliseconds without restarting services.
+Usage is the exception, and the exception is the whole reason the Java service
+exists. Records are shipped to it, written to PostgreSQL, and read back through
+`GET /v1/usage` and `GET /v1/usage/breakdown`.
+
+## Metering is decoupled on purpose
+
+The gateway never waits on the analytics service, and it never drops a record
+because the service was down. A delivery that fails with a 5xx or a connection
+error is buffered and retried; a delivery refused with a 4xx is dropped after
+one attempt, because a malformed record retried forever would wedge everything
+queued behind it.
+
+Records are idempotent on `request_id`. The gateway retries a delivery whose
+response it never saw, so the same record can legitimately arrive twice; the
+second arrival is recognised and answered `200` instead of billing twice.
+
+This is why there is no `depends_on: analytics` in the reference deployment. The
+gateway builds its analytics client but does not dial it at startup, so an
+outage in the analytics service is an outage in exactly one service (GW-11).

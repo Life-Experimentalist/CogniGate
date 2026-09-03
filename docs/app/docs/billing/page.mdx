@@ -1,40 +1,158 @@
 export const metadata = {
-    title: "Billing & Cost Tracking",
+    title: "Usage & Cost",
     description:
-        "Learn how CogniGate manages token usage tracking, non-blocking telemetry, and monthly tenant invoice generation.",
+        "What CogniGate meters, how a usage record survives an analytics outage, where the cost figure comes from, and the line between metering and billing.",
 };
 
-# Billing & Cost Tracking
+# Usage & Cost
 
-CogniGate includes a built-in billing engine designed to track model token consumption, attribute costs to specific tenants, and generate invoices.
+CogniGate meters every request it serves and stores the result durably. It does
+not produce invoices. The distinction is deliberate: what a deployment charges,
+to whom, and on what terms are decisions CogniGate has no business making, so it
+publishes numbers and stops there.
 
-## Non-Blocking Telemetry
+## What is metered
 
-To ensure that auditing usage does not degrade the performance of AI requests, the Go Edge Proxy processes token counts asynchronously:
+One row per served request, in the analytics database:
 
-- **Asynchronous Dispatch**: When an LLM request completes, a background goroutine packages the token counts and fires them to the Java Domain Engine.
-- **Zero Impact on User Requests**: The client response is completed immediately; it does not block waiting for database writes.
+| Field                                    | What it is                                        |
+| ---------------------------------------- | ------------------------------------------------- |
+| `request_id`                             | The gateway's id — unique, and the idempotency key |
+| `client_request_id`                      | Your own correlation id, if you sent one           |
+| `tenant_id`, `key_prefix`                | Who                                                |
+| `provider`, `model`                      | What actually served it                            |
+| `requested_model`, `fallback_depth`      | What was asked for, and how far the cascade went   |
+| `prompt_tokens`, `completion_tokens`, `total_tokens` | The counts                            |
+| `cost_usd`                               | Priced from the catalog — see below                |
+| `cached`, `streamed`                     | How it was served                                  |
+| `status_code`, `duration_ms`             | The outcome                                        |
+| `recorded_at`                            | When the gateway served it                         |
 
-## Usage Logs
+There is no prompt and no completion text, and there is no column for either.
+That is a property of the schema rather than a policy applied to it — see
+[Security](/docs/security).
 
-The telemetry metrics are captured by the Domain Engine via the `/api/webhook/telemetry` endpoint and persisted in the `usage_metric` PostgreSQL table. Each record records:
+`requested_model` beside `model` is what makes a fallback visible after the
+fact: a month of rows where `fast` was repeatedly served by the third candidate
+is a provider problem that no single response would have shown you.
 
-- **Tenant ID**: The organization that initiated the request.
-- **Model Name**: Downstream model used (e.g. `gpt-4`).
-- **Token Counts**: Explicit count of prompt, completion, and total tokens.
-- **Timestamp**: Exact time of completion.
+## How a record gets there
 
-## Cost Multiplier & Invoicing
+The gateway does not wait for the analytics service. Recording is enqueued after
+the response has been returned, and a background worker delivers it.
 
-CogniGate calculates costs using the configured token price multiplier defined in the unified configuration.
+- **A full buffer drops records rather than requests.** If usage cannot be
+  delivered faster than it is produced, the gateway logs
+  `telemetry buffer full; usage records are being dropped` and keeps serving.
+  Losing a metering row is bad; refusing the request the customer is paying for
+  is worse.
+- **A delivery that fails is retried.** An analytics outage costs no data as long
+  as the buffer holds; the backlog drains when it recovers.
+- **A 4xx is not retried.** The analytics service answers `400` to a record it
+  can never store — a missing `request_id`, `tenant_id` or `recorded_at` — and
+  the gateway drops it after one attempt. Retrying forever against a rejection
+  that will not change would wedge every record behind it.
 
-- **Cost Multiplier**: Defined under `cognigate.billing.cost_per_thousand_tokens` (default is `$0.0015` per 1000 tokens).
-- **Cron Invoicing**: A Spring Boot cron scheduler runs automatically on the first of each month (configurable via `cognigate.billing.cron_schedule`) to aggregate usage logs per tenant and finalize monthly invoices.
+Delivery is therefore at-least-once, and storage is exactly-once: `request_id`
+carries a unique constraint, and a second delivery of the same record is
+answered `200` instead of `201` and stored once. A retry cannot double-bill.
 
-## Verifying Telemetry Ingest
+`recorded_at` is the gateway's timestamp, not the moment of arrival. A week of
+usage buffered through an outage belongs to the days it was served on, not to
+the day the service came back.
 
-You can inspect the Java console logs to verify that telemetry events are being processed:
+## Where the cost figure comes from
+
+Cost is computed by the gateway, per request, from the catalog entry that served
+it:
 
 ```
-[Pool-1-worker-1] INFO  c.c.service.TelemetryService - Ingested usage telemetry for Tenant 1: 15 prompt tokens, 20 completion tokens.
+cost_usd = prompt_tokens / 1e6 * input_cost_per_mtok
+         + completion_tokens / 1e6 * output_cost_per_mtok
 ```
+
+Those two rates come from the provider's own `/models` response. They are not a
+standard field — OpenAI publishes no prices there at all — so they are read when
+present and ignored when absent.
+
+**A provider that publishes no prices produces `cost_usd: 0`.** Not an estimate,
+not a default rate: a wrong number here would flow into billing, and no number
+is easier to notice than a plausible one that is wrong. Two other things go
+quiet with it — the `cheapest` and `best` cost tiers have nothing to order by
+and fall through to the tie-break, and a `cost` budget can never be reached.
+
+If you need prices for a provider that does not publish them, the place to add
+them is a proxy in front of that provider's `/models`, which is the same seam a
+self-hosted catalogue already uses.
+
+## Reading it back
+
+Both planes read the same rows. A tenant reads its own with a data-plane key:
+
+```bash
+curl "http://localhost:8080/v1/usage?window=month" \
+  -H "Authorization: Bearer $CG_KEY"
+```
+
+```json
+{
+    "object": "usage",
+    "window": "month",
+    "since": "2026-09-01T00:00:00Z",
+    "until": "2026-09-03T11:04:22Z",
+    "requests": 1482,
+    "prompt_tokens": 391204,
+    "completion_tokens": 88317,
+    "total_tokens": 479521,
+    "cost_usd": 1.8734,
+    "state": "ok",
+    "limits": []
+}
+```
+
+`window` is `day` or `month` and the bounds are resolved for you, half-open,
+and returned. There is no arbitrary date range: a metering read is either
+"this billing period" or "today", and a free-form window would invite a tenant
+to scan its whole history on every dashboard refresh.
+
+`GET /v1/usage/breakdown` takes the same `window` plus `group_by`, one of
+`model`, `provider`, `key` or `client_request_id`, and returns the same five
+numbers per bucket under `data`, most expensive first. It is capped at the 200
+costliest buckets and says `"truncated": true` when it had to cut. An operator
+reads any tenant's through `GET /admin/v1/tenants/{id}/usage` and
+`.../usage/breakdown`.
+
+`group_by=client_request_id` is the one worth knowing about: it groups by the
+`X-Client-Request-Id` you sent, so a cost can be attributed back to whatever
+your own system calls the unit of work — a job, a document, an end user.
+
+## The monthly aggregate
+
+A scheduled job runs at midnight on the first of each month, takes the tenants
+that produced usage in the preceding 30 days, and logs a priced total for each:
+
+```
+Invoice for Tenant: ten_9f2c41ab77d0 | Period: ... | Total Tokens: 479521 | Total Cost: $0.7192815
+```
+
+Two things to know before building on it. It prices at a flat **$0.0015 per 1,000
+tokens**, compiled in, so it will not agree with the per-request `cost_usd` above
+wherever a provider publishes real rates. And its output is a log line: there is
+no invoice document, no ledger, and no route that reads one back.
+
+It is there so that a deployment which has to bill something has a worked
+starting point in the right place. The numbers a real billing system should read
+are the ones under [Reading it back](#reading-it-back).
+
+## Verifying that metering works
+
+```bash
+docker compose logs analytics | grep "Started CognigateApplication"
+docker compose logs gateway   | grep "usage record"
+```
+
+A silent gateway log is the healthy case. `usage record could not be persisted`
+is the one to act on — most often a mismatched `ANALYTICS_TOKEN`, which the
+analytics service answers `401` and the gateway correctly refuses to retry.
+[Troubleshooting](/docs/troubleshooting#usage-is-missing-but-requests-are-working)
+has the rest of that chain.

@@ -108,3 +108,31 @@ The first release has not been cut. Everything below is the state of `main`.
   parsed. A streamed response is captured as its request alone — reading a
   stream's body would consume it, and a capture feature that changed how the
   gateway served the request it was capturing would be worse than not having one.
+
+### Removed
+
+No release has been cut, so nothing below breaks a contract with anyone. These
+are corrections to what `main` documented but never implemented, recorded here
+because the documentation was public and someone may have planned against it.
+
+- **The plugin engine.** Earlier documentation described uploading `.java`
+  source for Janino to compile in memory, and a no-code JSON mapper posted to
+  `/api/admin/plugins/upload`. Neither existed. The gateway ships one adapter,
+  `openai`, which covers every provider that reimplements the OpenAI wire
+  format — Together, Groq, Fireworks, Azure OpenAI, OpenRouter, vLLM, Ollama
+  — because only the base URL differs between them. A provider with its own
+  protocol needs a translating proxy in front of it. The `/docs/plugins` page
+  is gone rather than left describing a feature that was never built.
+- **Redis.** The same documentation described a Redis 7 fast-path cache and a
+  `cognigate:cache:invalidate` Pub/Sub channel. The gateway holds its
+  configuration in process memory; the deployment is three containers, not
+  four. The consequences are documented rather than hidden: a restart loses
+  configuration, and replicas do not share it.
+- **`ENCRYPTION_MASTER_KEY` and the AES-256-GCM key vault.** Provider keys are
+  held in memory, returned by no route, written to no disk and printed in no
+  log line, so there is nothing at rest to encrypt. The variable is gone from
+  `.env.example` and from both setup scripts, which now generate the
+  `ANALYTICS_TOKEN` the analytics service actually requires.
+- **Kubernetes deployment guidance.** No manifests or charts exist. The
+  deployment documentation covers the compose reference and says what running
+  more than one gateway would take.

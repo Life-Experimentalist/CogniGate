@@ -74,7 +74,7 @@ CogniGate/
 
 4. Commit with a conventional commit message:
    ```bash
-   git commit -m "feat(gateway): add Redis TTL configuration per tenant"
+   git commit -m "feat(gateway): add per-tenant catalogue TTL configuration"
    ```
 
 5. Push and open a Pull Request — fill in the PR template.
@@ -87,7 +87,8 @@ CogniGate/
 - Follow [Effective Go](https://go.dev/doc/effective_go)
 - Run `gofmt` before committing
 - All exported functions must have a doc comment
-- Use `context.Context` propagation for all Redis and HTTP calls
+- Use `context.Context` propagation for every outbound call, so a cancelled
+  request does not leave an upstream call running
 
 ### Java (`/analytics`)
 - Follow standard Java conventions (Oracle Code Conventions)

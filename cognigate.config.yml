@@ -1,80 +1,125 @@
 # =============================================================================
-# CogniGate — Unified Configuration Manifest
+# CogniGate — gateway configuration
 # Copyright 2026 VKrishna04 and Life Experimentalist
 # Licensed under Apache 2.0
 #
-# This file documents all configurable parameters for a self-hosted CogniGate
-# deployment. Values here are used as documentation/defaults.
-# Actual runtime values are loaded from environment variables (see .env.example).
+# This is the file the gateway reads when started with `--config`. Every key
+# below is optional and every value shown is the built-in default, so a file
+# that sets nothing behaves exactly like no file at all. Pass it explicitly:
+#
+#     cognigate --config cognigate.config.yml
+#
+# Environment variables are applied after this file and win over it. Each one
+# is read under two spellings, CG_<NAME> and <NAME>, so a deployment can
+# namespace them or not: CG_PORT, CG_ADMIN_BOOTSTRAP_KEY, CG_TLS_CERT_FILE,
+# CG_TLS_KEY_FILE, CG_ANALYTICS_URL, CG_ANALYTICS_TOKEN, CG_METRICS_TOKEN,
+# CG_LOG_LEVEL, CG_QUOTA_ENFORCEMENT, CG_CACHE_ENABLED.
+#
+# Secrets belong in the environment, not here. A credential written into this
+# file is a credential in version control.
+#
+# The analytics service is a separate process and is not configured from this
+# file — it reads standard Spring properties (SPRING_DATASOURCE_URL,
+# SPRING_DATASOURCE_USERNAME, SPRING_DATASOURCE_PASSWORD, ANALYTICS_TOKEN).
+# See .env.example and docker-compose.yml.
 # =============================================================================
 
-cognigate:
-  version: "0.1.0"
-  environment: "development"  # development | production
+gateway:
+  port: 8080
+  # Both planes are served by one listener, so this pair turns the whole
+  # process to HTTPS. Set both or neither; half of a pair fails at startup.
+  tls_cert_file: ""
+  tls_key_file: ""
 
-  # =====================================================
-  # Gateway (Go Edge Proxy) Configuration
-  # =====================================================
-  gateway:
-    port: 8080
-    # The admin-plane bootstrap credential. Set it via CG_ADMIN_BOOTSTRAP_KEY;
-    # a value written here is a credential in version control.
-    bootstrap_key_env: "GATEWAY_BOOTSTRAP_KEY"
-    # Rate limiting defaults per tenant (can be overridden per-tenant)
-    rate_limit:
-      requests_per_second: 50
-      burst_capacity: 100
+admin:
+  # The one credential that exists before any tenant does. There is no default
+  # and no fallback, because a built-in value would be public knowledge. Left
+  # empty the gateway still starts, but nothing can reach the admin plane until
+  # a key is configured — and a value shorter than 16 characters is refused
+  # outright rather than allowed to become the deployment's admin password.
+  # Set CG_ADMIN_BOOTSTRAP_KEY.
+  bootstrap_key: ""
 
-  # =====================================================
-  # Analytics (Spring Boot Domain Engine) Configuration
-  # =====================================================
-  analytics:
-    port: 8081
-    datasource:
-      url: "jdbc:postgresql://postgres-db:5432/cognigate"
-      username: "cognigate_user"
-      password: "cognigate_pass"  # Use SPRING_DATASOURCE_PASSWORD env var in production
-    jpa:
-      ddl_auto: "update"           # update | validate | create | create-drop
-      show_sql: false
-    threads:
-      virtual_enabled: true        # Enable Java 25 Project Loom Virtual Threads
+# Where usage records are shipped. Leave base_url empty to run without an
+# analytics backend — usage is then held in memory and lost on restart.
+analytics:
+  base_url: ""
+  token: ""
+  timeout: 10s
 
-  # =====================================================
-  # PostgreSQL Configuration
-  # =====================================================
-  postgres:
-    image: "postgres:16-alpine"
-    port: 5432
-    database: "cognigate"
-    username: "cognigate_user"
-    data_volume: "pgdata"
+# Model catalogues are refreshed from each provider and cached.
+catalog:
+  ttl: 1h
+  stale_warn_after: 6h
+  provider_timeout: 10s
 
-  # =====================================================
-  # Billing Configuration
-  # =====================================================
-  billing:
-    # Cost per 1,000 tokens in USD
-    cost_per_thousand_tokens: 0.0015
-    # Cron expression for monthly invoice generation (midnight, 1st of each month)
-    cron_schedule: "0 0 0 1 * ?"
+routing:
+  # How many providers a single request may fall through before giving up.
+  max_fallback_depth: 5
+  breaker:
+    error_threshold: 5
+    window: 30s
+    open_duration: 60s
 
-  # =====================================================
-  # Plugin Engine Configuration
-  # =====================================================
-  plugins:
-    # Tier 1: JSON-configurable endpoints (OpenAI-compatible)
-    json_mapper:
-      enabled: true
-    # Tier 2: Dynamic Java bytecode compilation via Janino
-    dynamic_compiler:
-      enabled: true
-      compiler: "janino"
-      compiler_version: "3.1.12"
+quotas:
+  default_soft_threshold_pct: 80
+  # "on" rejects past a hard cap; "observe" only emits events and headers,
+  # which is how to size quotas before turning them into rejections.
+  enforcement: "on"
 
-  # =====================================================
-  # GitHub Pages / Docs Site
-  # =====================================================
-  docs:
-    base_url: "https://life-experimentalist.github.io/CogniGate"
-    github_repo: "https://github.com/Life-Experimentalist/CogniGate"
+limits:
+  max_request_bytes: 2097152      # 2 MiB
+  max_response_bytes: 8388608     # 8 MiB
+  request_timeout: 120s
+  upstream_connect_timeout: 10s
+  stream_idle_timeout: 60s
+  max_concurrent_per_key: 32
+
+# Per-tenant defaults; a tenant may be given its own.
+rate_limit:
+  requests_per_second: 50
+  burst_capacity: 100
+
+# Response caching is off by default: an identical prompt returning a stored
+# answer is the right behaviour only where the caller expects it.
+cache:
+  enabled: false
+  default_ttl: 5m
+  max_ttl: 24h
+  max_entry_bytes: 262144         # 256 KiB — the largest response worth storing
+  max_bytes: 67108864             # 64 MiB — the cache as a whole
+
+webhooks:
+  max_attempts: 5
+  timeout: 10s
+
+telemetry:
+  # Usage records buffered while the analytics service is unreachable.
+  buffer: 1000
+
+health:
+  cache_ttl: 2s
+
+metrics:
+  enabled: true
+  path: "/metrics"
+  # Empty leaves /metrics unauthenticated, which is what a Prometheus scrape
+  # on a private network expects. Set CG_METRICS_TOKEN to require a bearer.
+  token: ""
+
+shutdown:
+  # How long in-flight requests are given after the process is asked to stop.
+  # /healthz starts failing immediately so traffic is steered away first.
+  drain_timeout: 30s
+
+log:
+  level: "info"                   # debug | info | warn | error
+
+# Debug capture stores prompt and completion content for a tenant that has
+# turned it on. max_capture_ttl may be lowered but never raised above 72h.
+debug:
+  max_capture_ttl: 72h
+  default_capture_ttl: 24h
+  default_sample_rate: 0.01
+  max_capture_bytes_per_tenant: 33554432   # 32 MiB
+  capture_sweep_interval: 1m

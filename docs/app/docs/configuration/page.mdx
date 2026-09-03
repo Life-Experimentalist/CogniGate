@@ -1,84 +1,173 @@
 export const metadata = {
     title: "Configuration",
     description:
-        "Learn how to configure CogniGate using the unified configuration manifest and environment variables.",
+        "How the gateway is configured: a YAML file for shape, environment variables for secrets, and what each option actually changes.",
 };
 
-# Configuration Guide
+# Configuration
 
-CogniGate is configured using a unified configuration manifest file ([cognigate.config.yml](https://github.com/Life-Experimentalist/CogniGate/blob/main/cognigate.config.yml)) for defaults and structure, alongside environment variables in your `.env` file for secret values.
-
-## The Configuration Manifest
-
-The [cognigate.config.yml](https://github.com/Life-Experimentalist/CogniGate/blob/main/cognigate.config.yml) file serves as the single source of truth for defining port configurations, database credentials, database DDL strategy, caching behavior, billing parameters, and more. Here is the structure of the default file:
-
-```yaml
-cognigate:
-    version: "0.1.0"
-    environment: "development" # development | production
-
-    # Gateway (Go Edge Proxy)
-    gateway:
-        port: 8080
-        redis_url: "redis:6379"
-        fallback_cache_ttl_seconds: 300
-        rate_limit:
-            requests_per_second: 50
-            burst_capacity: 100
-
-    # Analytics (Spring Boot Domain Engine)
-    analytics:
-        port: 8081
-        datasource:
-            url: "jdbc:postgresql://postgres-db:5432/cognigate"
-            username: "cognigate_user"
-            password: "cognigate_pass"
-        jpa:
-            ddl_auto: "update"
-            show_sql: false
-        threads:
-            virtual_enabled: true # Java 25 Loom Virtual Threads
-        encryption:
-            master_key_env: "ENCRYPTION_MASTER_KEY"
-
-    # Redis config
-    redis:
-        image: "redis:7-alpine"
-        port: 6379
-        invalidation_channel: "cognigate:cache:invalidate"
-        tenant_key_prefix: "tenant:cfg:"
-
-    # Caching defaults
-    billing:
-        cost_per_thousand_tokens: 0.0015
-        cron_schedule: "0 0 0 1 * ?" # Monthly invoice schedule
-```
-
-## Environment Variables
-
-For secure deployments, secrets and dynamic variables are loaded from the environment or a local `.env` file. Create this file in the project root:
+The gateway takes its configuration from three places, applied in this order:
+built-in defaults, then a YAML file if one is passed, then the environment.
+Later wins. Nothing is required — a gateway started with no file and no
+variables runs on the defaults — except the admin bootstrap key, without which
+nothing can reach the admin plane.
 
 ```bash
-# Encryption Key (Must be 32-byte / 64-character hex key for AES-256-GCM)
-ENCRYPTION_MASTER_KEY=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
-
-# Spring Datasource Configurations
-SPRING_DATASOURCE_URL=jdbc:postgresql://postgres-db:5432/cognigate
-SPRING_DATASOURCE_USERNAME=cognigate_user
-SPRING_DATASOURCE_PASSWORD=cognigate_pass
-
-# Redis Connection Configurations
-REDIS_URL=redis:6379
-
-# Gateway API Port
-PORT=8080
-
-# Domain Admin Port
-ANALYTICS_PORT=8081
+cognigate --config cognigate.config.yml
 ```
 
-## Configuration Properties Explained
+[cognigate.config.yml](https://github.com/Life-Experimentalist/CogniGate/blob/main/cognigate.config.yml)
+in the repository lists every key with its default value and a note on what it
+is for. It is a valid configuration file, not a sketch of one: pass it as-is and
+the gateway behaves exactly as it would with no file at all.
 
-- **`cognigate.analytics.threads.virtual.enabled`**: Enables Java 25 Project Loom Virtual Threads to support highly concurrent non-blocking execution in the Spring Boot backend.
-- **`cognigate.gateway.fallback_cache_ttl_seconds`**: Local cache lifetime (in seconds) if the Redis caching cluster becomes unreachable.
-- **`cognigate.billing.cost_per_thousand_tokens`**: The default platform usage cost multiplier per 1,000 tokens for invoice generation.
+## Environment variables
+
+Secrets belong here, not in the file. Every variable is read under two
+spellings — `CG_<NAME>` and `<NAME>` — so a deployment can namespace them or
+not.
+
+| Variable                  | Sets                                     |
+| ------------------------- | ---------------------------------------- |
+| `CG_ADMIN_BOOTSTRAP_KEY`  | The bootstrap admin credential           |
+| `CG_PORT`                 | Listen port                              |
+| `CG_TLS_CERT_FILE`        | TLS certificate — set with the key below |
+| `CG_TLS_KEY_FILE`         | TLS private key                          |
+| `CG_ANALYTICS_URL`        | Where usage records are shipped          |
+| `CG_ANALYTICS_TOKEN`      | Bearer token for the analytics service   |
+| `CG_METRICS_TOKEN`        | Requires a bearer on `/metrics` when set |
+| `CG_LOG_LEVEL`            | `debug` \| `info` \| `warn` \| `error`   |
+| `CG_QUOTA_ENFORCEMENT`    | `on` \| `observe`                        |
+| `CG_CACHE_ENABLED`        | `true` \| `false`                        |
+
+The analytics service is a separate process with its own configuration. It
+reads standard Spring properties:
+
+```bash
+SPRING_DATASOURCE_URL=jdbc:postgresql://postgres-db:5432/cognigate
+SPRING_DATASOURCE_USERNAME=cognigate_user
+SPRING_DATASOURCE_PASSWORD=<your password>
+
+# The shared bearer the gateway presents. No default: absent, the service
+# refuses to start rather than publish an open metering API.
+ANALYTICS_TOKEN=<generate one>
+```
+
+## The options that matter most
+
+### The bootstrap key
+
+```yaml
+admin:
+    bootstrap_key: "" # set CG_ADMIN_BOOTSTRAP_KEY instead
+```
+
+The one credential that exists before any tenant does. There is no default,
+because a built-in value would be public knowledge. A value shorter than 16
+characters is refused rather than honoured — a placeholder copied out of an
+example file should not become a deployment's admin password.
+
+Use it once, to mint a real admin key through `/admin/v1/admin-keys`, then take
+it out of the environment.
+
+### Quota enforcement
+
+```yaml
+quotas:
+    default_soft_threshold_pct: 80
+    enforcement: "on" # on | observe
+```
+
+`observe` is how to size quotas before they start refusing traffic: caps still
+emit events and set `X-CogniGate-Quota-State`, but a request over the cap is
+served. Switch to `on` once the numbers look right.
+
+### Response caching
+
+```yaml
+cache:
+    enabled: false
+    default_ttl: 5m
+    max_ttl: 24h
+    max_entry_bytes: 262144 # the largest response worth storing
+    max_bytes: 67108864 # the cache as a whole
+```
+
+Off by default. An identical prompt returning a stored answer is correct only
+where the caller expects it, so this is a decision, not a default. A cached
+response is marked with `X-CogniGate-Cache`, and a tenant can be given its own
+TTL and its own `POST /admin/v1/tenants/{tenant}/cache/flush`.
+
+`max_entry_bytes` decides what may be stored; `max_bytes` decides how much is
+kept. Without the second, a cache that refuses nothing individually still grows
+without limit collectively.
+
+### Limits
+
+```yaml
+limits:
+    max_request_bytes: 2097152 # 2 MiB
+    max_response_bytes: 8388608 # 8 MiB
+    request_timeout: 120s
+    upstream_connect_timeout: 10s
+    stream_idle_timeout: 60s
+    max_concurrent_per_key: 32
+
+rate_limit:
+    requests_per_second: 50
+    burst_capacity: 100
+```
+
+These are the deployment's ceilings. A tenant may be given lower ones through
+`PATCH /admin/v1/tenants/{tenant}`; it cannot be given higher.
+
+`stream_idle_timeout` is the one worth understanding: a stream that goes quiet
+for longer than this is ended with `upstream_stream_stalled` rather than left
+holding a connection open indefinitely.
+
+### Fallback and circuit breaking
+
+```yaml
+routing:
+    max_fallback_depth: 5
+    breaker:
+        error_threshold: 5
+        window: 30s
+        open_duration: 60s
+```
+
+`max_fallback_depth` bounds how many providers one request may try. The breaker
+counts failures per provider: `error_threshold` of them inside `window` opens
+it, and it stays open for `open_duration` before a probe is allowed through.
+
+### Debug capture
+
+```yaml
+debug:
+    max_capture_ttl: 72h
+    default_capture_ttl: 24h
+    default_sample_rate: 0.01
+    max_capture_bytes_per_tenant: 33554432 # 32 MiB
+    capture_sweep_interval: 1m
+```
+
+Capture stores prompt and completion content, which is the one place in the
+product where request content is served back out. `max_capture_ttl` may be
+lowered but never raised above 72 hours — a value above the ceiling is rejected
+at startup, not quietly clamped.
+
+### TLS
+
+```yaml
+gateway:
+    tls_cert_file: ""
+    tls_key_file: ""
+```
+
+Both planes are served by one listener, so this single pair turns the whole
+process to HTTPS and cannot leave one plane plaintext by accident. Set both or
+neither; half a pair fails at startup rather than silently serving plaintext.
+
+The recommended production shape is still plaintext behind a private network or
+an operator-owned reverse proxy. This is the escape hatch for a deployment with
+neither.
