@@ -119,9 +119,11 @@ tenant's own administrators or the root key. No other endpoint, log line, metric
 or event exposes them.
 
 **They expire.** Each capture is hard-deleted at the tenant's TTL, and a TTL
-above the deployment ceiling — 72 hours, with no override — is refused with
-`capture_ttl_too_long` rather than quietly clamped, so nobody configures a week,
-reads back three days, and believes the first number.
+above the deployment's ceiling is refused with `capture_ttl_too_long` rather than
+quietly clamped, so nobody configures a week, reads back three days, and
+believes the first number. That ceiling is 72 hours by default, and a deployment
+may lower it but not raise it — a configuration that tries to is refused at
+startup, so the figure on this page holds wherever CogniGate runs.
 
 **A full sample warns you.** `sample_rate: 1.0` is permitted, and the API
 response to enabling it echoes a warning saying what it means: every request and
@@ -167,10 +169,10 @@ These are design decisions, not gaps:
   the JSON to proxy it. TLS on both hops is the transport story.
 
 **CogniGate makes no regulatory claims of its own, under any regime.** It does
-not claim to be compliant with, certified against, or sufficient for GDPR,
-HIPAA, SOC 2, or anything else. What it provides is a content-blind substrate
-you can build such a claim on — and this page is the description of that
-substrate you can put in front of whoever is asking.
+not claim to be compliant with, certified against, or sufficient for GDPR, SOC 2
+or anything else. What it provides is a content-blind substrate you can build
+such a claim on — and this page is the description of that substrate you can put
+in front of whoever is asking.
 
 ## How this is verified
 

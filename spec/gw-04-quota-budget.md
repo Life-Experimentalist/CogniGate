@@ -5,8 +5,8 @@
 ## Motivation
 
 Metering that only records is bookkeeping; consumers need *enforcement*
-(a hospital, a startup, a lab all need "this tenant cannot spend more
-than X this month") and *visibility* (their admin dashboards must show
+(an agency, a startup, a research lab all need "this tenant cannot spend
+more than X this month") and *visibility* (their admin dashboards must show
 spend without scraping CogniGate logs). Quotas are the difference between
 a router and infrastructure someone can hand a budget to.
 

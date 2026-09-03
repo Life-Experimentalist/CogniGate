@@ -4,6 +4,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestDefaultsAreValid(t *testing.T) {
@@ -114,5 +115,32 @@ func TestValidateRejectsAnUnknownEnforcementMode(t *testing.T) {
 
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("an unknown quota enforcement mode was accepted")
+	}
+}
+
+// GW-14 puts the 72 h retention ceiling in documentation a downstream project
+// quotes verbatim, so it has to hold for every deployment, not just the one
+// that left the default alone. Raising it is refused at startup; lowering it is
+// an operator's to do.
+func TestValidateRefusesACaptureTTLCeilingAboveTheSpecifiedMaximum(t *testing.T) {
+	cfg := Default()
+	cfg.Debug.MaxTTL = MaxCaptureTTLCeiling + time.Hour
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("a capture TTL ceiling above 72h was accepted")
+	}
+	if !strings.Contains(err.Error(), "max_capture_ttl") {
+		t.Errorf("error = %q, want it to name the offending key", err)
+	}
+}
+
+func TestValidateAcceptsALoweredCaptureTTLCeiling(t *testing.T) {
+	cfg := Default()
+	cfg.Debug.MaxTTL = time.Hour
+	cfg.Debug.DefaultTTL = time.Minute
+
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("a ceiling below the maximum was refused: %v", err)
 	}
 }
