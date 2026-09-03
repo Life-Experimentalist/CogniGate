@@ -76,6 +76,14 @@ COPY spec /repo/spec
 COPY .github/workflows /repo/.github/workflows
 COPY CHANGELOG.md /repo/CHANGELOG.md
 COPY docker-compose.yml docker-compose.conformance.yml /repo/
+
+# GW-11.AC-1 asks where each service's healthcheck comes from, and accepts one
+# declared in the compose file or one baked into the image the service is built
+# from. The compose file is above; these are the other half of that question,
+# and without them the criterion cannot tell "no healthcheck anywhere" from
+# "this build of the suite cannot see the Dockerfile".
+COPY gateway/Dockerfile /repo/gateway/Dockerfile
+COPY analytics/Dockerfile /repo/analytics/Dockerfile
 COPY --from=builder /out/conformance.test /repo/conformance/conformance.test
 
 RUN chown -R conformance:conformance /repo
