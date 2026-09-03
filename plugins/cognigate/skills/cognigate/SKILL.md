@@ -37,8 +37,9 @@ control-plane surface.
 4. **Do not invent configuration.** Every field below is one the gateway
    actually parses. Guessing produces a 400 that reads like a gateway bug.
 5. **Ask before destroying data.** `./setup.sh --clean` removes the Postgres
-   volume — every tenant, key, provider and usage record with it. It is never
-   the right first response to a failing container.
+   volume, and with it every usage record. Tenants, keys and providers are not
+   in there — a plain gateway restart already loses those, see Provision.
+   Neither is the right first response to a failing container.
 
 ---
 
@@ -112,6 +113,16 @@ you are about to show someone.
 export CG_ADMIN="$(grep -E '^GATEWAY_BOOTSTRAP_KEY=' .env | cut -d= -f2-)"
 export CG=http://localhost:8080
 ```
+
+**Everything created below is held in memory.** Tenants, keys, providers,
+aliases, routes and quotas live in the gateway process; Postgres holds usage
+records and nothing else. Restarting or recreating the gateway container —
+`docker compose pull` and `up -d`, a config change, a crash — returns the
+control plane to a clean slate, and the first symptom is `401
+invalid_api_key` on a key that worked a minute ago. Two consequences you have
+to act on: keep the provisioning calls in a script so re-creating a deployment
+is one command, and never restart the gateway to "fix" something after someone
+has added a provider credential, because that credential goes with it.
 
 **1 — Create a tenant.** A tenant is the isolation boundary: keys, providers,
 aliases, quotas and usage all belong to exactly one.
@@ -281,13 +292,22 @@ Logs: `docker compose logs -f gateway`, and the same for `analytics` and
 - `GET /healthz` is the liveness probe. `GET /v1/health` reports provider
   reachability and needs a key.
 - Metrics are Prometheus-format and off by default; enable them in
-  `cognigate.config.yml` under `metrics`.
-- Upgrade: `git pull && docker compose pull && docker compose up -d`. The
-  published images are `ghcr.io/life-experimentalist/cognigate-gateway` and
+  `cognigate.config.yml` under `metrics`. The file is bind-mounted, so the
+  change needs `docker compose up -d --force-recreate gateway` to take — which
+  empties the control plane. Re-provision afterwards, see Provision.
+- Metering is asynchronous and bounded. If `cognigate_telemetry_dropped` is
+  climbing, or the logs say the telemetry buffer is full, the gateway is serving
+  faster than analytics can record; usage and quotas both under-count until it
+  catches up. Raise `telemetry.buffer` for bursts, lower `rate_limit` for a
+  sustained gap.
+- Upgrade: `git pull && docker compose pull && docker compose up -d`. That
+  recreates the gateway container, so re-provision afterwards — see Provision.
+  The published images are `ghcr.io/life-experimentalist/cognigate-gateway` and
   `ghcr.io/life-experimentalist/cognigate-analytics`, both multi-arch and both
   carrying build provenance you can check with `gh attestation verify`.
-- Back up the Postgres volume. It holds every tenant, key hash, provider
-  credential and usage record; nothing else in the stack is stateful.
+- Back up the Postgres volume. It holds the usage records, which are the only
+  state in the stack that outlives a restart. What protects a tenant, key or
+  provider is the script that created it, not a backup.
 - Rotate away from the bootstrap key once the deployment is real:
   `POST /admin/v1/admin-keys`, then drop `GATEWAY_BOOTSTRAP_KEY`.
 
