@@ -1,176 +1,2167 @@
 {
-	"info": {
-		"_postman_id": "8bb3805f-0b33-4b68-961f-d748f3cf4456",
-		"name": "CogniGate E2E Test Suite",
-		"description": "Postman integration suite for verifying CogniGate Edge Proxy and Admin Engine",
-		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
-	},
-	"item": [
-		{
-			"name": "Edge Proxy - Chat Completions (Mock Auth)",
-			"request": {
-				"method": "POST",
-				"header": [
-					{
-						"key": "Authorization",
-						"value": "Bearer test",
-						"type": "text"
-					},
-					{
-						"key": "Content-Type",
-						"value": "application/json",
-						"type": "text"
-					}
-				],
-				"body": {
-					"mode": "raw",
-					"raw": "{\n  \"model\": \"gpt-4\",\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"Hello CogniGate!\"\n    }\n  ]\n}"
-				},
-				"url": {
-					"raw": "http://localhost:8080/v1/chat/completions",
-					"protocol": "http",
-					"host": [
-						"localhost"
-					],
-					"port": "8080",
-					"path": [
-						"v1",
-						"chat",
-						"completions"
-					]
-				}
-			},
-			"response": []
-		},
-		{
-			"name": "Admin - Create Tenant",
-			"request": {
-				"method": "POST",
-				"header": [],
-				"url": {
-					"raw": "http://localhost:8081/api/admin/tenants?name=test-organization",
-					"protocol": "http",
-					"host": [
-						"localhost"
-					],
-					"port": "8081",
-					"path": [
-						"api",
-						"admin",
-						"tenants"
-					],
-					"query": [
-						{
-							"key": "name",
-							"value": "test-organization"
-						}
-					]
-				}
-			},
-			"response": []
-		},
-		{
-			"name": "Admin - Add Provider Key",
-			"request": {
-				"method": "POST",
-				"header": [
-					{
-						"key": "Content-Type",
-						"value": "application/json",
-						"type": "text"
-					}
-				],
-				"body": {
-					"mode": "raw",
-					"raw": "{\n  \"providerName\": \"anthropic\",\n  \"apiKey\": \"EXAMPLE-PROVIDER-KEY-NOT-REAL\"\n}"
-				},
-				"url": {
-					"raw": "http://localhost:8081/api/admin/tenants/1/keys",
-					"protocol": "http",
-					"host": [
-						"localhost"
-					],
-					"port": "8081",
-					"path": [
-						"api",
-						"admin",
-						"tenants",
-						"1",
-						"keys"
-					]
-				}
-			},
-			"response": []
-		},
-		{
-			"name": "Admin - Add Routing Rule",
-			"request": {
-				"method": "POST",
-				"header": [
-					{
-						"key": "Content-Type",
-						"value": "application/json",
-						"type": "text"
-					}
-				],
-				"body": {
-					"mode": "raw",
-					"raw": "{\n  \"modelName\": \"claude-3-opus\",\n  \"backupModelName\": \"gpt-4-turbo\",\n  \"priority\": 1\n}"
-				},
-				"url": {
-					"raw": "http://localhost:8081/api/admin/tenants/1/rules",
-					"protocol": "http",
-					"host": [
-						"localhost"
-					],
-					"port": "8081",
-					"path": [
-						"api",
-						"admin",
-						"tenants",
-						"1",
-						"rules"
-					]
-				}
-			},
-			"response": []
-		},
-		{
-			"name": "Admin - Upload Dynamic Plugin",
-			"request": {
-				"method": "POST",
-				"header": [],
-				"body": {
-					"mode": "formdata",
-					"formdata": [
-						{
-							"key": "file",
-							"type": "file",
-							"src": []
-						},
-						{
-							"key": "className",
-							"value": "com.cognigate.plugin.AnthropicHandler",
-							"type": "text"
-						}
-					]
-				},
-				"url": {
-					"raw": "http://localhost:8081/api/admin/plugins/upload",
-					"protocol": "http",
-					"host": [
-						"localhost"
-					],
-					"port": "8081",
-					"path": [
-						"api",
-						"admin",
-						"plugins",
-						"upload"
-					]
-				}
-			},
-			"response": []
-		}
-	]
+  "info": {
+    "_postman_id": "8bb3805f-0b33-4b68-961f-d748f3cf4456",
+    "name": "CogniGate API",
+    "description": "Self-hosted OpenAI-compatible gateway: routing, quotas, caching and metering across providers.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Chat",
+      "item": [
+        {
+          "name": "Create a chat completion.",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/chat/completions",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "chat",
+                "completions"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{dataKey}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "description": "The OpenAI-compatible entry point. `model` may be a real model id, an alias (GW-2) or the match side of a routing rule (GW-3); what actually served the request is reported in the response body and in X-CogniGate-Served-By.\n\nWith `\"stream\": true` the response is `text/event-stream`. A stream that stalls terminates with an SSE error event carrying code `upstream_stream_stalled` — the HTTP status line was already sent, so it cannot be a status.\n",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"model\": \"gpt-4o-mini\",\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"Hello.\"\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        }
+      ],
+      "description": "The OpenAI-compatible completion endpoint."
+    },
+    {
+      "name": "Models",
+      "item": [
+        {
+          "name": "List available models.",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/models",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "models"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{dataKey}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "description": "Every model the tenant's providers advertise (GW-1), plus its aliases (GW-2), in OpenAI's list shape. Aliases are marked `cognigate.alias` and carry what they currently resolve to.\n"
+          }
+        },
+        {
+          "name": "Retrieve one model or alias.",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/models/:model",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "models",
+                ":model"
+              ],
+              "variable": [
+                {
+                  "key": "model",
+                  "value": "<model>",
+                  "description": "A model id or an alias name."
+                }
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{dataKey}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "description": "Send the id raw. A model id routinely contains a slash — `meta-llama/Llama-3-70b` is an ordinary id at several providers — and the route captures the whole remainder of the path, so the slashes need no escaping. An OpenAPI path parameter cannot express that, which is the one place a generated client needs a hand: the gateway does not percent-decode this segment, so a client that encodes the slash as `%2F` will look up a model whose id contains those three characters and get a 404.\n"
+          }
+        }
+      ],
+      "description": "Catalog discovery and alias resolution."
+    },
+    {
+      "name": "Usage",
+      "item": [
+        {
+          "name": "Usage and quota state for the calling tenant.",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/usage",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "usage"
+              ],
+              "query": [
+                {
+                  "key": "window",
+                  "value": "day",
+                  "disabled": true,
+                  "description": "The period to report over."
+                }
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{dataKey}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "description": "The same window the quota rejections are computed over, so a caller asking why it was refused sees the figures the refusal used.\n"
+          }
+        },
+        {
+          "name": "Usage broken down by one dimension.",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/usage/breakdown",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "usage",
+                "breakdown"
+              ],
+              "query": [
+                {
+                  "key": "window",
+                  "value": "day",
+                  "disabled": true,
+                  "description": "The period to report over."
+                },
+                {
+                  "key": "group_by",
+                  "value": "model",
+                  "disabled": true,
+                  "description": "The dimension to aggregate on."
+                }
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{dataKey}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "description": "Rows are ordered by spend. At most 200 are returned; when there were more, `truncated` is true and the cheapest were dropped.\n"
+          }
+        },
+        {
+          "name": "Usage and quota state for one tenant.",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/admin/v1/tenants/:tenant/usage",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "v1",
+                "tenants",
+                ":tenant",
+                "usage"
+              ],
+              "query": [
+                {
+                  "key": "window",
+                  "value": "day",
+                  "disabled": true,
+                  "description": "The period to report over."
+                }
+              ],
+              "variable": [
+                {
+                  "key": "tenant",
+                  "value": "<tenant>",
+                  "description": "Tenant id. A root key reaches any tenant; a `tenant:<id>` key reaches only its own, and naming another is a 404."
+                }
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminKey}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "description": "The admin-plane view of `GET /v1/usage`, for an operator who holds no data key for the tenant.\n"
+          }
+        },
+        {
+          "name": "Usage for one tenant, broken down by one dimension.",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/admin/v1/tenants/:tenant/usage/breakdown",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "v1",
+                "tenants",
+                ":tenant",
+                "usage",
+                "breakdown"
+              ],
+              "query": [
+                {
+                  "key": "window",
+                  "value": "day",
+                  "disabled": true,
+                  "description": "The period to report over."
+                },
+                {
+                  "key": "group_by",
+                  "value": "model",
+                  "disabled": true,
+                  "description": "The dimension to aggregate on."
+                }
+              ],
+              "variable": [
+                {
+                  "key": "tenant",
+                  "value": "<tenant>",
+                  "description": "Tenant id. A root key reaches any tenant; a `tenant:<id>` key reaches only its own, and naming another is a 404."
+                }
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminKey}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "description": "Metering and quota state."
+    },
+    {
+      "name": "Operations",
+      "item": [
+        {
+          "name": "Liveness probe.",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/healthz",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "healthz"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            },
+            "description": "Deliberately unauthenticated and deliberately thin: anything that can reach the socket can read it, so it carries no build version. `/v1/health` and `/v1/meta` report the version, and both require a credential.\n"
+          }
+        },
+        {
+          "name": "Prometheus scrape.",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/metrics",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "metrics"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            },
+            "description": "The GW-8 exposition for the gateway process. Unauthenticated by default, because the thing that scrapes it is a sidecar with no notion of tenant credentials; setting `metrics.token` puts it behind a bearer token. The path is configurable and the endpoint can be turned off entirely, so a deployment may not serve this at all — `GET /v1/meta` reports whether it does.\n\nThe analytics engine publishes its own scrape at `GET /metrics` on port 8081. That is a separate process and is not described by this document.\n"
+          }
+        },
+        {
+          "name": "Dependency and configuration health for the calling tenant.",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/health",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "health"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{dataKey}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "description": "Answers 200 whatever the status field says: this reports on the deployment, and a non-2xx would make the report itself unreadable to the client that needs it. Outside the rate limit, so a client polling it during an incident is not the thing that exhausts its own budget.\n"
+          }
+        },
+        {
+          "name": "What this deployment is and what it supports.",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/meta",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "meta"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{dataKey}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "description": "GW-9 makes this the supported way to feature-detect: a client reads `features` and `capabilities` rather than probing endpoints to see what answers. Outside the rate limit, for the same reason `/v1/health` is.\n"
+          }
+        }
+      ],
+      "description": "Health, capability discovery and the Prometheus scrape."
+    },
+    {
+      "name": "Admin",
+      "item": [
+        {
+          "name": "What the calling admin key can do.",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/admin/v1/meta",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "v1",
+                "meta"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminKey}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "description": "Reports the credential's own scope and the full event vocabulary a webhook may subscribe to, so an operator does not have to discover event types by triggering them.\n"
+          }
+        },
+        {
+          "name": "Re-discover provider catalogs now.",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/admin/v1/catalog/refresh",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "v1",
+                "catalog",
+                "refresh"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminKey}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "description": "Without this a model added or retired at a provider only becomes visible when the TTL expires. A root key with no body refreshes every tenant; naming one narrows it. A tenant-scoped key is narrowed to its own, and naming another is a 404.\n",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"tenant\": \"<tenant>\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Read the admin audit log.",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/admin/v1/audit",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "v1",
+                "audit"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "50",
+                  "disabled": true,
+                  "description": "Page size, 1 to 200. A value outside the range is refused rather than clamped, because a clamped short page is indistinguishable from a genuine last page."
+                },
+                {
+                  "key": "after",
+                  "value": "<after>",
+                  "disabled": true,
+                  "description": "Cursor: the `id` of the last item the caller saw. An unknown cursor is refused rather than restarting from the beginning."
+                }
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminKey}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "description": "Append-only, newest first, and it includes refused writes: an attempt to reach another tenant is exactly what this log is read to find, and one that succeeded is not more interesting than one that did not.\n"
+          }
+        }
+      ],
+      "description": "Deployment-wide control-plane operations."
+    },
+    {
+      "name": "Tenants",
+      "item": [
+        {
+          "name": "Create a tenant.",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/admin/v1/tenants",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "v1",
+                "tenants"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminKey}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "description": "Requires a root key.\n",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"<name>\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "List tenants.",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/admin/v1/tenants",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "v1",
+                "tenants"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "50",
+                  "disabled": true,
+                  "description": "Page size, 1 to 200. A value outside the range is refused rather than clamped, because a clamped short page is indistinguishable from a genuine last page."
+                },
+                {
+                  "key": "after",
+                  "value": "<after>",
+                  "disabled": true,
+                  "description": "Cursor: the `id` of the last item the caller saw. An unknown cursor is refused rather than restarting from the beginning."
+                }
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminKey}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "description": "Requires a root key. A tenant-scoped key is refused rather than shown a one-row list: the tenant it belongs to is already named in every path it can reach, so the listing exists only for the operator view.\n"
+          }
+        },
+        {
+          "name": "Retrieve a tenant.",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/admin/v1/tenants/:tenant",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "v1",
+                "tenants",
+                ":tenant"
+              ],
+              "variable": [
+                {
+                  "key": "tenant",
+                  "value": "<tenant>",
+                  "description": "Tenant id. A root key reaches any tenant; a `tenant:<id>` key reaches only its own, and naming another is a 404."
+                }
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminKey}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Update a tenant.",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/admin/v1/tenants/:tenant",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "v1",
+                "tenants",
+                ":tenant"
+              ],
+              "variable": [
+                {
+                  "key": "tenant",
+                  "value": "<tenant>",
+                  "description": "Tenant id. A root key reaches any tenant; a `tenant:<id>` key reaches only its own, and naming another is a 404."
+                }
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminKey}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "description": "Requires a root key: a tenant may not lift its own limits or un-suspend itself. Absent and null are distinct: a body carrying only `status` leaves the name alone. `limits`, `cache` and `debug_capture` each replace their whole block rather than merging field by field, so an empty object clears every override — \"send me the policy you want this tenant to have\" is the only rule to remember.\n",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"<name>\",\n  \"status\": \"active\",\n  \"limits\": {\n    \"max_request_bytes\": 1,\n    \"request_timeout_seconds\": 1,\n    \"stream_idle_timeout_seconds\": 1,\n    \"max_concurrent_per_key\": 1,\n    \"requests_per_second\": 1,\n    \"burst_capacity\": 1\n  },\n  \"cache\": {\n    \"enabled\": false,\n    \"ttl_seconds\": 1\n  },\n  \"debug_capture\": {\n    \"enabled\": false,\n    \"ttl_seconds\": 1,\n    \"sample_rate\": 0.0\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Delete a tenant and everything under it.",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/admin/v1/tenants/:tenant?confirm=<confirm>",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "v1",
+                "tenants",
+                ":tenant"
+              ],
+              "query": [
+                {
+                  "key": "confirm",
+                  "value": "<confirm>",
+                  "disabled": false,
+                  "description": "Must equal the tenant id in the path."
+                }
+              ],
+              "variable": [
+                {
+                  "key": "tenant",
+                  "value": "<tenant>",
+                  "description": "Tenant id. A root key reaches any tenant; a `tenant:<id>` key reaches only its own, and naming another is a 404."
+                }
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminKey}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "description": "Requires a root key and `?confirm=` matching the tenant id in the path — the whole id rather than a bare `?confirm=true`, which a mis-pasted URL would satisfy. Cached responses and retained captures go with it: both are reachable only through credentials that have just ceased to exist, so leaving them would be retention with no reader.\n"
+          }
+        }
+      ],
+      "description": "The unit of isolation."
+    },
+    {
+      "name": "Tenant keys",
+      "item": [
+        {
+          "name": "Mint a key for a tenant.",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/admin/v1/tenants/:tenant/keys",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "v1",
+                "tenants",
+                ":tenant",
+                "keys"
+              ],
+              "variable": [
+                {
+                  "key": "tenant",
+                  "value": "<tenant>",
+                  "description": "Tenant id. A root key reaches any tenant; a `tenant:<id>` key reaches only its own, and naming another is a 404."
+                }
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminKey}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "description": "`plane` decides what the key can reach: a `data` key (`cg-…`) reaches `/v1/*` and nothing else, an `admin` key (`cga-…`) reaches `/admin/v1/*`. That separation is what lets an application key be handed to a service without also handing over the ability to mint more keys. A tenant-scoped caller cannot mint a key whose scope exceeds its own.\n",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"<name>\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "List a tenant's keys.",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/admin/v1/tenants/:tenant/keys",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "v1",
+                "tenants",
+                ":tenant",
+                "keys"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "50",
+                  "disabled": true,
+                  "description": "Page size, 1 to 200. A value outside the range is refused rather than clamped, because a clamped short page is indistinguishable from a genuine last page."
+                },
+                {
+                  "key": "after",
+                  "value": "<after>",
+                  "disabled": true,
+                  "description": "Cursor: the `id` of the last item the caller saw. An unknown cursor is refused rather than restarting from the beginning."
+                }
+              ],
+              "variable": [
+                {
+                  "key": "tenant",
+                  "value": "<tenant>",
+                  "description": "Tenant id. A root key reaches any tenant; a `tenant:<id>` key reaches only its own, and naming another is a 404."
+                }
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminKey}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Revoke a key.",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/admin/v1/tenants/:tenant/keys/:id",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "v1",
+                "tenants",
+                ":tenant",
+                "keys",
+                ":id"
+              ],
+              "variable": [
+                {
+                  "key": "tenant",
+                  "value": "<tenant>",
+                  "description": "Tenant id. A root key reaches any tenant; a `tenant:<id>` key reaches only its own, and naming another is a 404."
+                },
+                {
+                  "key": "id",
+                  "value": "<id>",
+                  "description": "Key id."
+                }
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminKey}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "description": "Credentials scoped to one tenant."
+    },
+    {
+      "name": "Admin keys",
+      "item": [
+        {
+          "name": "Mint a root admin key.",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/admin/v1/admin-keys",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "v1",
+                "admin-keys"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminKey}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "description": "How a deployment rotates away from its bootstrap credential. Root keys belong to no tenant, so they are not under `/tenants` — minting one there would tie the credential that outranks every tenant to the lifetime of one of them. Requires a root key.\n",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"<name>\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "List root admin keys.",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/admin/v1/admin-keys",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "v1",
+                "admin-keys"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "50",
+                  "disabled": true,
+                  "description": "Page size, 1 to 200. A value outside the range is refused rather than clamped, because a clamped short page is indistinguishable from a genuine last page."
+                },
+                {
+                  "key": "after",
+                  "value": "<after>",
+                  "disabled": true,
+                  "description": "Cursor: the `id` of the last item the caller saw. An unknown cursor is refused rather than restarting from the beginning."
+                }
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminKey}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "description": "Requires a root key.\n"
+          }
+        },
+        {
+          "name": "Revoke a root admin key.",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/admin/v1/admin-keys/:id",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "v1",
+                "admin-keys",
+                ":id"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "<id>",
+                  "description": "Key id."
+                }
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminKey}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "description": "There is deliberately no guard against revoking the last one: the bootstrap key is checked against the process environment rather than resolved through the store, so it survives any revocation here and remains the documented way back in.\n"
+          }
+        }
+      ],
+      "description": "Root credentials, which belong to no tenant."
+    },
+    {
+      "name": "Providers",
+      "item": [
+        {
+          "name": "Register an upstream provider.",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/admin/v1/tenants/:tenant/providers",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "v1",
+                "tenants",
+                ":tenant",
+                "providers"
+              ],
+              "variable": [
+                {
+                  "key": "tenant",
+                  "value": "<tenant>",
+                  "description": "Tenant id. A root key reaches any tenant; a `tenant:<id>` key reaches only its own, and naming another is a 404."
+                }
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminKey}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "description": "`keys` is a pool rather than a single credential: GW-3 rotates within it on a 429 before it gives up on the provider and cascades onward. The credentials are write-only — listing a provider returns only their display prefixes.\n",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"<name>\",\n  \"kind\": \"<kind>\",\n  \"base_url\": \"<base url>\",\n  \"keys\": [\n    \"<keys>\"\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "List a tenant's providers.",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/admin/v1/tenants/:tenant/providers",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "v1",
+                "tenants",
+                ":tenant",
+                "providers"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "50",
+                  "disabled": true,
+                  "description": "Page size, 1 to 200. A value outside the range is refused rather than clamped, because a clamped short page is indistinguishable from a genuine last page."
+                },
+                {
+                  "key": "after",
+                  "value": "<after>",
+                  "disabled": true,
+                  "description": "Cursor: the `id` of the last item the caller saw. An unknown cursor is refused rather than restarting from the beginning."
+                }
+              ],
+              "variable": [
+                {
+                  "key": "tenant",
+                  "value": "<tenant>",
+                  "description": "Tenant id. A root key reaches any tenant; a `tenant:<id>` key reaches only its own, and naming another is a 404."
+                }
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminKey}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Update a provider.",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/admin/v1/tenants/:tenant/providers/:id",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "v1",
+                "tenants",
+                ":tenant",
+                "providers",
+                ":id"
+              ],
+              "variable": [
+                {
+                  "key": "tenant",
+                  "value": "<tenant>",
+                  "description": "Tenant id. A root key reaches any tenant; a `tenant:<id>` key reaches only its own, and naming another is a 404."
+                },
+                {
+                  "key": "id",
+                  "value": "<id>",
+                  "description": "Provider id."
+                }
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminKey}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "description": "An empty `keys` array is refused: a provider with no credentials could never serve a request, so accepting the write would produce a failure at dispatch time instead of at the moment the mistake was made.\n",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"base_url\": \"<base url>\",\n  \"enabled\": false,\n  \"keys\": [\n    \"<keys>\"\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Remove a provider.",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/admin/v1/tenants/:tenant/providers/:id",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "v1",
+                "tenants",
+                ":tenant",
+                "providers",
+                ":id"
+              ],
+              "variable": [
+                {
+                  "key": "tenant",
+                  "value": "<tenant>",
+                  "description": "Tenant id. A root key reaches any tenant; a `tenant:<id>` key reaches only its own, and naming another is a 404."
+                },
+                {
+                  "key": "id",
+                  "value": "<id>",
+                  "description": "Provider id."
+                }
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminKey}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "description": "Upstream accounts."
+    },
+    {
+      "name": "Aliases",
+      "item": [
+        {
+          "name": "Create or replace an alias.",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/admin/v1/tenants/:tenant/aliases/:name",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "v1",
+                "tenants",
+                ":tenant",
+                "aliases",
+                ":name"
+              ],
+              "variable": [
+                {
+                  "key": "tenant",
+                  "value": "<tenant>",
+                  "description": "Tenant id. A root key reaches any tenant; a `tenant:<id>` key reaches only its own, and naming another is a 404."
+                },
+                {
+                  "key": "name",
+                  "value": "<name>",
+                  "description": "The alias name callers will send as `model`."
+                }
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminKey}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "description": "Idempotent by name. A `pin` wins outright; otherwise the constraint fields select the best current catalog entry each time the alias is resolved, which is what lets \"fast\" keep meaning fast as providers ship new models. An alias whose name collides with a real model id is refused.\n",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"pin\": \"<pin>\",\n  \"capabilities\": [\n    \"<capabilities>\"\n  ],\n  \"min_context_window\": 1,\n  \"provider_preference\": [\n    \"<provider preference>\"\n  ],\n  \"cost_tier\": \"cheapest\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Delete an alias.",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/admin/v1/tenants/:tenant/aliases/:name",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "v1",
+                "tenants",
+                ":tenant",
+                "aliases",
+                ":name"
+              ],
+              "variable": [
+                {
+                  "key": "tenant",
+                  "value": "<tenant>",
+                  "description": "Tenant id. A root key reaches any tenant; a `tenant:<id>` key reaches only its own, and naming another is a 404."
+                },
+                {
+                  "key": "name",
+                  "value": "<name>",
+                  "description": "The alias name."
+                }
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminKey}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "List a tenant's aliases.",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/admin/v1/tenants/:tenant/aliases",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "v1",
+                "tenants",
+                ":tenant",
+                "aliases"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "50",
+                  "disabled": true,
+                  "description": "Page size, 1 to 200. A value outside the range is refused rather than clamped, because a clamped short page is indistinguishable from a genuine last page."
+                },
+                {
+                  "key": "after",
+                  "value": "<after>",
+                  "disabled": true,
+                  "description": "Cursor: the `id` of the last item the caller saw. An unknown cursor is refused rather than restarting from the beginning."
+                }
+              ],
+              "variable": [
+                {
+                  "key": "tenant",
+                  "value": "<tenant>",
+                  "description": "Tenant id. A root key reaches any tenant; a `tenant:<id>` key reaches only its own, and naming another is a 404."
+                }
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminKey}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "description": "Stable names for models that change."
+    },
+    {
+      "name": "Routing",
+      "item": [
+        {
+          "name": "Create or replace a routing rule.",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/admin/v1/tenants/:tenant/routing-rules",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "v1",
+                "tenants",
+                ":tenant",
+                "routing-rules"
+              ],
+              "variable": [
+                {
+                  "key": "tenant",
+                  "value": "<tenant>",
+                  "description": "Tenant id. A root key reaches any tenant; a `tenant:<id>` key reaches only its own, and naming another is a 404."
+                }
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminKey}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "description": "Idempotent by `match`. The chain is tried left to right until one answers; a single-element chain is a pin with no fallback, which is a legitimate configuration. A duplicate entry in the chain is refused, and a chain longer than `max_fallback_depth` is refused rather than silently truncated.\n",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"match\": \"<match>\",\n  \"chain\": [\n    \"<chain>\"\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "List a tenant's routing rules.",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/admin/v1/tenants/:tenant/routing-rules",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "v1",
+                "tenants",
+                ":tenant",
+                "routing-rules"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "50",
+                  "disabled": true,
+                  "description": "Page size, 1 to 200. A value outside the range is refused rather than clamped, because a clamped short page is indistinguishable from a genuine last page."
+                },
+                {
+                  "key": "after",
+                  "value": "<after>",
+                  "disabled": true,
+                  "description": "Cursor: the `id` of the last item the caller saw. An unknown cursor is refused rather than restarting from the beginning."
+                }
+              ],
+              "variable": [
+                {
+                  "key": "tenant",
+                  "value": "<tenant>",
+                  "description": "Tenant id. A root key reaches any tenant; a `tenant:<id>` key reaches only its own, and naming another is a 404."
+                }
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminKey}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Delete a routing rule.",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/admin/v1/tenants/:tenant/routing-rules/:id",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "v1",
+                "tenants",
+                ":tenant",
+                "routing-rules",
+                ":id"
+              ],
+              "variable": [
+                {
+                  "key": "tenant",
+                  "value": "<tenant>",
+                  "description": "Tenant id. A root key reaches any tenant; a `tenant:<id>` key reaches only its own, and naming another is a 404."
+                },
+                {
+                  "key": "id",
+                  "value": "<id>",
+                  "description": "Rule id."
+                }
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminKey}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "description": "Fallback chains."
+    },
+    {
+      "name": "Quotas",
+      "item": [
+        {
+          "name": "Set a per-key quota.",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/admin/v1/tenants/:tenant/keys/:id/quota",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "v1",
+                "tenants",
+                ":tenant",
+                "keys",
+                ":id",
+                "quota"
+              ],
+              "variable": [
+                {
+                  "key": "tenant",
+                  "value": "<tenant>",
+                  "description": "Tenant id. A root key reaches any tenant; a `tenant:<id>` key reaches only its own, and naming another is a 404."
+                },
+                {
+                  "key": "id",
+                  "value": "<id>",
+                  "description": "Key id."
+                }
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminKey}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "description": "A key quota can only narrow what the tenant's own quota already allows: both are evaluated and a request is rejected if either says so, so this can never raise a key past its tenant's ceiling.\n",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"day\": {\n    \"tokens\": {\n      \"cap\": 0.0,\n      \"soft_threshold_pct\": 1\n    },\n    \"cost\": {\n      \"cap\": 0.0,\n      \"soft_threshold_pct\": 1\n    }\n  },\n  \"month\": {\n    \"tokens\": {\n      \"cap\": 0.0,\n      \"soft_threshold_pct\": 1\n    },\n    \"cost\": {\n      \"cap\": 0.0,\n      \"soft_threshold_pct\": 1\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Retrieve a per-key quota.",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/admin/v1/tenants/:tenant/keys/:id/quota",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "v1",
+                "tenants",
+                ":tenant",
+                "keys",
+                ":id",
+                "quota"
+              ],
+              "variable": [
+                {
+                  "key": "tenant",
+                  "value": "<tenant>",
+                  "description": "Tenant id. A root key reaches any tenant; a `tenant:<id>` key reaches only its own, and naming another is a 404."
+                },
+                {
+                  "key": "id",
+                  "value": "<id>",
+                  "description": "Key id."
+                }
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminKey}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Remove a per-key quota.",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/admin/v1/tenants/:tenant/keys/:id/quota",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "v1",
+                "tenants",
+                ":tenant",
+                "keys",
+                ":id",
+                "quota"
+              ],
+              "variable": [
+                {
+                  "key": "tenant",
+                  "value": "<tenant>",
+                  "description": "Tenant id. A root key reaches any tenant; a `tenant:<id>` key reaches only its own, and naming another is a 404."
+                },
+                {
+                  "key": "id",
+                  "value": "<id>",
+                  "description": "Key id."
+                }
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminKey}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "description": "The key falls back to its tenant's quota alone.\n"
+          }
+        },
+        {
+          "name": "Set a tenant quota.",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/admin/v1/tenants/:tenant/quota",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "v1",
+                "tenants",
+                ":tenant",
+                "quota"
+              ],
+              "variable": [
+                {
+                  "key": "tenant",
+                  "value": "<tenant>",
+                  "description": "Tenant id. A root key reaches any tenant; a `tenant:<id>` key reaches only its own, and naming another is a 404."
+                }
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminKey}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "description": "The four slots are independent and any may be omitted, which means unlimited for that slot — distinct from a cap of zero, which is a meaningful configuration.\n",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"day\": {\n    \"tokens\": {\n      \"cap\": 0.0,\n      \"soft_threshold_pct\": 1\n    },\n    \"cost\": {\n      \"cap\": 0.0,\n      \"soft_threshold_pct\": 1\n    }\n  },\n  \"month\": {\n    \"tokens\": {\n      \"cap\": 0.0,\n      \"soft_threshold_pct\": 1\n    },\n    \"cost\": {\n      \"cap\": 0.0,\n      \"soft_threshold_pct\": 1\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Retrieve a tenant quota.",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/admin/v1/tenants/:tenant/quota",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "v1",
+                "tenants",
+                ":tenant",
+                "quota"
+              ],
+              "variable": [
+                {
+                  "key": "tenant",
+                  "value": "<tenant>",
+                  "description": "Tenant id. A root key reaches any tenant; a `tenant:<id>` key reaches only its own, and naming another is a 404."
+                }
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminKey}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Remove a tenant quota.",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/admin/v1/tenants/:tenant/quota",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "v1",
+                "tenants",
+                ":tenant",
+                "quota"
+              ],
+              "variable": [
+                {
+                  "key": "tenant",
+                  "value": "<tenant>",
+                  "description": "Tenant id. A root key reaches any tenant; a `tenant:<id>` key reaches only its own, and naming another is a 404."
+                }
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminKey}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "description": "The tenant becomes uncapped, subject to any per-key quotas that remain.\n"
+          }
+        }
+      ],
+      "description": "Token and spend ceilings."
+    },
+    {
+      "name": "Cache",
+      "item": [
+        {
+          "name": "Drop a tenant's cached responses.",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/admin/v1/tenants/:tenant/cache/flush",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "v1",
+                "tenants",
+                ":tenant",
+                "cache",
+                "flush"
+              ],
+              "variable": [
+                {
+                  "key": "tenant",
+                  "value": "<tenant>",
+                  "description": "Tenant id. A root key reaches any tenant; a `tenant:<id>` key reaches only its own, and naming another is a 404."
+                }
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminKey}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "description": "The response cache."
+    },
+    {
+      "name": "Captures",
+      "item": [
+        {
+          "name": "Read retained request and response bodies.",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/admin/v1/tenants/:tenant/captures",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "v1",
+                "tenants",
+                ":tenant",
+                "captures"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "50",
+                  "disabled": true,
+                  "description": "Page size, 1 to 200. A value outside the range is refused rather than clamped, because a clamped short page is indistinguishable from a genuine last page."
+                },
+                {
+                  "key": "after",
+                  "value": "<after>",
+                  "disabled": true,
+                  "description": "Cursor: the `id` of the last item the caller saw. An unknown cursor is refused rather than restarting from the beginning."
+                }
+              ],
+              "variable": [
+                {
+                  "key": "tenant",
+                  "value": "<tenant>",
+                  "description": "Tenant id. A root key reaches any tenant; a `tenant:<id>` key reaches only its own, and naming another is a 404."
+                }
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminKey}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "description": "The one route in the product that serves prompt content back out (GW-14). It returns something only for a tenant whose `debug_capture` an admin explicitly enabled, and that enabling is itself in the audit log. Entries are hard-deleted at their `expires_at`.\n"
+          }
+        }
+      ],
+      "description": "Opt-in body retention for debugging."
+    },
+    {
+      "name": "Webhooks",
+      "item": [
+        {
+          "name": "Register a delivery target.",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/admin/v1/tenants/:tenant/webhooks",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "v1",
+                "tenants",
+                ":tenant",
+                "webhooks"
+              ],
+              "variable": [
+                {
+                  "key": "tenant",
+                  "value": "<tenant>",
+                  "description": "Tenant id. A root key reaches any tenant; a `tenant:<id>` key reaches only its own, and naming another is a 404."
+                }
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminKey}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "description": "`secret` is write-only and is never returned. Deliveries are signed with it in X-CogniGate-Signature, so a receiver can tell a genuine delivery from anything else that finds the URL.\n",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"url\": \"<url>\",\n  \"events\": [\n    \"<events>\"\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "List a tenant's webhooks.",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/admin/v1/tenants/:tenant/webhooks",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "v1",
+                "tenants",
+                ":tenant",
+                "webhooks"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "50",
+                  "disabled": true,
+                  "description": "Page size, 1 to 200. A value outside the range is refused rather than clamped, because a clamped short page is indistinguishable from a genuine last page."
+                },
+                {
+                  "key": "after",
+                  "value": "<after>",
+                  "disabled": true,
+                  "description": "Cursor: the `id` of the last item the caller saw. An unknown cursor is refused rather than restarting from the beginning."
+                }
+              ],
+              "variable": [
+                {
+                  "key": "tenant",
+                  "value": "<tenant>",
+                  "description": "Tenant id. A root key reaches any tenant; a `tenant:<id>` key reaches only its own, and naming another is a 404."
+                }
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminKey}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Remove a delivery target.",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/admin/v1/tenants/:tenant/webhooks/:id",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "v1",
+                "tenants",
+                ":tenant",
+                "webhooks",
+                ":id"
+              ],
+              "variable": [
+                {
+                  "key": "tenant",
+                  "value": "<tenant>",
+                  "description": "Tenant id. A root key reaches any tenant; a `tenant:<id>` key reaches only its own, and naming another is a 404."
+                },
+                {
+                  "key": "id",
+                  "value": "<id>",
+                  "description": "Webhook id."
+                }
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminKey}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Poll a tenant's event history.",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/admin/v1/tenants/:tenant/events",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "v1",
+                "tenants",
+                ":tenant",
+                "events"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "50",
+                  "disabled": true,
+                  "description": "Page size, 1 to 200. A value outside the range is refused rather than clamped, because a clamped short page is indistinguishable from a genuine last page."
+                },
+                {
+                  "key": "after",
+                  "value": "<after>",
+                  "disabled": true,
+                  "description": "Cursor: the `id` of the last item the caller saw. An unknown cursor is refused rather than restarting from the beginning."
+                }
+              ],
+              "variable": [
+                {
+                  "key": "tenant",
+                  "value": "<tenant>",
+                  "description": "Tenant id. A root key reaches any tenant; a `tenant:<id>` key reaches only its own, and naming another is a 404."
+                }
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminKey}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "description": "Independent of delivery, which is the point: a tenant with no webhook registered, or one whose endpoint was down for the five attempts a delivery gets, still has to be able to find out that its breaker opened. Polling is the floor under at-least-once delivery, not an alternative to it — the field names match the webhook envelope's exactly so the two can be compared.\n"
+          }
+        }
+      ],
+      "description": "Event delivery and the polling floor under it."
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8080",
+      "type": "string"
+    },
+    {
+      "key": "dataKey",
+      "value": "",
+      "type": "string",
+      "description": "A data-plane key (cg-...). Reaches /v1 only."
+    },
+    {
+      "key": "adminKey",
+      "value": "",
+      "type": "string",
+      "description": "An admin-plane key (cga-...), or the bootstrap key. Reaches /admin/v1 only."
+    }
+  ]
 }

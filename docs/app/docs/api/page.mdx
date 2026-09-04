@@ -12,9 +12,11 @@ an admin key opens `/admin/v1` and nothing else. A key presented to the wrong
 plane is a `401` with code `wrong_plane`, never a partial success.
 
 > [!TIP]
-> The data plane's contract is also published as an
+> Both planes are published in full as an
 > [OpenAPI specification](https://github.com/Life-Experimentalist/CogniGate/blob/main/openapi.yaml)
-> and a [Postman collection](https://github.com/Life-Experimentalist/CogniGate/blob/main/postman_collection.json).
+> and a [Postman collection](https://github.com/Life-Experimentalist/CogniGate/blob/main/postman_collection.json)
+> — every route, on either plane. Both are generated from the source rather than
+> written, and the gateway's own tests fail if either drifts from what it serves.
 
 Every failure, on either plane, is the same envelope:
 
