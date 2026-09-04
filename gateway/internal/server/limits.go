@@ -2,6 +2,7 @@ package server
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -159,8 +160,10 @@ func (s *Server) limitTenant() fiber.Handler {
 			return httpx.Fail(c, apierr.RequestTooLarge(lim.MaxRequestBytes))
 		}
 
-		if wait, ok := s.rates.take(tenant.ID, lim.RequestsPerSecond, lim.BurstCapacity); !ok {
-			return httpx.Fail(c, apierr.RateLimited().WithRetryAfter(wait))
+		if !rateExempt(c) {
+			if wait, ok := s.rates.take(tenant.ID, lim.RequestsPerSecond, lim.BurstCapacity); !ok {
+				return httpx.Fail(c, apierr.RateLimited().WithRetryAfter(wait))
+			}
 		}
 
 		release, ok := s.limiter.acquire(key.ID, lim.MaxConcurrentPerKey)
@@ -177,6 +180,35 @@ func (s *Server) limitTenant() fiber.Handler {
 		defer held.releaseUnlessAdopted()
 		return c.Next()
 	}
+}
+
+// rateExempt reports whether a route is outside the per-tenant rate limit.
+//
+// Two routes are, and only these two. GW-5 exists so a caller can "render a
+// truthful degraded state before users hit per-request timeouts", and GW-9 makes
+// /v1/meta the document a client polls to discover what the deployment does.
+// Metering them makes both useless in the one situation they are for: a tenant
+// that has just hit its rate limit is exactly the tenant whose health matters,
+// and answering its health poll with 429 tells it nothing about the gateway.
+// The specifications say so numerically as well — GW-5.AC-7 requires 100
+// sequential health calls to *complete* and GW-9.AC-5 100 meta calls, which a
+// default burst of 100 cannot supply once anything else has spent a token.
+//
+// What is not lifted: both routes still sit behind s.auth(store.PlaneData), so
+// only a valid key reaches them, and the concurrency limit and the body checks
+// above still apply. A key polling health in a hot loop is capped by
+// max_concurrent_per_key, and each call is served from gateway-local state
+// without dialling a provider — which is GW-5.AC-7's other half.
+//
+// Matched on the request path, not c.Route(): inside group middleware Fiber
+// reports the route currently executing, which is this middleware's own entry
+// and not the handler that will run. The app is CaseSensitive but not
+// StrictRouting, so "/v1/health/" reaches the same handler and is normalised to
+// the same string here — an exemption that missed the trailing-slash spelling
+// would meter a route the specification says is unmetered.
+func rateExempt(c *fiber.Ctx) bool {
+	path := strings.TrimRight(c.Path(), "/")
+	return path == "/v1/health" || path == "/v1/meta"
 }
 
 // slot is one concurrency permit whose release can be handed to whatever ends up

@@ -330,6 +330,14 @@ func TestGW5_AC7_HealthIsLocalAndFast(t *testing.T) {
 	tn := newTenant(t, "gw5-ac7")
 	addMockProvider(t, tn)
 
+	// Narrowed to a single request per second, after provisioning has finished
+	// spending on this tenant. The criterion says a hundred health calls complete;
+	// a bucket this small says they complete because health is outside the rate
+	// limit, not because the default burst happened to be large enough. GW-5's
+	// whole purpose is telling a caller the gateway is degraded, and a tenant at
+	// its limit is the one that most needs to hear it.
+	narrowLimits(t, tn.ID, map[string]any{"requests_per_second": 1, "burst_capacity": 1})
+
 	// Snapshotted after provisioning, because provisioning legitimately dials the
 	// mock — once, to fill the tenant's catalogue. The counters are cumulative
 	// and shared with every concurrent run, so this has to be a difference.

@@ -142,6 +142,17 @@ because the documentation was public and someone may have planned against it.
 
 ### Fixed
 
+- **`GET /v1/health` and `GET /v1/meta` no longer spend the tenant's rate-limit
+  budget.** Both sat behind the per-tenant limiter, so a monitoring poll
+  competed with real traffic and a tenant that had just exhausted its budget got
+  429 from the two endpoints that exist to tell it what the gateway is doing —
+  the endpoints went dark in the situation they are for. Both are now outside
+  `rate_limit`. Nothing else about them changed: both still require a valid
+  data-plane key, still count against `max_concurrent_per_key`, and are still
+  answered from gateway-local state without dialling a provider. This also
+  resolves a contradiction in the specification, which required 100 sequential
+  calls to each to complete while metering them against a burst of 100.
+
 - **The `LICENSE` file was a paraphrase, not the Apache License 2.0.** Every
   source header, the README badge and `pom.xml` named Apache-2.0, but the file
   itself was a restatement written in the licence's shape — the section
