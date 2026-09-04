@@ -317,7 +317,7 @@ Logs: `docker compose logs -f gateway`, and the same for `analytics` and
 
 | Topic | Where |
 | --- | --- |
-| Full documentation | <https://life-experimentalist.github.io/CogniGate> |
+| Full documentation | <https://cognigate.vkrishna04.me> |
 | Machine-readable project context | `COGNIGATE_AI_CONTEXT.md` in the repo root |
 | OpenAPI description | `openapi.yaml` in the repo root |
 | Behavioural specification | `spec/gw-01…gw-14` in the repo |
