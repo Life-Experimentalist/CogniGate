@@ -108,6 +108,13 @@ CogniGate inventing a bespoke observability stack.
   dedupes by `X-CogniGate-Event-Id`).
 - **GW-8.AC-7** — Crossing a quota soft threshold emits exactly one
   `quota.threshold_crossed` event per window (shared with GW-4.AC-2).
+- **GW-8.AC-8** — `GET /metrics` on the analytics engine parses as
+  Prometheus text format and answers without a `cga-` key, exposing at
+  least one series describing the process. The requirement names both
+  processes; a deployment whose second process cannot be scraped is
+  half-observable, and an operator cannot tell a stalled ingestion path
+  from an idle one. Skipped when the suite is not told the analytics
+  engine's address.
 
 ## Non-goals
 

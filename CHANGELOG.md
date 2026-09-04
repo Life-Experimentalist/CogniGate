@@ -47,7 +47,9 @@ The first release has not been cut. Everything below is the state of `main`.
   error-code registry, request-id propagation, and the `X-CogniGate-*` extension
   headers.
 - **Observability (GW-8).** One structured log line per request carrying a fixed
-  field list, the specified Prometheus series at `/metrics`, and a per-tenant
+  field list, a Prometheus scrape at `/metrics` on **both** processes — the
+  gateway's specified series, and the analytics engine's own registry — and a
+  per-tenant
   event history at `GET /admin/v1/tenants/{id}/events` that a client can poll
   whether or not a webhook was ever delivered.
 - **Versioning and capability discovery (GW-9).** `GET /v1/meta`, served

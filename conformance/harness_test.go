@@ -61,6 +61,14 @@ type config struct {
 	// here. Empty skips those two, so a deployment that cannot expose its log is
 	// reported as untested rather than as failing.
 	LogPath string
+
+	// AnalyticsURL is the origin of the analytics engine, which GW-8 requires to
+	// expose a scrape of its own. The suite reaches the gateway through BaseURL
+	// and has no way to derive the second process's address from it -- they are
+	// separate deployables, and a deployment may not run the analytics engine at
+	// all. Empty skips the criterion, which is reported as untested rather than
+	// as failing.
+	AnalyticsURL string
 }
 
 func loadConfig() config {
@@ -71,6 +79,7 @@ func loadConfig() config {
 		MockControl:  os.Getenv("CONF_MOCK_CONTROL_URL"),
 		MetricsToken: os.Getenv("CONF_METRICS_TOKEN"),
 		LogPath:      os.Getenv("CONF_LOG_PATH"),
+		AnalyticsURL: strings.TrimRight(os.Getenv("CONF_ANALYTICS_URL"), "/"),
 	}
 	if c.MockProvider == "" {
 		c.MockProvider = "embedded"
