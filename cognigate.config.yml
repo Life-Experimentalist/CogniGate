@@ -76,6 +76,13 @@ limits:
   max_concurrent_per_key: 32
 
 # Per-tenant defaults; a tenant may be given its own.
+#
+# Raising this past what the analytics service can ingest costs usage records,
+# not throughput: metering is an asynchronous bounded queue (see telemetry.buffer
+# below), and once it is full the gateway keeps serving and drops the record. It
+# says so on the cognigate_telemetry_dropped counter and in a throttled warning
+# log. Quotas are measured from those same records, so a deployment that meters
+# slower than it serves under-counts consumption as well as under-reporting it.
 rate_limit:
   requests_per_second: 50
   burst_capacity: 100
@@ -94,7 +101,10 @@ webhooks:
   timeout: 10s
 
 telemetry:
-  # Usage records buffered while the analytics service is unreachable.
+  # Usage records held while the analytics service is behind. It absorbs an
+  # outage and a burst alike: the queue drains one record at a time, so this
+  # bounds how long the gateway can out-run its metering, not how fast it can
+  # meter. A full queue drops the record rather than the request.
   buffer: 1000
 
 health:
