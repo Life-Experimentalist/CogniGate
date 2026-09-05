@@ -467,6 +467,23 @@ export default function ParticleNetwork() {
         >
             <div ref={mountRef} style={{ width: "100%", height: "100%" }} />
 
+            {/* Legibility scrim.
+                The scene runs behind the hero copy, and a bright node landing
+                on a line of body text made it genuinely hard to read. Dimming
+                the whole canvas would have cost the animation everywhere; this
+                darkens only the ellipse the headline and paragraph occupy and
+                fades to nothing well before the edges, where the routing
+                animation is the thing worth looking at. */}
+            <div
+                style={{
+                    position: "absolute",
+                    inset: 0,
+                    pointerEvents: "none",
+                    background:
+                        "radial-gradient(ellipse 46% 38% at 50% 44%, rgba(3,7,18,0.88) 0%, rgba(3,7,18,0.62) 45%, rgba(3,7,18,0) 78%)",
+                }}
+            />
+
             {/* Floating Simulation HUD Overlay */}
             <div
                 style={{
