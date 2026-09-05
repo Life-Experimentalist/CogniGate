@@ -50,7 +50,7 @@ jobs:
       # ----- Gateway -----
       - name: Extract metadata — Gateway
         id: meta-gateway
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ env.GATEWAY_IMAGE }}
           tags: |
@@ -91,7 +91,7 @@ jobs:
       # ----- Analytics -----
       - name: Extract metadata — Analytics
         id: meta-analytics
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ env.ANALYTICS_IMAGE }}
           tags: |
