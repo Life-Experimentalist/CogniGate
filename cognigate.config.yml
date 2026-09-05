@@ -77,12 +77,15 @@ limits:
 
 # Per-tenant defaults; a tenant may be given its own.
 #
-# Raising this past what the analytics service can ingest costs usage records,
-# not throughput: metering is an asynchronous bounded queue (see telemetry.buffer
-# below), and once it is full the gateway keeps serving and drops the record. It
-# says so on the cognigate_telemetry_dropped counter and in a throttled warning
-# log. Quotas are measured from those same records, so a deployment that meters
-# slower than it serves under-counts consumption as well as under-reporting it.
+# Metering is an asynchronous bounded queue (see telemetry.buffer below), drained
+# one record at a time for the gateway as a whole rather than per tenant. Serving
+# past what the analytics service can ingest costs usage records, not throughput:
+# once the queue is full the gateway keeps serving and drops the record, saying so
+# on the cognigate_telemetry_dropped_total counter and in a throttled warning log.
+# Quotas are measured from those same records, so a deployment that meters slower
+# than it serves under-counts consumption as well as under-reporting it. There are
+# two ways to get there: raising this past the ingest rate, or running enough
+# tenants at this rate that their total exceeds it without anyone raising it.
 rate_limit:
   requests_per_second: 50
   burst_capacity: 100

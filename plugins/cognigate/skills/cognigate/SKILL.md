@@ -295,11 +295,13 @@ Logs: `docker compose logs -f gateway`, and the same for `analytics` and
   `cognigate.config.yml` under `metrics`. The file is bind-mounted, so the
   change needs `docker compose up -d --force-recreate gateway` to take — which
   empties the control plane. Re-provision afterwards, see Provision.
-- Metering is asynchronous and bounded. If `cognigate_telemetry_dropped` is
-  climbing, or the logs say the telemetry buffer is full, the gateway is serving
-  faster than analytics can record; usage and quotas both under-count until it
-  catches up. Raise `telemetry.buffer` for bursts, lower `rate_limit` for a
-  sustained gap.
+- Metering is asynchronous and bounded, and the queue is per-gateway rather than
+  per-tenant. If `cognigate_telemetry_dropped_total` is climbing, or the logs say
+  the telemetry buffer is full, the gateway is serving faster than analytics can
+  record; usage and quotas both under-count until it catches up. Raise
+  `telemetry.buffer` for bursts, lower `rate_limit` for a sustained gap. Enough
+  tenants at the default rate reach the same ceiling between them, with nobody
+  having raised anything.
 - Upgrade: `git pull && docker compose pull && docker compose up -d`. That
   recreates the gateway container, so re-provision afterwards — see Provision.
   The published images are `ghcr.io/life-experimentalist/cognigate-gateway` and
