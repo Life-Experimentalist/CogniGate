@@ -35,7 +35,7 @@ jobs:
       # The builder stages cross-compile, but each runtime stage still runs its
       # own RUN lines on the target platform, so emulation is needed for arm64.
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@v4
         with:
           # Pinned, and newer than the action's default. The default QEMU
           # segfaults running glibc's ldconfig, which is a postinst script every
