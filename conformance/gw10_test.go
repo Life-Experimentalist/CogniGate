@@ -75,7 +75,13 @@ func repoFile(t *testing.T, rel ...string) string {
 	if err != nil {
 		t.Fatalf("reading %s: %v", filepath.ToSlash(filepath.Join(rel...)), err)
 	}
-	return string(body)
+	// Callers anchor their patterns to a bare LF, and a Windows checkout with
+	// core.autocrlf on hands back "\r\n" — which turns a workflow job that is
+	// plainly present into four failures blaming CI for not running the suite.
+	// This suite is meant to certify a deployment from whatever machine is
+	// pointed at it, and the README already warns about the same carriage
+	// return reaching the admin key.
+	return strings.ReplaceAll(string(body), "\r\n", "\n")
 }
 
 // --- reading the specifications ---------------------------------------------
