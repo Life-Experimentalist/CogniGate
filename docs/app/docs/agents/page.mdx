@@ -11,6 +11,9 @@ export const skillUrl = publicUrl("/skill/SKILL.md");
 
 export const installSkill = `mkdir -p ~/.claude/skills/cognigate && curl -fsSL ${skillUrl} -o ~/.claude/skills/cognigate/SKILL.md`;
 
+export const installPlugin = `/plugin marketplace add Life-Experimentalist/CogniGate
+/plugin install cognigate@cognigate`;
+
 # AI Agents
 
 CogniGate ships an **agent skill**: one markdown file that teaches a coding
@@ -21,7 +24,22 @@ Install it once and it is available in every future session. The agent stops
 guessing at the API from a README and starts working from a procedure that was
 written against the source.
 
+## Installing it
+
+In **Claude Code**, the CogniGate repository is itself a plugin marketplace, so
+there is nothing to download by hand and updates arrive with the plugin:
+
+<CodeBlockWrapper language="text">{installPlugin}</CodeBlockWrapper>
+
+**Anywhere else** — another agent, another machine, no plugin system — the
+skill is one file over HTTPS:
+
 <CodeBlockWrapper language="bash">{installSkill}</CodeBlockWrapper>
+
+Both give you the same file. It lives at
+[`plugins/cognigate/skills/cognigate/SKILL.md`](https://github.com/Life-Experimentalist/CogniGate/blob/main/plugins/cognigate/skills/cognigate/SKILL.md)
+in the repository, and the copy served here is generated from it at build time,
+so the two cannot drift apart.
 
 Then, in any session:
 

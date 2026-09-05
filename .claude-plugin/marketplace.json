@@ -1,0 +1,36 @@
+{
+    "$schema": "https://code.claude.com/schemas/marketplace.json",
+    "name": "cognigate",
+    "description": "The CogniGate agent skill, installable as a Claude Code plugin.",
+    "owner": {
+        "name": "Life Experimentalist",
+        "url": "https://github.com/Life-Experimentalist"
+    },
+    "plugins": [
+        {
+            "name": "cognigate",
+            "source": "./plugins/cognigate",
+            "displayName": "CogniGate",
+            "description": "Install, operate and integrate CogniGate — the self-hosted, OpenAI-compatible LLM gateway. Covers first install, tenant and key provisioning, provider registration, routing aliases, quotas, health checks, and wiring an existing application in.",
+            "version": "1.0.0",
+            "author": {
+                "name": "VKrishna04",
+                "url": "https://github.com/VKrishna04"
+            },
+            "homepage": "https://life-experimentalist.github.io/CogniGate/docs/agents/",
+            "repository": "https://github.com/Life-Experimentalist/CogniGate",
+            "license": "Apache-2.0",
+            "category": "devops",
+            "keywords": [
+                "llm",
+                "gateway",
+                "openai-compatible",
+                "self-hosted",
+                "routing",
+                "failover",
+                "api-keys",
+                "docker"
+            ]
+        }
+    ]
+}

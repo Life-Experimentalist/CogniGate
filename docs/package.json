@@ -3,7 +3,10 @@
     "version": "1.0.0",
     "private": true,
     "scripts": {
+        "sync-skill": "node scripts/sync-skill.mjs",
+        "predev": "npm run sync-skill",
         "dev": "next dev",
+        "prebuild": "npm run sync-skill",
         "build": "next build",
         "start": "next start",
         "lint": "eslint"

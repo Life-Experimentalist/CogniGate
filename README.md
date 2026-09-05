@@ -319,7 +319,16 @@ Full documentation is available at **[https://life-experimentalist.github.io/Cog
 CogniGate ships an **agent skill** — one markdown file that teaches a coding
 agent to install the gateway, provision a tenant, register providers, wire an
 existing application into it, and diagnose it when it breaks. Install it once
-and it is there in every future session:
+and it is there in every future session.
+
+In Claude Code, this repository is a plugin marketplace:
+
+```
+/plugin marketplace add Life-Experimentalist/CogniGate
+/plugin install cognigate@cognigate
+```
+
+Anywhere else, it is one file over HTTPS:
 
 ```bash
 mkdir -p ~/.claude/skills/cognigate && curl -fsSL https://life-experimentalist.github.io/CogniGate/skill/SKILL.md -o ~/.claude/skills/cognigate/SKILL.md
