@@ -32,6 +32,7 @@
 
 <p>
   <a href="https://life-experimentalist.github.io/CogniGate">📖 Documentation</a> ·
+  <a href="https://life-experimentalist.github.io/CogniGate/docs/agents">🤖 AI Agents</a> ·
   <a href="https://github.com/Life-Experimentalist/CogniGate/issues/new?template=bug_report.yml">🐛 Report Bug</a> ·
   <a href="https://github.com/Life-Experimentalist/CogniGate/issues/new?template=feature_request.yml">✨ Request Feature</a> ·
   <a href="https://github.com/Life-Experimentalist/CogniGate/discussions">💬 Discussions</a>
@@ -109,19 +110,26 @@ serving traffic and buffers what it cannot deliver.
 
 ```bash
 # Linux / macOS
-curl -fsSL https://raw.githubusercontent.com/Life-Experimentalist/CogniGate/main/setup.sh | bash
-# Or clone first:
-git clone https://github.com/Life-Experimentalist/CogniGate.git
-cd CogniGate
-./setup.sh --dev --detach
+curl -sSL https://life-experimentalist.github.io/CogniGate/install.sh | bash
 ```
 
 ```powershell
 # Windows (PowerShell)
+irm https://life-experimentalist.github.io/CogniGate/install.ps1 | iex
+```
+
+The installer clones the repository, generates credentials and starts the
+stack. To do the same by hand — or if you would rather read the script before
+running it, which you should:
+
+```bash
 git clone https://github.com/Life-Experimentalist/CogniGate.git
 cd CogniGate
-.\setup.ps1 -Mode dev -Detach
+./setup.sh --dev --detach        # PowerShell: .\setup.ps1 -Mode dev -Detach
 ```
+
+`setup.sh` expects to be run from inside a checkout; it is the second half of
+what the installer does, not a substitute for the clone.
 
 This single command:
 1. ✅ Copies `.env.example` → `.env`
@@ -298,11 +306,59 @@ Full documentation is available at **[https://life-experimentalist.github.io/Cog
 | [Architecture](https://life-experimentalist.github.io/CogniGate/docs/architecture) | System design, data flows, component interactions |
 | [API Reference](https://life-experimentalist.github.io/CogniGate/docs/api) | All endpoints, request/response schemas |
 | [Routing](https://life-experimentalist.github.io/CogniGate/docs/routing) | Aliases, fallback chains, breakers, and how a model name is resolved |
+| [Integrating an App](https://life-experimentalist.github.io/CogniGate/docs/integration) | Putting CogniGate in front of software that already calls an LLM API |
+| [AI Agents](https://life-experimentalist.github.io/CogniGate/docs/agents) | The agent skill, and what it will and will not do on your machine |
 | [Security](https://life-experimentalist.github.io/CogniGate/docs/security) | Credential handling, the two planes, tenant isolation |
 | [Usage & Cost](https://life-experimentalist.github.io/CogniGate/docs/billing) | What is metered, how to read it back, where the cost figure comes from |
 | [Deployment](https://life-experimentalist.github.io/CogniGate/docs/deployment) | Production hardening, TLS, scaling, and what it still owes you |
 
-**AI Agent Context:** For AI-assisted troubleshooting and customization, pass the raw URL of [`COGNIGATE_AI_CONTEXT.md`](https://raw.githubusercontent.com/Life-Experimentalist/CogniGate/main/COGNIGATE_AI_CONTEXT.md) to your AI assistant.
+---
+
+## Let an Agent Do It
+
+CogniGate ships an **agent skill** — one markdown file that teaches a coding
+agent to install the gateway, provision a tenant, register providers, wire an
+existing application into it, and diagnose it when it breaks. Install it once
+and it is there in every future session:
+
+```bash
+mkdir -p ~/.claude/skills/cognigate && curl -fsSL https://life-experimentalist.github.io/CogniGate/skill/SKILL.md -o ~/.claude/skills/cognigate/SKILL.md
+```
+
+Then say *"set up CogniGate and point my app at it"*. For other agents, the
+file is plain markdown — drop it wherever your tool loads instructions from.
+
+Read it first, it is short:
+[`skill/SKILL.md`](https://life-experimentalist.github.io/CogniGate/skill/SKILL.md).
+It refuses to print secrets, refuses to wipe the database to fix a container,
+and refuses to report success from a script's own output. Details and the
+verification commands are in [AI Agents](https://life-experimentalist.github.io/CogniGate/docs/agents).
+
+There is also a shorter one-URL bootstrap at
+[`prompt.md`](https://life-experimentalist.github.io/CogniGate/prompt.md), and
+a whole-repository briefing in
+[`COGNIGATE_AI_CONTEXT.md`](https://raw.githubusercontent.com/Life-Experimentalist/CogniGate/main/COGNIGATE_AI_CONTEXT.md)
+for questions about the code itself.
+
+---
+
+## Integrating an Existing Application
+
+If it already speaks the OpenAI API, the integration is two settings — a base
+URL and a key. No SDK, no adapter, no change to any request or response:
+
+```python
+client = OpenAI(
+    base_url=os.environ["COGNIGATE_URL"] + "/v1",
+    api_key=os.environ["COGNIGATE_API_KEY"],   # the cg- secret
+)
+```
+
+Then delete the provider credential from the application, and rotate it at the
+provider if it was ever committed. The full procedure — finding the call sites,
+one key per service per environment, moving model names behind aliases, and how
+to prove the traffic is actually going through the gateway — is in
+[Integrating an Application](https://life-experimentalist.github.io/CogniGate/docs/integration).
 
 ---
 
@@ -335,6 +391,17 @@ adapter is a code change in `gateway/internal/provider/`.
 | Database | PostgreSQL 16 |
 | Container Runtime | Docker, Docker Compose |
 | Docs Site | Next.js 16, Tailwind CSS 4, Three.js / React Three Fiber |
+
+---
+
+## Brand
+
+The mark, the palette and the exact image-model prompts used to generate them
+live in [`docs/public/brand/logo-prompt.md`](docs/public/brand/logo-prompt.md)
+— four prompts (icon, favicon, wordmark lockup, social banner), the seven hex
+values nothing may drift off, and the checks a generated logo has to survive
+before it ships. `docs/public/logo.png` and `docs/public/banner.png` are served
+at `/logo.png` and `/banner.png`, so replacing either is a file swap.
 
 ---
 
