@@ -5,7 +5,7 @@
 # Pinned to BUILDPLATFORM because the jar is architecture-independent: there is
 # nothing to gain from running Maven once per target platform, and doing it
 # under emulation is the difference between a two-minute build and a timeout.
-FROM --platform=$BUILDPLATFORM maven:3.9-eclipse-temurin-25 AS builder
+FROM --platform=$BUILDPLATFORM maven:3.9-eclipse-temurin-26 AS builder
 
 WORKDIR /app
 COPY pom.xml .
