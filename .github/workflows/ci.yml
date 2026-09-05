@@ -456,3 +456,65 @@ jobs:
       # The GW-10 conformance suite, which is its own module rooted here.
       - name: Scan the conformance suite
         run: govulncheck ./...
+
+  # ============================================================
+  # Install & setup scripts
+  # ============================================================
+  # These four files are the first thing a new user runs, and until this job
+  # existed nothing checked them: install.ps1 shipped for months in a state
+  # where PowerShell 5.1 could not parse it at all. A check mark had been
+  # written into it, and a .ps1 with no byte-order mark is read as ANSI on
+  # Windows, so U+2713's third byte (0x93, a left double quotation mark in
+  # cp1252) opened a string that never closed. The parse check below is the
+  # real guard; the ASCII assertion names the cause before someone has to
+  # decode a terminator error to find it.
+  scripts:
+    name: Install & setup scripts
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: PowerShell 5.1 parses both scripts
+        shell: powershell
+        run: |
+          $failed = $false
+          foreach ($f in @("setup.ps1", "docs/public/install.ps1")) {
+              $errs = $null
+              [void][System.Management.Automation.Language.Parser]::ParseFile(
+                  (Resolve-Path $f), [ref]$null, [ref]$errs)
+              if ($errs) {
+                  Write-Host "::error file=$f::does not parse under Windows PowerShell 5.1"
+                  $errs | ForEach-Object { Write-Host "  $_" }
+                  $failed = $true
+              } else {
+                  Write-Host "$f parses clean"
+              }
+          }
+          if ($failed) { exit 1 }
+
+      - name: Both PowerShell scripts are pure ASCII
+        shell: powershell
+        run: |
+          $failed = $false
+          foreach ($f in @("setup.ps1", "docs/public/install.ps1")) {
+              $n = 0
+              foreach ($ch in [System.IO.File]::ReadAllText($f).ToCharArray()) {
+                  if ([int]$ch -gt 127) { $n++ }
+              }
+              if ($n -gt 0) {
+                  Write-Host "::error file=$f::$n non-ASCII characters; write [OK] / [!] / [X] instead"
+                  $failed = $true
+              } else {
+                  Write-Host "$f is pure ASCII"
+              }
+          }
+          if ($failed) { exit 1 }
+
+      - name: Bash parses both shell scripts
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n setup.sh
+          bash -n docs/public/install.sh
+          echo "setup.sh and install.sh parse clean"
