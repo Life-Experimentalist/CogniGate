@@ -8,8 +8,8 @@
 #   ./setup.sh [OPTIONS]
 #
 # Options:
-#   --dev       Start in development mode (no TLS, verbose logging)
-#   --prod      Start in production mode
+#   --dev       Build the images from this checkout (default)
+#   --prod      Pull the published images instead of building
 #   --detach    Run containers in background (default: foreground)
 #   --clean     Remove existing data volumes before starting
 #   --help      Show this help message
@@ -52,6 +52,10 @@ for arg in "$@"; do
     --clean)  CLEAN=true ;;
     --help)
       echo "Usage: ./setup.sh [--dev|--prod] [--detach] [--clean]"
+      echo "  --dev     Build the images from this checkout (default)"
+      echo "  --prod    Pull the published images instead of building"
+      echo "  --detach  Run in the background and wait for health"
+      echo "  --clean   Remove existing data volumes before starting"
       exit 0
       ;;
   esac
@@ -114,8 +118,18 @@ randhex() {
 # `|` as the delimiter because a hex secret can contain `/`. The .bak file is
 # removed rather than left behind: it is a copy of the credentials, and BSD sed
 # requires the suffix, so it cannot simply be omitted.
+#
+# The grep is not redundant. A substitution that matches nothing still exits 0,
+# so on a .env with no line for this key at all -- one written by hand, or
+# trimmed -- the old version wrote nothing and then reported that the secret had
+# been saved. The caller would start the stack with the variable still unset.
 set_env() {
-  sed -i.bak "s|^$1=.*|$1=$2|" .env && rm -f .env.bak
+  if grep -q "^$1=" .env; then
+    sed -i.bak "s|^$1=.*|$1=$2|" .env && rm -f .env.bak
+  else
+    printf '%s=%s\n' "$1" "$2" >> .env
+  fi
+  grep -q "^$1=$2\$" .env
 }
 
 if [ -z "${GATEWAY_BOOTSTRAP_KEY:-}" ] || [ "${GATEWAY_BOOTSTRAP_KEY}" = "replace_me" ]; then
@@ -140,14 +154,38 @@ else
 fi
 
 # --- Build & Start ---
-echo -e "${BLUE}[4/4] Building and starting containers...${NC}"
+# --dev compiles the images from this checkout. --prod pulls the published
+# multi-arch images, which is both faster and what install.sh asks for on a
+# fresh clone. A pull that cannot complete -- no network, a registry outage --
+# falls back to building rather than leaving the caller with nothing.
+BUILD_FLAG="--build"
+if [ "$MODE" = "prod" ]; then
+  echo -e "${BLUE}[4/4] Pulling published images...${NC}"
+  if docker compose pull --quiet; then
+    BUILD_FLAG=""
+  else
+    echo -e "${YELLOW}⚠ Could not pull the published images. Building from source instead.${NC}"
+  fi
+else
+  echo -e "${BLUE}[4/4] Building and starting containers...${NC}"
+fi
+
+# Spelled out rather than expanding a possibly-empty variable: bash 3.2, which
+# is still what /bin/bash is on macOS, treats an empty expansion under `set -u`
+# as an unbound variable and aborts.
 if [ -n "$DETACH" ]; then
   # --wait blocks until every service reports healthy, so the summary below
   # describes a stack that is actually serving rather than one that has merely
   # been created. The timeout is generous because a cold JVM is slow to boot.
-  docker compose up --build -d --wait --wait-timeout 180
-else
+  if [ -n "$BUILD_FLAG" ]; then
+    docker compose up --build -d --wait --wait-timeout 180
+  else
+    docker compose up -d --wait --wait-timeout 180
+  fi
+elif [ -n "$BUILD_FLAG" ]; then
   docker compose up --build
+else
+  docker compose up
 fi
 
 if [ -n "$DETACH" ]; then

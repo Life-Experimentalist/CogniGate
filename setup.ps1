@@ -92,16 +92,29 @@ function New-HexSecret([int]$Bytes) {
     return ($buf | ForEach-Object { $_.ToString("x2") }) -join ""
 }
 
+# Set-EnvValue, not a bare -replace. A substitution whose pattern matches
+# nothing succeeds silently, so on a .env with no line for the key at all --
+# one written by hand, or trimmed -- the old version reported that the secret
+# had been generated and saved while writing nothing, and the stack then
+# started with the variable unset.
+function Set-EnvValue([string]$Content, [string]$Key, [string]$Value) {
+    if ($Content -match "(?m)^$Key=") {
+        return ($Content -replace "(?m)^$Key=.*", "$Key=$Value")
+    }
+    if ($Content.Length -gt 0 -and -not $Content.EndsWith("`n")) { $Content += "`n" }
+    return $Content + "$Key=$Value`n"
+}
+
 $envContent = Get-Content ".env" -Raw
-if ($envContent -match "(?m)^GATEWAY_BOOTSTRAP_KEY=replace_" -or $envContent -notmatch "(?m)^GATEWAY_BOOTSTRAP_KEY=") {
+if ($envContent -match "(?m)^GATEWAY_BOOTSTRAP_KEY=replace_" -or $envContent -notmatch "(?m)^GATEWAY_BOOTSTRAP_KEY=.") {
     Write-Host "  [!] Generating GATEWAY_BOOTSTRAP_KEY..." -ForegroundColor Yellow
-    $envContent = $envContent -replace "(?m)^GATEWAY_BOOTSTRAP_KEY=.*", "GATEWAY_BOOTSTRAP_KEY=$(New-HexSecret 24)"
+    $envContent = Set-EnvValue $envContent "GATEWAY_BOOTSTRAP_KEY" (New-HexSecret 24)
     Write-Host "  [OK] GATEWAY_BOOTSTRAP_KEY generated." -ForegroundColor Green
 }
 
-if ($envContent -match "(?m)^ANALYTICS_TOKEN=replace_" -or $envContent -notmatch "(?m)^ANALYTICS_TOKEN=") {
+if ($envContent -match "(?m)^ANALYTICS_TOKEN=replace_" -or $envContent -notmatch "(?m)^ANALYTICS_TOKEN=.") {
     Write-Host "  [!] Generating ANALYTICS_TOKEN..." -ForegroundColor Yellow
-    $envContent = $envContent -replace "(?m)^ANALYTICS_TOKEN=.*", "ANALYTICS_TOKEN=$(New-HexSecret 32)"
+    $envContent = Set-EnvValue $envContent "ANALYTICS_TOKEN" (New-HexSecret 32)
     Write-Host "  [OK] ANALYTICS_TOKEN generated." -ForegroundColor Green
 }
 
@@ -121,15 +134,46 @@ if ($Clean) {
 }
 
 # --- Build & Start ---
-Write-Host "[4/4] Building and starting containers..." -ForegroundColor Blue
+# -Mode dev compiles the images from this checkout. -Mode prod pulls the
+# published multi-arch images, which is both faster and what install.ps1 asks
+# for on a fresh clone. A pull that cannot complete - no network, a registry
+# outage - falls back to building rather than leaving the caller with nothing.
+$Build = "--build"
+if ($Mode -eq "prod") {
+    Write-Host "[4/4] Pulling published images..." -ForegroundColor Blue
+    docker compose pull --quiet
+    if ($LASTEXITCODE -eq 0) {
+        $Build = ""
+    } else {
+        Write-Host "  [!] Could not pull the published images. Building from source instead." -ForegroundColor Yellow
+    }
+} else {
+    Write-Host "[4/4] Building and starting containers..." -ForegroundColor Blue
+}
 
 if ($Detach) {
     # --wait blocks until every service reports healthy, so the summary below
     # describes a stack that is actually serving rather than one that has merely
     # been created. The timeout is generous because a cold JVM is slow to boot.
-    docker compose up --build -d --wait --wait-timeout 180
-} else {
+    if ($Build) {
+        docker compose up --build -d --wait --wait-timeout 180
+    } else {
+        docker compose up -d --wait --wait-timeout 180
+    }
+} elseif ($Build) {
     docker compose up --build
+} else {
+    docker compose up
+}
+
+# $ErrorActionPreference does not apply to a native executable's exit code, so
+# without this a stack that failed to come up still printed the success summary
+# below. setup.sh gets the same guarantee from `set -e`.
+if ($LASTEXITCODE -ne 0) {
+    Write-Host ""
+    Write-Host "  [X] docker compose exited with $LASTEXITCODE. The stack is not running." -ForegroundColor Red
+    Write-Host "      Run: docker compose logs" -ForegroundColor Yellow
+    exit $LASTEXITCODE
 }
 
 if ($Detach) {
