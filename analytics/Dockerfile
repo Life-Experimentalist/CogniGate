@@ -1,7 +1,11 @@
 # CogniGate analytics engine.
 
 # Stage 1: build with Maven on the JDK the project targets.
-FROM maven:3.9-eclipse-temurin-25 AS builder
+#
+# Pinned to BUILDPLATFORM because the jar is architecture-independent: there is
+# nothing to gain from running Maven once per target platform, and doing it
+# under emulation is the difference between a two-minute build and a timeout.
+FROM --platform=$BUILDPLATFORM maven:3.9-eclipse-temurin-25 AS builder
 
 WORKDIR /app
 COPY pom.xml .

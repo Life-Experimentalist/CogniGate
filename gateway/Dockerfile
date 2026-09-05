@@ -4,7 +4,9 @@
 # requirement, not an optimisation, because a gateway that needs a libc at the
 # version it was linked against is not a single artefact an operator can copy.
 
-FROM golang:1.26-alpine AS builder
+# Pinned to BUILDPLATFORM so the toolchain runs natively on the builder and Go
+# cross-compiles, rather than the whole compile running under emulation.
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS builder
 
 WORKDIR /app
 
@@ -18,7 +20,11 @@ COPY . .
 # "dev" because GW-9 publishes it as a version a client may parse; the
 # prerelease segment is what marks an untagged build.
 ARG VERSION=0.0.0-dev
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags "-s -w -X main.version=${VERSION}" -o cognigate .
+# TARGETOS and TARGETARCH are supplied by buildx, one pair per requested
+# platform. They default for a plain `docker build`, which passes neither.
+ARG TARGETOS=linux
+ARG TARGETARCH
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -ldflags "-s -w -X main.version=${VERSION}" -o cognigate .
 
 FROM alpine:3.24
 
