@@ -86,8 +86,9 @@ not helpfully route around them:
   secret, not the bootstrap key. An agent transcript is a log, and a logged
   secret is a leaked secret.
 - **It will not run `./setup.sh --clean` to fix a failing container.** That
-  deletes the Postgres volume and with it every tenant, key, provider and usage
-  record. It is a reset, not a repair.
+  deletes the Postgres volume and with it every usage record. It is a reset,
+  not a repair — and since the control plane is in memory, simply restarting
+  the gateway already costs every tenant, key and provider.
 - **It will not report success from a script's own output.** Both setup scripts
   can print success on a path that wrote nothing. The skill requires
   `docker compose ps` and a live `/healthz` before an agent may claim the

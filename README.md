@@ -222,6 +222,14 @@ Only a SHA-256 hash and the displayable prefix are stored, so nothing in
 CogniGate can recover the secret later. If it is lost, revoke the key and mint
 a new one.
 
+> **The control plane is in memory.** Tenants, keys, providers, aliases, routes
+> and quotas live in the gateway process. Postgres holds usage records and
+> nothing else, so restarting or recreating the gateway container — a
+> `docker compose pull`, a config change, a crash — takes the three steps above
+> with it, and the first sign is a `401` on a key that worked a minute ago.
+> Keep those calls in a script. Making the control plane durable is [known
+> work, not a surprise](https://life-experimentalist.github.io/CogniGate/docs/architecture/).
+
 These examples assume a POSIX shell. In PowerShell, use `Invoke-RestMethod` —
 PowerShell rewrites the arguments it passes to a native executable, and the
 inner double quotes of a JSON body do not survive that rewrite, so `curl.exe -d
@@ -279,7 +287,10 @@ All configuration is documented in:
 | `POSTGRES_DB` | `cognigate` | Database name |
 
 The gateway itself is configured from [`cognigate.config.yml`](cognigate.config.yml),
-and the settings below can additionally be set from the environment. The
+which `docker-compose.yml` bind-mounts read-only into the container: edit it and
+recreate the gateway, and the new values are live. Recreating the gateway also
+empties the in-memory control plane, so re-provision afterwards.
+The settings below can additionally be set from the environment. The
 environment always wins over the file, and the file over the defaults. Each is
 also read without the `CG_` prefix, for platforms that inject a bare `PORT`.
 
