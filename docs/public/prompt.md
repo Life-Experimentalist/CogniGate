@@ -4,7 +4,7 @@ You are being asked to install and configure **CogniGate**, a self-hosted,
 multi-tenant, OpenAI-compatible LLM gateway. Follow this document exactly.
 
 The complete operating manual is at
-<https://life-experimentalist.github.io/CogniGate/skill/SKILL.md>. If you can
+<https://cognigate.vkrishna04.me/skill/SKILL.md>. If you can
 fetch it, fetch it and follow it instead of this page — it covers provisioning,
 routing, quotas, integration and troubleshooting, and this page does not.
 
@@ -12,7 +12,7 @@ If you are a Claude Code agent, install it as a skill once and it is available
 in every future session:
 
 ```bash
-mkdir -p ~/.claude/skills/cognigate && curl -fsSL https://life-experimentalist.github.io/CogniGate/skill/SKILL.md -o ~/.claude/skills/cognigate/SKILL.md
+mkdir -p ~/.claude/skills/cognigate && curl -fsSL https://cognigate.vkrishna04.me/skill/SKILL.md -o ~/.claude/skills/cognigate/SKILL.md
 ```
 
 ---

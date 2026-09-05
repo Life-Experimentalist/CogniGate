@@ -14,7 +14,7 @@
 const BASE_PATH = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
 
 export const SITE_ORIGIN =
-    process.env.NEXT_PUBLIC_SITE_ORIGIN ?? "https://life-experimentalist.github.io";
+    process.env.NEXT_PUBLIC_SITE_ORIGIN ?? "https://cognigate.vkrishna04.me";
 
 /** Origin plus base path: the prefix every public URL on this site starts with. */
 export const SITE_URL = `${SITE_ORIGIN}${BASE_PATH}`;

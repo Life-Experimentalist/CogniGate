@@ -2,7 +2,7 @@
 # CogniGate - Interactive Setup Wrapper (Windows PowerShell)
 # Copyright 2026 VKrishna04 and Life Experimentalist
 #
-# Execution: irm https://life-experimentalist.github.io/CogniGate/install.ps1 | iex
+# Execution: irm https://cognigate.vkrishna04.me/install.ps1 | iex
 #
 # This file must stay pure ASCII, for the same reason setup.ps1 must. Windows
 # PowerShell 5.1 reads a .ps1 with no byte-order mark as ANSI, and .editorconfig

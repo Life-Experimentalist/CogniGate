@@ -43,16 +43,17 @@ jobs:
       # tags at build time, and it has no request to read a Host header from,
       # so these two are the only place the public address is written down.
       #
-      # Moving to the custom domain is these two lines and a docs/public/CNAME
-      # file, in one push, once the DNS record resolves: SITE_ORIGIN becomes
-      # https://cognigate.vkrishna04.me and BASE_PATH becomes empty, because a
-      # custom domain serves from the root rather than from /CogniGate.
-      # Changing either one early breaks every asset path on the live site.
+      # The site is served from the custom domain, so BASE_PATH is empty: a
+      # custom domain serves from the root rather than from /CogniGate. The
+      # domain itself is declared in docs/public/CNAME, which the export copies
+      # verbatim into docs/out and Pages reads on deploy; deleting that file
+      # unsets the domain on the next deploy and the site falls back to the
+      # github.io path, so it has to survive any tidy-up of docs/public.
       - name: Build Next.js static site
         run: npm run build
         env:
-          NEXT_PUBLIC_BASE_PATH: /CogniGate
-          NEXT_PUBLIC_SITE_ORIGIN: https://life-experimentalist.github.io
+          NEXT_PUBLIC_BASE_PATH: ""
+          NEXT_PUBLIC_SITE_ORIGIN: https://cognigate.vkrishna04.me
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3

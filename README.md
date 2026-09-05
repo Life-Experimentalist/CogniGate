@@ -31,8 +31,8 @@
 </p>
 
 <p>
-  <a href="https://life-experimentalist.github.io/CogniGate">📖 Documentation</a> ·
-  <a href="https://life-experimentalist.github.io/CogniGate/docs/agents">🤖 AI Agents</a> ·
+  <a href="https://cognigate.vkrishna04.me">📖 Documentation</a> ·
+  <a href="https://cognigate.vkrishna04.me/docs/agents">🤖 AI Agents</a> ·
   <a href="https://github.com/Life-Experimentalist/CogniGate/issues/new?template=bug_report.yml">🐛 Report Bug</a> ·
   <a href="https://github.com/Life-Experimentalist/CogniGate/issues/new?template=feature_request.yml">✨ Request Feature</a> ·
   <a href="https://github.com/Life-Experimentalist/CogniGate/discussions">💬 Discussions</a>
@@ -110,12 +110,12 @@ serving traffic and buffers what it cannot deliver.
 
 ```bash
 # Linux / macOS
-curl -sSL https://life-experimentalist.github.io/CogniGate/install.sh | bash
+curl -sSL https://cognigate.vkrishna04.me/install.sh | bash
 ```
 
 ```powershell
 # Windows (PowerShell)
-irm https://life-experimentalist.github.io/CogniGate/install.ps1 | iex
+irm https://cognigate.vkrishna04.me/install.ps1 | iex
 ```
 
 The installer clones the repository, generates credentials and starts the
@@ -228,7 +228,7 @@ a new one.
 > `docker compose pull`, a config change, a crash — takes the three steps above
 > with it, and the first sign is a `401` on a key that worked a minute ago.
 > Keep those calls in a script. Making the control plane durable is [known
-> work, not a surprise](https://life-experimentalist.github.io/CogniGate/docs/architecture/).
+> work, not a surprise](https://cognigate.vkrishna04.me/docs/architecture/).
 
 These examples assume a POSIX shell. In PowerShell, use `Invoke-RestMethod` —
 PowerShell rewrites the arguments it passes to a native executable, and the
@@ -309,19 +309,19 @@ also read without the `CG_` prefix, for platforms that inject a bare `PORT`.
 
 ## Documentation
 
-Full documentation is available at **[https://life-experimentalist.github.io/CogniGate](https://life-experimentalist.github.io/CogniGate)**.
+Full documentation is available at **[https://cognigate.vkrishna04.me](https://cognigate.vkrishna04.me)**.
 
 | Section | Description |
 |---|---|
-| [Getting Started](https://life-experimentalist.github.io/CogniGate/docs/getting-started) | Installation, first run, quick test |
-| [Architecture](https://life-experimentalist.github.io/CogniGate/docs/architecture) | System design, data flows, component interactions |
-| [API Reference](https://life-experimentalist.github.io/CogniGate/docs/api) | All endpoints, request/response schemas |
-| [Routing](https://life-experimentalist.github.io/CogniGate/docs/routing) | Aliases, fallback chains, breakers, and how a model name is resolved |
-| [Integrating an App](https://life-experimentalist.github.io/CogniGate/docs/integration) | Putting CogniGate in front of software that already calls an LLM API |
-| [AI Agents](https://life-experimentalist.github.io/CogniGate/docs/agents) | The agent skill, and what it will and will not do on your machine |
-| [Security](https://life-experimentalist.github.io/CogniGate/docs/security) | Credential handling, the two planes, tenant isolation |
-| [Usage & Cost](https://life-experimentalist.github.io/CogniGate/docs/billing) | What is metered, how to read it back, where the cost figure comes from |
-| [Deployment](https://life-experimentalist.github.io/CogniGate/docs/deployment) | Production hardening, TLS, scaling, and what it still owes you |
+| [Getting Started](https://cognigate.vkrishna04.me/docs/getting-started) | Installation, first run, quick test |
+| [Architecture](https://cognigate.vkrishna04.me/docs/architecture) | System design, data flows, component interactions |
+| [API Reference](https://cognigate.vkrishna04.me/docs/api) | All endpoints, request/response schemas |
+| [Routing](https://cognigate.vkrishna04.me/docs/routing) | Aliases, fallback chains, breakers, and how a model name is resolved |
+| [Integrating an App](https://cognigate.vkrishna04.me/docs/integration) | Putting CogniGate in front of software that already calls an LLM API |
+| [AI Agents](https://cognigate.vkrishna04.me/docs/agents) | The agent skill, and what it will and will not do on your machine |
+| [Security](https://cognigate.vkrishna04.me/docs/security) | Credential handling, the two planes, tenant isolation |
+| [Usage & Cost](https://cognigate.vkrishna04.me/docs/billing) | What is metered, how to read it back, where the cost figure comes from |
+| [Deployment](https://cognigate.vkrishna04.me/docs/deployment) | Production hardening, TLS, scaling, and what it still owes you |
 
 ---
 
@@ -342,20 +342,20 @@ In Claude Code, this repository is a plugin marketplace:
 Anywhere else, it is one file over HTTPS:
 
 ```bash
-mkdir -p ~/.claude/skills/cognigate && curl -fsSL https://life-experimentalist.github.io/CogniGate/skill/SKILL.md -o ~/.claude/skills/cognigate/SKILL.md
+mkdir -p ~/.claude/skills/cognigate && curl -fsSL https://cognigate.vkrishna04.me/skill/SKILL.md -o ~/.claude/skills/cognigate/SKILL.md
 ```
 
 Then say *"set up CogniGate and point my app at it"*. For other agents, the
 file is plain markdown — drop it wherever your tool loads instructions from.
 
 Read it first, it is short:
-[`skill/SKILL.md`](https://life-experimentalist.github.io/CogniGate/skill/SKILL.md).
+[`skill/SKILL.md`](https://cognigate.vkrishna04.me/skill/SKILL.md).
 It refuses to print secrets, refuses to wipe the database to fix a container,
 and refuses to report success from a script's own output. Details and the
-verification commands are in [AI Agents](https://life-experimentalist.github.io/CogniGate/docs/agents).
+verification commands are in [AI Agents](https://cognigate.vkrishna04.me/docs/agents).
 
 There is also a shorter one-URL bootstrap at
-[`prompt.md`](https://life-experimentalist.github.io/CogniGate/prompt.md), and
+[`prompt.md`](https://cognigate.vkrishna04.me/prompt.md), and
 a whole-repository briefing in
 [`COGNIGATE_AI_CONTEXT.md`](https://raw.githubusercontent.com/Life-Experimentalist/CogniGate/main/COGNIGATE_AI_CONTEXT.md)
 for questions about the code itself.
@@ -378,7 +378,7 @@ Then delete the provider credential from the application, and rotate it at the
 provider if it was ever committed. The full procedure — finding the call sites,
 one key per service per environment, moving model names behind aliases, and how
 to prove the traffic is actually going through the gateway — is in
-[Integrating an Application](https://life-experimentalist.github.io/CogniGate/docs/integration).
+[Integrating an Application](https://cognigate.vkrishna04.me/docs/integration).
 
 ---
 
