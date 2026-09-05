@@ -4,6 +4,7 @@ import dynamic from "next/dynamic";
 import { useState } from "react";
 import { Nav } from "./components/Nav";
 import { Footer } from "./components/Footer";
+import { publicUrl } from "./site";
 
 const ParticleNetwork = dynamic(() => import("./components/ParticleNetwork"), {
     ssr: false,
@@ -17,11 +18,19 @@ function Hero() {
     const [copied, setCopied] = useState(false);
 
     const getInstallCmd = () => {
+        // The agentic one-liner installs the skill rather than executing a
+        // prompt: `agent run <url>` is not a command any agent CLI actually
+        // has, and a copy button that hands out a command that does not exist
+        // is worse than no button. This one writes a file, works today, and
+        // leaves the agent able to install, provision and troubleshoot in
+        // every later session rather than only during this install.
         if (os === "agentic")
-            return "agent run https://cognigate.vkrishna04.me/prompt.md";
+            return `mkdir -p ~/.claude/skills/cognigate && curl -fsSL ${publicUrl(
+                "/skill/SKILL.md"
+            )} -o ~/.claude/skills/cognigate/SKILL.md`;
         return os === "linux"
-            ? "curl -sSL https://cognigate.vkrishna04.me/install.sh | bash"
-            : "irm https://cognigate.vkrishna04.me/install.ps1 | iex";
+            ? `curl -sSL ${publicUrl("/install.sh")} | bash`
+            : `irm ${publicUrl("/install.ps1")} | iex`;
     };
 
     const copySetup = () => {
@@ -226,9 +235,12 @@ function Hero() {
                     <div
                         onClick={copySetup}
                         style={{
-                            display: "inline-flex",
+                            display: "flex",
                             alignItems: "center",
                             gap: 12,
+                            maxWidth: "min(720px, 100%)",
+                            margin: "0 auto",
+                            textAlign: "left",
                             background: "rgba(10,14,26,0.8)",
                             border: "1px solid rgba(31,41,55,0.8)",
                             borderRadius: 12,
@@ -257,9 +269,11 @@ function Hero() {
                         </span>
                         <code
                             style={{
+                                flex: 1,
                                 fontFamily: "monospace",
                                 fontSize: 14,
                                 color: "#e2e8f0",
+                                overflowWrap: "anywhere",
                             }}
                         >
                             {getInstallCmd()}
@@ -276,6 +290,22 @@ function Hero() {
                             {copied ? "✓" : "❐"}
                         </div>
                     </div>
+
+                    <p
+                        style={{
+                            marginTop: 14,
+                            fontSize: 13,
+                            color: "#6b7280",
+                            maxWidth: 560,
+                            marginLeft: "auto",
+                            marginRight: "auto",
+                            lineHeight: 1.6,
+                        }}
+                    >
+                        {os === "agentic"
+                            ? "Installs the CogniGate skill into your agent. From then on, “set up CogniGate” installs it, provisions a tenant, and wires an application into it — in this session and every later one."
+                            : "Docker and Docker Compose v2 are the only prerequisites. The script generates credentials, starts three containers, and verifies them."}
+                    </p>
                 </div>
 
                 <div
@@ -650,10 +680,10 @@ function QuickStart() {
                             step: "01",
                             title: "Install & Start",
                             code: `# Linux/macOS:
-curl -sSL https://cognigate.vkrishna04.me/install.sh | bash
+curl -sSL ${publicUrl("/install.sh")} | bash
 
 # Windows PowerShell:
-irm https://cognigate.vkrishna04.me/install.ps1 | iex`,
+irm ${publicUrl("/install.ps1")} | iex`,
                         },
                         {
                             step: "02",
