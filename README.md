@@ -161,7 +161,7 @@ carry `X.Y.Z` and `X.Y` — none has been cut yet.
 
 ```bash
 curl -s http://localhost:8080/healthz
-# → {"status":"ok","version":"dev"}
+# → {"status":"ok"}
 ```
 
 ### Your First API Key
