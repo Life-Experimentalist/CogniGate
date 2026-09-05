@@ -51,6 +51,14 @@ Vercel AI SDK, Semantic Kernel, Spring AI, a hand-rolled `fetch`. Point it at
 Do them in this order. Each one is reversible on its own, and the order is what
 keeps the application working the whole way through.
 
+The `curl` examples below use three shell variables, so set them once:
+
+```bash
+export CG=http://localhost:8080        # wherever the gateway is reachable
+export CG_ADMIN=cg-...                 # an admin key; the bootstrap key on a fresh install
+export TENANT=...                      # the tenant id from POST /admin/v1/tenants
+```
+
 ### 1. Find the call sites
 
 Grep for the SDK constructors and the raw endpoints:
@@ -161,7 +169,9 @@ amount of key management.
   the chain. Register at least two providers in production or there is nothing
   to fall through to.
 - **A `429` from CogniGate** is a quota or rate limit, not a provider refusal.
-  Check `GET /quota` and `GET /usage`.
+  The application's own key can read `GET /v1/usage` to see what it has
+  spent; the ceiling itself is admin-side, at
+  `GET /admin/v1/tenants/$TENANT/quota`.
 - **A `404 not_supported`** means the path is not on the gateway's surface.
   CogniGate does not pass unknown OpenAI paths through to a provider, and
   routing is case-sensitive.
