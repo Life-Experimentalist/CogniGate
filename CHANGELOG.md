@@ -187,3 +187,51 @@ because the documentation was public and someone may have planned against it.
   appendix directs. GitHub classifies the repository as Apache-2.0 rather than
   "Other". Anyone who took a copy before this should re-pull — what they hold
   does not grant what it says it does.
+
+### Security
+
+- **Fiber updated from v2.52.4 to v2.52.12, closing two advisories the gateway
+  could actually reach.** `GO-2026-4543` is a denial of service through
+  route-parameter overflow, reachable from the router itself, and
+  `GO-2025-3845` is an unvalidated slice index in `BodyParser`, reachable from
+  every admin endpoint that parses a body. Both were reported by the new
+  vulnerability scan below, on its first run, before it was committed — which
+  is the argument for having it.
+
+- **Dependencies are now watched rather than remembered.**
+  `.github/dependabot.yml` covers all five surfaces: both Go modules, the
+  Maven module, the docs site's npm tree, the workflows' own actions, and the
+  container base images. The Go module block allows indirect dependencies,
+  because `go.mod` records the whole transitive graph and watching only direct
+  requirements lets the other half drift while every run stays green. The
+  builder base images — `golang:1.26-alpine` and
+  `maven:3.9-eclipse-temurin-25` — take patch updates only: they are toolchain
+  pins that have to agree with `go.mod` and the pom, and a bot moving one
+  alone would compile a shipped image with a toolchain nothing tested. The
+  runtime images update freely, since they carry the OS packages and cannot
+  change how anything was compiled.
+
+- **CI scans both Go modules against the Go vulnerability database on every
+  push,** with `govulncheck` invoked directly rather than through a wrapper
+  action. It reports only what the code can reach, so it is a complement to
+  Dependabot and not a replacement.
+
+- **CodeQL analyses the Go source, the Java source and the workflows,** on
+  every push and pull request and on a weekly schedule. The schedule is the
+  part that matters for a project that goes quiet: it re-runs settled code
+  against queries that did not exist when the code was written.
+
+- **Published images and release artifacts now carry signed build provenance,
+  and the images carry an SPDX SBOM.** The provenance is a statement, signed
+  against a short-lived OIDC certificate, naming this repository's workflow at
+  a specific commit as what produced a given digest. It is attached to the
+  digest rather than to a tag, because a tag is a movable pointer. Anyone can
+  check one without cloning anything:
+
+  ```bash
+  gh attestation verify oci://ghcr.io/life-experimentalist/cognigate-gateway:main --repo Life-Experimentalist/CogniGate
+  ```
+
+  Release binaries are attested the same way; the command is printed in each
+  release's notes. No release has been cut yet, so that half is configured and
+  not yet exercised.

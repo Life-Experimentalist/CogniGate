@@ -157,6 +157,21 @@ once the first release is tagged it will follow releases instead, so `main` is
 the tag that keeps meaning the branch either way. Releases will additionally
 carry `X.Y.Z` and `X.Y` — none has been cut yet.
 
+#### Checking where an image came from
+
+Both images are published with signed build provenance and an SPDX SBOM,
+attached to the image digest and stored in the registry beside it. Nothing
+needs to be cloned to check one:
+
+```bash
+gh attestation verify oci://ghcr.io/life-experimentalist/cognigate-gateway:main --repo Life-Experimentalist/CogniGate
+```
+
+That confirms the image was built by this repository's workflow at a
+specific commit, rather than by whoever else could push a tag with the same
+name. Release binaries carry the same guarantee; the command is in each
+release's notes.
+
 ### Verify It's Running
 
 ```bash

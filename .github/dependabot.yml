@@ -1,0 +1,127 @@
+# Dependabot keeps the four dependency surfaces in this repository current.
+#
+# Nothing here can merge on its own -- every update arrives as a pull request
+# that runs the full CI matrix, conformance suite included. A red conformance
+# run on a Dependabot PR is the point of the exercise, not a nuisance.
+
+version: 2
+
+updates:
+  # ---- Go ----
+  #
+  # Two modules, deliberately: gateway/ is the service, and / is the GW-10
+  # conformance suite, which is its own module so `go test ./conformance/...`
+  # works from the repository root. The suite is standard-library-only today
+  # and so has no go.sum, but it is listed anyway -- the day it grows a
+  # dependency is exactly the day nobody remembers to add it here.
+  #
+  # `dependency-type: all` because go.mod records the whole transitive graph in
+  # its `// indirect` block and builds resolve against go.sum. Watching only
+  # direct requirements lets the indirect half drift arbitrarily far behind
+  # while every Dependabot run stays green. govulncheck in CI is not a
+  # substitute: it reports only vulnerabilities your code actually reaches, so
+  # a dependency that is stale but not yet exploitable is invisible to it.
+  - package-ecosystem: gomod
+    directories:
+      - "/"
+      - "/gateway"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    allow:
+      - dependency-type: all
+    groups:
+      go-minor-and-patch:
+        update-types: ["minor", "patch"]
+    commit-message:
+      prefix: "deps"
+
+  # ---- Java ----
+  #
+  # Spring Boot majors and minors land as one PR each on purpose: a Boot minor
+  # moves a large transitive tree at once and deserves to be read, not batched
+  # in with a logging-library patch.
+  - package-ecosystem: maven
+    directory: "/analytics"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      maven-minor-and-patch:
+        update-types: ["minor", "patch"]
+    commit-message:
+      prefix: "deps(analytics)"
+
+  # ---- Docs site ----
+  #
+  # The published site is a Next.js app under docs/. It ships no runtime
+  # secrets and serves static output, so its dependency risk is build-time
+  # only -- hence the lower PR ceiling. It still gets patched weekly because a
+  # transitive npm advisory is a supply-chain problem regardless of what the
+  # output looks like.
+  - package-ecosystem: npm
+    directory: "/docs"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    groups:
+      docs-minor-and-patch:
+        update-types: ["minor", "patch"]
+    commit-message:
+      prefix: "deps(docs)"
+
+  # ---- GitHub Actions ----
+  #
+  # Majors are deliberately left out of the group so each one arrives alone;
+  # an actions major is usually a breaking input change.
+  #
+  # Dependabot reads `uses:` lines and nothing else. It cannot see
+  # `go-version: "1.26"`, `java-version: "25"`, or `runs-on: ubuntu-latest`,
+  # so none of those follow from a green run here -- they are maintained by
+  # hand against go.mod and the pom.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      actions-minor-and-patch:
+        update-types: ["minor", "patch"]
+    commit-message:
+      prefix: "ci"
+
+  # ---- Container base images ----
+  #
+  # Two Dockerfiles, each with a builder stage and a runtime stage, and the two
+  # stages want opposite policies.
+  #
+  # The builder images are toolchain pins wearing a base-image costume:
+  # golang:1.26-alpine has to agree with go.mod's `go 1.26` and CI's
+  # go-version, and maven:3.9-eclipse-temurin-25 has to agree with the pom's
+  # Java 25 target. A bot bumping either one alone would compile the shipped
+  # image with a toolchain nothing in CI ever tested, and the build would very
+  # likely still be green. So their major and minor bumps are ignored and
+  # belong to whoever moves the language version on purpose; patch updates
+  # still flow, which is where the toolchain image's own CVE fixes arrive.
+  #
+  # The runtime images -- alpine and the Temurin JRE -- are left entirely
+  # alone to update. They carry the OS packages, which is the whole
+  # security-patch surface of a published image, and they cannot change how
+  # anything was compiled.
+  - package-ecosystem: docker
+    directories:
+      - "/gateway"
+      - "/analytics"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    ignore:
+      - dependency-name: "golang"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: "maven"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+    groups:
+      base-images:
+        update-types: ["minor", "patch"]
+    commit-message:
+      prefix: "deps(docker)"
