@@ -1,9 +1,10 @@
 import { MetadataRoute } from "next";
+import { SITE_URL } from "./site";
 
 export const dynamic = "force-static";
 
 export default function sitemap(): MetadataRoute.Sitemap {
-    const baseUrl = "https://cognigate.vkrishna04.me";
+    const baseUrl = SITE_URL;
     const docs = [
         "",
         "/docs/getting-started",
@@ -12,6 +13,8 @@ export default function sitemap(): MetadataRoute.Sitemap {
         "/docs/explorer",
         "/docs/routing",
         "/docs/api",
+        "/docs/integration",
+        "/docs/agents",
         "/docs/security",
         "/docs/privacy",
         "/docs/billing",
