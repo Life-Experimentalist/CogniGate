@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"net/url"
 	"sort"
 	"strings"
 	"sync"
@@ -88,7 +89,19 @@ func (s *Server) handleListModels(c *fiber.Ctx) error {
 }
 
 func (s *Server) handleGetModel(c *fiber.Ctx) error {
-	id := strings.Trim(param(c, "*"), "/")
+	// Model ids carry a provider prefix — "openai/gpt-4o" — and a conforming
+	// HTTP client percent-encodes that slash when it builds the path. Fiber is
+	// configured with UnescapePath off, so the wildcard arrives as it was sent
+	// and "openai%2Fgpt-4o" would miss a catalog keyed on "openai/gpt-4o". A
+	// value that is not valid percent-encoding is not an error here: it is a
+	// model id that happens to contain a stray %, and looking it up verbatim is
+	// what the caller meant.
+	raw := param(c, "*")
+	decoded, err := url.PathUnescape(raw)
+	if err != nil {
+		decoded = raw
+	}
+	id := strings.Trim(decoded, "/")
 	if id == "" {
 		return httpx.Fail(c, apierr.ModelNotFound(""))
 	}
