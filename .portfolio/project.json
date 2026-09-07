@@ -1,0 +1,30 @@
+{
+	"$schema": "https://vkrishna04.me/schemas/project-manifest.schema.json",
+	"manifestVersion": 2,
+	"tagline": "One endpoint in front of every model your applications use.",
+	"summary": "A self-hosted, multi-tenant LLM gateway: one key and the OpenAI API shape in front of every model your applications use. The edge gateway is Go 1.26 on Fiber v2, with provider plugins, analytics, and a conformance suite that runs in CI.",
+	"status": "active",
+	"icon": "SiGo",
+	"readme": true,
+	"technologies": [
+		"Go",
+		"Fiber",
+		"Docker"
+	],
+	"tags": [
+		"llm",
+		"gateway",
+		"self-hosted",
+		"openai-compatible",
+		"multi-tenant"
+	],
+	"highlights": [
+		"Speaks the OpenAI API shape, so existing clients point at one gateway endpoint and keep working.",
+		"Multi-tenant by design: tenants get their own keys in front of every upstream provider.",
+		"A conformance suite runs against the gateway in CI, not just at release time."
+	],
+	"links": {
+		"repo": "https://github.com/Life-Experimentalist/CogniGate",
+		"docs": "https://cognigate.vkrishna04.me"
+	}
+}
