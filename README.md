@@ -384,10 +384,12 @@ to prove the traffic is actually going through the gateway — is in
 
 ## Adding a Provider
 
-CogniGate ships one provider adapter, `openai`, and it covers every service
-that reimplements the OpenAI wire format — Together, Groq, Fireworks, Azure
-OpenAI, OpenRouter, vLLM, Ollama, LM Studio. Only the base URL differs, so
-registering one is a single admin call and needs no code:
+CogniGate ships three provider kinds, and registering any of them is a single
+admin call that needs no code.
+
+`openai` covers every service that reimplements the OpenAI wire format:
+Together, Groq, Fireworks, Azure OpenAI, OpenRouter, vLLM, Ollama, LM Studio.
+Only the base URL differs.
 
 ```bash
 curl -s -X POST http://localhost:8080/admin/v1/tenants/ten_.../providers \
@@ -396,8 +398,28 @@ curl -s -X POST http://localhost:8080/admin/v1/tenants/ten_.../providers \
   -d '{"name":"local","kind":"openai","base_url":"http://localhost:11434/v1","keys":["unused"]}'
 ```
 
-A provider that speaks its own protocol instead needs a translating proxy in
-front of it. There is no runtime plugin mechanism, and adding a second native
+`gemini` and `anthropic` are that same adapter pointed at each vendor's own
+OpenAI-compatible endpoint. They carry its base URL as a default, so `base_url`
+is optional for them, and they report the vendor's name rather than "openai" in
+logs, metrics and `X-CogniGate-Served-By`.
+
+```bash
+curl -s -X POST http://localhost:8080/admin/v1/tenants/ten_.../providers \
+  -H "Authorization: Bearer $BOOTSTRAP" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"gemini","kind":"gemini","keys":["...","..."]}'
+```
+
+`keys` is a pool, and `key_strategy` decides which key a request starts from.
+`round_robin`, the default, advances one key per request, so several keys from
+one vendor share a steady load instead of piling onto the first until it
+throttles. `failover` pins every request to the first key and keeps the rest
+for when it starts refusing, which is what a paid key backed by a free one
+wants. Under either strategy a 429 walks the whole pool before the fallback
+chain moves on.
+
+A provider that speaks a protocol none of the three cover needs a translating
+proxy in front of it. There is no runtime plugin mechanism, and adding a native
 adapter is a code change in `gateway/internal/provider/`.
 
 ---

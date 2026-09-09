@@ -132,6 +132,14 @@ and the cascade move on.
 Key rotation does not increment `X-CogniGate-Fallback-Depth`. The header counts
 candidates that failed, and a rotation stayed on the same one.
 
+Which key a request *starts* from is `key_strategy` on the provider record.
+`round_robin`, the default, advances one key per request, so a pool of
+equivalent keys shares a steady load instead of piling onto the first until it
+throttles. `failover` starts every request at the first key and keeps the rest
+for when it begins refusing, which is what a paid key backed by a free one
+wants. Neither changes the paragraph above: whatever the starting offset, the
+whole pool is tried before the cascade moves on.
+
 ### The failure that is never retried
 
 A `4xx` the request itself caused — a malformed body, an oversized prompt, a

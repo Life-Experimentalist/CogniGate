@@ -44,7 +44,7 @@ Full CRUD (JSON bodies, standard verbs — `GET` list/read, `POST` create,
 | Tenants | `/admin/v1/tenants` | create returns tenant id; delete requires `?confirm=<id>` |
 | API keys (data plane) | `/admin/v1/tenants/{id}/keys` | create returns the `cg-*` secret **once**; thereafter only prefix + metadata; revocation is immediate (≤10 s propagation) |
 | Admin keys | `/admin/v1/admin-keys` | root scope only; same show-once rule |
-| Providers | `/admin/v1/tenants/{id}/providers` | upstream name, kind, base URL, and a write-only key pool: secrets are accepted on write and never returned, reads yield prefixes + status |
+| Providers | `/admin/v1/tenants/{id}/providers` | upstream name, kind, base URL, the pool's key rotation strategy, and a write-only key pool: secrets are accepted on write and never returned, reads yield prefixes + status |
 | Routing rules | `/admin/v1/tenants/{id}/routing-rules` | validated per GW-3 at save time |
 | Aliases | `/admin/v1/tenants/{id}/aliases` | validated per GW-2 at save time |
 | Quota | `/admin/v1/tenants/{id}/quota` and `.../keys/{kid}/quota` | per GW-4; one quota object per subject, so both are singletons |
