@@ -2609,6 +2609,7 @@ components:
       - completion_tokens
       - total_tokens
       - cost_usd
+      - charge_usd
       properties:
         object:
           type: string
@@ -2634,6 +2635,14 @@ components:
           type: integer
         cost_usd:
           type: number
+          description: What the traffic cost at the provider's published rate. Zero for a
+            model whose listing publishes no price and whose rate the operator has not supplied.
+            This is the figure cost quotas are measured against.
+        charge_usd:
+          type: number
+          description: What is owed for the traffic. Equal to `cost_usd` unless the operator
+            has put a margin on the provider rate, or is carrying the bill themselves, in
+            which case it is zero.
         state:
           type: string
           description: The worst state across `limits`.
@@ -2656,6 +2665,7 @@ components:
       - completion_tokens
       - total_tokens
       - cost_usd
+      - charge_usd
       properties:
         key:
           type: string
@@ -2670,6 +2680,14 @@ components:
           type: integer
         cost_usd:
           type: number
+          description: What the traffic cost at the provider's published rate. Zero for a
+            model whose listing publishes no price and whose rate the operator has not supplied.
+            This is the figure cost quotas are measured against.
+        charge_usd:
+          type: number
+          description: What is owed for the traffic. Equal to `cost_usd` unless the operator
+            has put a margin on the provider rate, or is carrying the bill themselves, in
+            which case it is zero.
     UsageBreakdown:
       type: object
       required:

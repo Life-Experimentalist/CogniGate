@@ -58,6 +58,7 @@ class ApiTokenFilterTest {
               "completion_tokens": 20,
               "total_tokens": 35,
               "cost_usd": 0.00042,
+              "charge_usd": 0.00050,
               "cached": false,
               "streamed": true,
               "status_code": 200,

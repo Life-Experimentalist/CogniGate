@@ -71,6 +71,21 @@ catalog:
   #      input: 0.00
   #      output: 0.00
 
+# What a tenant owes for a request, given what it cost above. Both figures are
+# recorded on every usage row and reported side by side, so the margin between
+# them is a number rather than an assumption.
+billing:
+  # passthrough: the tenant pays the provider rate itself and the operator keeps
+  #              nothing. The rate is the one the provider publishes, or the one
+  #              catalog.prices supplies where it publishes none.
+  # markup:      the provider rate plus markup_pct.
+  # absorb:      the tenant is charged nothing and the operator carries the bill.
+  mode: passthrough
+  # The percentage added in markup mode, ignored in the other two. A mode of
+  # "markup" with nothing here is refused at startup rather than quietly
+  # behaving as passthrough.
+  markup_pct: 0
+
 routing:
   # How many providers a single request may fall through before giving up.
   max_fallback_depth: 5
@@ -79,6 +94,9 @@ routing:
     window: 30s
     open_duration: 60s
 
+# A cost cap is measured in what the traffic cost, not in what the tenant was
+# charged for it, so a spend limit still stops runaway usage when billing.mode
+# is "absorb" and the charge is zero.
 quotas:
   default_soft_threshold_pct: 80
   # "on" rejects past a hard cap; "observe" only emits events and headers,

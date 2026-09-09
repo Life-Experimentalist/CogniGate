@@ -25,6 +25,36 @@ The first release has not been cut. Everything below is the state of `main`.
 
 ### Added
 
+- **What a request cost and what it is charged are now two figures.**
+  Every usage record and every usage response carries `charge_usd` beside
+  `cost_usd`, so the margin between what the operator paid the provider and
+  what the tenant owes is a number rather than an assumption. One new config
+  section decides the second figure for the whole gateway:
+
+  ```yaml
+  billing:
+      mode: passthrough # passthrough | markup | absorb
+      markup_pct: 0
+  ```
+
+  `passthrough` is the default and charges the provider rate itself, so the
+  charge follows what the provider charges with no second price table to keep
+  current and the operator collects nothing extra. `markup` adds `markup_pct`
+  on top, and a `markup` mode with no percentage is refused at startup rather
+  than quietly behaving as passthrough. `absorb` charges nothing and leaves the
+  whole bill with the operator, with usage still attributed per tenant and per
+  key. A model with no published rate costs zero, so it is charged zero in
+  every mode: there is nothing to put a margin on.
+
+  Quota caps stay measured in `cost_usd`. A cap on the charge could never fire
+  under `absorb`, which is exactly the mode where the operator is the one
+  paying. Existing deployments are unaffected: without a `billing` section the
+  mode is `passthrough` and `charge_usd` equals `cost_usd` on every row.
+
+  The monthly aggregate in the analytics service now sums the recorded charge
+  instead of pricing tokens at a compiled-in flat rate, so the figure it logs
+  agrees with what `/v1/usage` returns for the same window.
+
 - **Rate-limit cooldowns from `Retry-After`.** A key that answers `429` with a
   `Retry-After` is parked for exactly that long, so the next request skips it
   instead of spending a round trip rediscovering a limit the provider already

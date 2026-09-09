@@ -133,6 +133,9 @@ public class UsageController {
         metric.setCompletionTokens(r.completionTokens());
         metric.setTotalTokens(r.totalTokens());
         metric.setCostUsd(r.costUsd() == null ? BigDecimal.ZERO : r.costUsd());
+        // A sender that omits the charge is one that predates the field, and it
+        // was billing the provider rate, so the cost is the charge.
+        metric.setChargeUsd(r.chargeUsd() == null ? metric.getCostUsd() : r.chargeUsd());
         metric.setCached(r.cached());
         metric.setStreamed(r.streamed());
         metric.setStatusCode(r.statusCode());

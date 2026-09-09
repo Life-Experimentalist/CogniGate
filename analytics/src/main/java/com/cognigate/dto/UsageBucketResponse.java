@@ -17,7 +17,8 @@ public record UsageBucketResponse(
         @JsonProperty("prompt_tokens") Long promptTokens,
         @JsonProperty("completion_tokens") Long completionTokens,
         @JsonProperty("total_tokens") Long totalTokens,
-        @JsonProperty("cost_usd") BigDecimal costUsd) {
+        @JsonProperty("cost_usd") BigDecimal costUsd,
+        @JsonProperty("charge_usd") BigDecimal chargeUsd) {
 
     public UsageBucketResponse {
         requests = requests == null ? 0L : requests;
@@ -25,5 +26,6 @@ public record UsageBucketResponse(
         completionTokens = completionTokens == null ? 0L : completionTokens;
         totalTokens = totalTokens == null ? 0L : totalTokens;
         costUsd = costUsd == null ? BigDecimal.ZERO : costUsd;
+        chargeUsd = chargeUsd == null ? BigDecimal.ZERO : chargeUsd;
     }
 }

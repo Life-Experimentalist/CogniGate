@@ -354,6 +354,7 @@ type UsageRecord struct {
 	CompletionToken int       `json:"completion_tokens"`
 	TotalTokens     int       `json:"total_tokens"`
 	CostUSD         float64   `json:"cost_usd"`
+	ChargeUSD       float64   `json:"charge_usd"`
 	Cached          bool      `json:"cached"`
 	Streamed        bool      `json:"streamed"`
 	StatusCode      int       `json:"status_code"`
@@ -361,13 +362,17 @@ type UsageRecord struct {
 	RecordedAt      time.Time `json:"recorded_at"`
 }
 
-// UsageTotals is the aggregate behind GET /v1/usage.
+// UsageTotals is the aggregate behind GET /v1/usage. CostUSD is what the
+// requests cost the operator at the provider rate; ChargeUSD is what the
+// tenant owes for them, which the two differ by only when billing.mode
+// puts a margin on the rate or drops the charge entirely.
 type UsageTotals struct {
 	Requests         int64   `json:"requests"`
 	PromptTokens     int64   `json:"prompt_tokens"`
 	CompletionTokens int64   `json:"completion_tokens"`
 	TotalTokens      int64   `json:"total_tokens"`
 	CostUSD          float64 `json:"cost_usd"`
+	ChargeUSD        float64 `json:"charge_usd"`
 }
 
 // UsageBucket is one row of GET /v1/usage/breakdown.

@@ -96,6 +96,17 @@ public class UsageMetric {
     @Column(name = "cost_usd", nullable = false, precision = 19, scale = 8)
     private BigDecimal costUsd;
 
+    /**
+     * What the tenant is billed for the request, which is the cost itself
+     * unless the gateway's billing mode puts a margin on it or drops it.
+     *
+     * <p>Nullable, unlike the cost beside it: the column is added to tables
+     * that already hold rows, and those rows were written when a charge and a
+     * cost were the same thing. A read treats a null as the cost.
+     */
+    @Column(name = "charge_usd", precision = 19, scale = 8)
+    private BigDecimal chargeUsd;
+
     @Column(name = "cached", nullable = false)
     private Boolean cached;
 

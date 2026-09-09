@@ -1,7 +1,7 @@
 export const metadata = {
     title: "Usage & Cost",
     description:
-        "What CogniGate meters, how a usage record survives an analytics outage, where the cost figure comes from, and the line between metering and billing.",
+        "What CogniGate meters, how a usage record survives an analytics outage, where the cost and charge figures come from, and the line between metering and billing.",
 };
 
 # Usage & Cost
@@ -23,7 +23,8 @@ One row per served request, in the analytics database:
 | `provider`, `model`                      | What actually served it                            |
 | `requested_model`, `fallback_depth`      | What was asked for, and how far the cascade went   |
 | `prompt_tokens`, `completion_tokens`, `total_tokens` | The counts                            |
-| `cost_usd`                               | Priced from the catalog — see below                |
+| `cost_usd`                               | What it cost, priced from the catalog (below)     |
+| `charge_usd`                             | What the tenant owes for it (below)               |
 | `cached`, `streamed`                     | How it was served                                  |
 | `status_code`, `duration_ms`             | The outcome                                        |
 | `recorded_at`                            | When the gateway served it                         |
@@ -62,6 +63,11 @@ usage buffered through an outage belongs to the days it was served on, not to
 the day the service came back.
 
 ## Where the cost figure comes from
+
+Every row carries two money columns. `cost_usd` is what the request cost the
+operator: the provider's own rate, applied to the tokens actually spent.
+`charge_usd` is what the tenant owes for it. They are the same number until the
+operator says otherwise, and the gap between them is the margin.
 
 Cost is computed by the gateway, per request, from the catalog entry that served
 it:
@@ -102,6 +108,39 @@ The figures above are an example of the shape, not current pricing, so read the
 real ones off the vendor and keep them current, since a stale rate is a wrong
 number in a billing column rather than a missing one.
 
+## What the tenant is charged
+
+One setting decides it, for the whole gateway:
+
+```yaml
+billing:
+    mode: passthrough
+    markup_pct: 0
+```
+
+- **`passthrough`**, the default, charges the provider's rate itself. The
+  operator collects exactly what the traffic cost and keeps nothing. Rates come
+  from the provider listing, or from `catalog.prices` where the listing carries
+  none, so linking the charge to what the provider charges needs no second
+  table to maintain.
+- **`markup`** charges the provider rate plus `markup_pct`. At `markup_pct: 15`
+  a request that cost $0.0020 is charged at $0.0023. A `markup` mode with no
+  percentage is refused at startup rather than quietly behaving as passthrough.
+- **`absorb`** charges nothing. `charge_usd` is zero on every row and the whole
+  bill stays with the operator, which is the shape an internal platform wants:
+  usage is still attributed per team and per key, nobody is invoiced for it.
+
+Two consequences worth knowing before you pick one.
+
+A model with no rate costs zero, so it is charged zero in every mode. There is
+nothing to put a margin on, and inventing a rate would put an invented number
+in a billing column.
+
+**Quota caps are measured in cost, not in charge.** A `cost` budget stops
+traffic on what it cost the operator, which is the figure that stays meaningful
+under `absorb`, where the charge is always zero and a cap on it could never
+fire. [Set a quota](/docs/api#set-a-quota) has the shape of one.
+
 ## Reading it back
 
 Both planes read the same rows. A tenant reads its own with a data-plane key:
@@ -122,6 +161,7 @@ curl "http://localhost:8080/v1/usage?window=month" \
     "completion_tokens": 88317,
     "total_tokens": 479521,
     "cost_usd": 1.8734,
+    "charge_usd": 2.1544,
     "state": "ok",
     "limits": []
 }
@@ -132,8 +172,11 @@ and returned. There is no arbitrary date range: a metering read is either
 "this billing period" or "today", and a free-form window would invite a tenant
 to scan its whole history on every dashboard refresh.
 
+A tenant reading its own usage sees both figures, so under `markup` it can work
+out the margin.
+
 `GET /v1/usage/breakdown` takes the same `window` plus `group_by`, one of
-`model`, `provider`, `key` or `client_request_id`, and returns the same five
+`model`, `provider`, `key` or `client_request_id`, and returns the same six
 numbers per bucket under `data`, most expensive first. It is capped at the 200
 costliest buckets and says `"truncated": true` when it had to cut. An operator
 reads any tenant's through `GET /admin/v1/tenants/{id}/usage` and
@@ -149,13 +192,12 @@ A scheduled job runs at midnight on the first of each month, takes the tenants
 that produced usage in the preceding 30 days, and logs a priced total for each:
 
 ```
-Invoice for Tenant: ten_9f2c41ab77d0 | Period: ... | Total Tokens: 479521 | Total Cost: $0.7192815
+Invoice for Tenant: ten_9f2c41ab77d0 | Period: ... | Total Tokens: 479521 | Provider Cost: $1.8734 | Charged: $2.1544
 ```
 
-Two things to know before building on it. It prices at a flat **$0.0015 per 1,000
-tokens**, compiled in, so it will not agree with the per-request `cost_usd` above
-wherever a provider publishes real rates. And its output is a log line: there is
-no invoice document, no ledger, and no route that reads one back.
+The figure it returns is the summed `charge_usd`, so it agrees with what the
+tenant reads back for the same window. It is a log line and nothing more: there
+is no invoice document, no ledger, and no route that reads one back.
 
 It is there so that a deployment which has to bill something has a worked
 starting point in the right place. The numbers a real billing system should read

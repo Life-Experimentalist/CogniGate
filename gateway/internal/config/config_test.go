@@ -144,3 +144,58 @@ func TestValidateAcceptsALoweredCaptureTTLCeiling(t *testing.T) {
 		t.Fatalf("a ceiling below the maximum was refused: %v", err)
 	}
 }
+
+// The default has to be the mode that changes nothing: an operator who never
+// heard of this setting bills exactly what the provider charged.
+func TestDefaultBillingChargesTheProviderRate(t *testing.T) {
+	if got := Default().Billing.Charge(1.25); got != 1.25 {
+		t.Errorf("charge = %v, want the cost itself under the default mode", got)
+	}
+}
+
+func TestMarkupAddsItsPercentageAndAbsorbChargesNothing(t *testing.T) {
+	markup := Billing{Mode: BillingMarkup, MarkupPct: 20}
+	if got := markup.Charge(10); got != 12 {
+		t.Errorf("charge = %v, want 12 from a 20%% markup on 10", got)
+	}
+	absorb := Billing{Mode: BillingAbsorb}
+	if got := absorb.Charge(10); got != 0 {
+		t.Errorf("charge = %v, want 0 when the operator absorbs the bill", got)
+	}
+}
+
+// A model with no configured rate costs zero, and no mode may turn that into a
+// charge: a margin on an unknown rate is an invented number, and it would flow
+// into billing.
+func TestNoRateMeansNoChargeInEveryMode(t *testing.T) {
+	for _, b := range []Billing{
+		{Mode: BillingPassthrough},
+		{Mode: BillingMarkup, MarkupPct: 40},
+		{Mode: BillingAbsorb},
+	} {
+		if got := b.Charge(0); got != 0 {
+			t.Errorf("%s charged %v for a request that cost nothing", b.Mode, got)
+		}
+	}
+}
+
+func TestValidateRejectsAnUnknownBillingMode(t *testing.T) {
+	cfg := Default()
+	cfg.Billing.Mode = "commission"
+
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("an unknown billing mode was accepted")
+	}
+}
+
+// Markup mode without a percentage is a configuration that says it charges a
+// margin and then charges none, which is worth refusing rather than silently
+// behaving as passthrough.
+func TestValidateRejectsMarkupModeWithoutAPercentage(t *testing.T) {
+	cfg := Default()
+	cfg.Billing.Mode = BillingMarkup
+
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("markup mode with no markup_pct was accepted")
+	}
+}

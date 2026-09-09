@@ -82,8 +82,9 @@ GET  /healthz                  (unauthenticated liveness)
 
 `GET /v1/usage` takes `?window=day|month` — default `day`, and **not** `since` /
 `until`; anything else is a 400 with `param: "window"`. It returns `object`,
-`window`, the resolved half-open `since` / `until`, the five totals (`requests`,
-`prompt_tokens`, `completion_tokens`, `total_tokens`, `cost_usd`), a `state`,
+`window`, the resolved half-open `since` / `until`, the six totals (`requests`,
+`prompt_tokens`, `completion_tokens`, `total_tokens`, `cost_usd`, `charge_usd`),
+a `state`,
 and a `limits` array. `/v1/usage/breakdown` adds
 `?group_by=model|provider|key|client_request_id` (default `model`), returns
 `data[]` capped at the 200 costliest buckets, and sets `truncated` when it cut.
@@ -164,10 +165,10 @@ no `tenant`, `provider_key` or `routing_rule` table — that configuration lives
 in gateway memory and is deliberately not persisted. `tenant_id` is a plain
 string with no foreign key.
 
-A scheduled job (`0 0 0 1 * ?`) logs a priced 30-day total per tenant at a
-compiled-in flat $0.0015 per 1,000 tokens. **That rate will not agree with the
-per-request `cost_usd`** wherever a provider publishes real rates, and its only
-output is a log line. Treat it as a worked starting point, not a billing system.
+A scheduled job (`0 0 0 1 * ?`) logs a 30-day total per tenant, summing the
+`charge_usd` the gateway already recorded per request, so it agrees with what
+`/v1/usage` returns for the same window. Its only output is a log line. Treat it
+as a worked starting point, not a billing system.
 
 ## 6. Configuration
 
@@ -186,6 +187,13 @@ without the `CG_` prefix: `CG_PORT`, `CG_ADMIN_BOOTSTRAP_KEY`,
 
 `cognigate.config.yml` is the authoritative list and is commented. Read it
 rather than trusting a remembered key name.
+
+**`billing.mode` decides what a tenant owes**, given what the request cost the
+operator. `passthrough` (the default) charges the provider rate itself, `markup`
+adds `billing.markup_pct` on top and is refused at startup without one, `absorb`
+charges nothing and leaves the bill with the operator. Both figures are on every
+usage row. Quota caps are measured in `cost_usd`, not `charge_usd`, so a spend
+limit still fires under `absorb`.
 
 ## 7. Behaviours users misread as bugs
 

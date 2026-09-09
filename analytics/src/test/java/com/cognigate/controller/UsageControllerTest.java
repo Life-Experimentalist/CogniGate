@@ -61,6 +61,7 @@ class UsageControllerTest {
                   "completion_tokens": 20,
                   "total_tokens": 35,
                   "cost_usd": 0.00042,
+                  "charge_usd": 0.00050,
                   "cached": false,
                   "streamed": true,
                   "status_code": 200,
@@ -169,7 +170,7 @@ class UsageControllerTest {
     private static UsageRecordRequest recordRequest(String requestId) {
         return new UsageRecordRequest(requestId, "caller-abc", "tnt_dev", "cg-dev-abcd",
                 "openai", "gpt-4o-mini", "fast", 1, 15, 20, 35,
-                new BigDecimal("0.00042"), false, true, 200, 812L,
+                new BigDecimal("0.00042"), new BigDecimal("0.00050"), false, true, 200, 812L,
                 Instant.parse("2026-03-01T10:30:00Z"));
     }
 
@@ -213,7 +214,8 @@ class UsageControllerTest {
     @DisplayName("totals come back in the gateway's field names")
     void totals_areReportedInTheWireShape() throws Exception {
         when(usageMetricRepo.totals(eq("tnt_dev"), any(), any()))
-                .thenReturn(new UsageTotalsResponse(3L, 30L, 45L, 75L, new BigDecimal("0.01500")));
+                .thenReturn(new UsageTotalsResponse(3L, 30L, 45L, 75L,
+                        new BigDecimal("0.01500"), new BigDecimal("0.01800")));
 
         mockMvc.perform(get("/api/v1/usage/totals")
                         .param("tenant_id", "tnt_dev")
@@ -224,7 +226,8 @@ class UsageControllerTest {
                 .andExpect(jsonPath("$.prompt_tokens").value(30))
                 .andExpect(jsonPath("$.completion_tokens").value(45))
                 .andExpect(jsonPath("$.total_tokens").value(75))
-                .andExpect(jsonPath("$.cost_usd").value(0.015));
+                .andExpect(jsonPath("$.cost_usd").value(0.015))
+                .andExpect(jsonPath("$.charge_usd").value(0.018));
     }
 
     @Test
@@ -233,7 +236,7 @@ class UsageControllerTest {
         // An aggregate over an empty window returns one row of nulls; a tenant
         // that has sent nothing has used nothing, not an unknown amount.
         when(usageMetricRepo.totals(any(), any(), any()))
-                .thenReturn(new UsageTotalsResponse(0L, null, null, null, null));
+                .thenReturn(new UsageTotalsResponse(0L, null, null, null, null, null));
 
         mockMvc.perform(get("/api/v1/usage/totals")
                         .param("tenant_id", "tnt_quiet")
@@ -242,14 +245,16 @@ class UsageControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.requests").value(0))
                 .andExpect(jsonPath("$.total_tokens").value(0))
-                .andExpect(jsonPath("$.cost_usd").value(0));
+                .andExpect(jsonPath("$.cost_usd").value(0))
+                .andExpect(jsonPath("$.charge_usd").value(0));
     }
 
     @Test
     @DisplayName("key_prefix narrows the totals to one key")
     void totals_withKeyPrefix_useTheKeyQuery() throws Exception {
         when(usageMetricRepo.keyTotals(eq("tnt_dev"), eq("cg-dev-abcd"), any(), any()))
-                .thenReturn(new UsageTotalsResponse(1L, 10L, 10L, 20L, new BigDecimal("0.002")));
+                .thenReturn(new UsageTotalsResponse(1L, 10L, 10L, 20L,
+                        new BigDecimal("0.002"), new BigDecimal("0.002")));
 
         mockMvc.perform(get("/api/v1/usage/totals")
                         .param("tenant_id", "tnt_dev")
@@ -267,7 +272,8 @@ class UsageControllerTest {
     void breakdown_routesEachGrouping() throws Exception {
         when(usageMetricRepo.breakdownByModel(any(), any(), any()))
                 .thenReturn(List.of(new UsageBucketResponse(
-                        "gpt-4o-mini", 2L, 20L, 30L, 50L, new BigDecimal("0.01"))));
+                        "gpt-4o-mini", 2L, 20L, 30L, 50L,
+                        new BigDecimal("0.01"), new BigDecimal("0.012"))));
         when(usageMetricRepo.breakdownByProvider(any(), any(), any())).thenReturn(List.of());
         when(usageMetricRepo.breakdownByKey(any(), any(), any())).thenReturn(List.of());
         when(usageMetricRepo.breakdownByClientRequestId(any(), any(), any())).thenReturn(List.of());

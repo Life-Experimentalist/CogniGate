@@ -747,6 +747,7 @@ func addUsage(dst *UsageTotals, r *UsageRecord) {
 	dst.CompletionTokens += int64(r.CompletionToken)
 	dst.TotalTokens += int64(r.TotalTokens)
 	dst.CostUSD += r.CostUSD
+	dst.ChargeUSD += r.ChargeUSD
 }
 
 // --- helpers ---------------------------------------------------------------

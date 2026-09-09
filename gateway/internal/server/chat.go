@@ -518,6 +518,10 @@ func (s *Server) record(
 ) {
 	cand := result.Candidate
 	cost := result.CostUSD(usage)
+	// What the call cost the operator and what its tenant owes for it are
+	// recorded separately, so the margin between them is a figure rather
+	// than an assumption. They are equal under the default mode.
+	charge := s.Config.Billing.Charge(cost)
 
 	if s.Metrics != nil {
 		s.Metrics.UpstreamDuration.
@@ -545,6 +549,7 @@ func (s *Server) record(
 		RequestedModel:  requested,
 		FallbackDepth:   result.Depth,
 		CostUSD:         cost,
+		ChargeUSD:       charge,
 		Streamed:        streamed,
 		StatusCode:      status,
 		DurationMS:      elapsed.Milliseconds(),

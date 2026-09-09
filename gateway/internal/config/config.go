@@ -25,6 +25,7 @@ type Config struct {
 	Admin     Admin     `yaml:"admin"`
 	Analytics Analytics `yaml:"analytics"`
 	Catalog   Catalog   `yaml:"catalog"`
+	Billing   Billing   `yaml:"billing"`
 	Routing   Routing   `yaml:"routing"`
 	Quotas    Quotas    `yaml:"quotas"`
 	Limits    Limits    `yaml:"limits"`
@@ -99,6 +100,41 @@ type Catalog struct {
 type ModelPrice struct {
 	Input  float64 `yaml:"input"`
 	Output float64 `yaml:"output"`
+}
+
+// The three billing modes. Passthrough bills the provider rate itself, so
+// the operator collects exactly what the call cost and keeps nothing. Markup
+// adds a percentage to that rate. Absorb charges the tenant nothing and
+// leaves the whole bill with the operator.
+const (
+	BillingPassthrough = "passthrough"
+	BillingMarkup      = "markup"
+	BillingAbsorb      = "absorb"
+)
+
+// Billing decides what a request costs its tenant, given what it cost the
+// operator. Both numbers are recorded on every request: the cost is the
+// catalog rate the provider charges, the charge is what the tenant owes.
+// One setting for the whole gateway, not per tenant.
+type Billing struct {
+	Mode string `yaml:"mode"`
+	// MarkupPct is the percentage added to the provider rate in "markup"
+	// mode, and is ignored in the other two.
+	MarkupPct float64 `yaml:"markup_pct"`
+}
+
+// Charge converts one request's provider cost into what its tenant is
+// billed. A model with no rate costs zero and so is charged zero: there is
+// nothing to add a margin to, and inventing one would flow into billing.
+func (b Billing) Charge(cost float64) float64 {
+	switch b.Mode {
+	case BillingAbsorb:
+		return 0
+	case BillingMarkup:
+		return cost * (1 + b.MarkupPct/100)
+	default:
+		return cost
+	}
 }
 
 type Routing struct {
@@ -227,6 +263,7 @@ func Default() Config {
 			StaleWarnAfter:  6 * time.Hour,
 			ProviderTimeout: 10 * time.Second,
 		},
+		Billing: Billing{Mode: BillingPassthrough},
 		Routing: Routing{
 			MaxFallbackDepth: 5,
 			Breaker: Breaker{
@@ -367,6 +404,16 @@ func (c Config) Validate() error {
 				return fmt.Errorf("catalog.prices.%s.%s: rates cannot be negative", kind, id)
 			}
 		}
+	}
+	switch c.Billing.Mode {
+	case BillingPassthrough, BillingAbsorb:
+	case BillingMarkup:
+		if c.Billing.MarkupPct <= 0 {
+			return fmt.Errorf("billing.markup_pct must be positive when billing.mode is %q", BillingMarkup)
+		}
+	default:
+		return fmt.Errorf("billing.mode must be %q, %q or %q, got %q",
+			BillingPassthrough, BillingMarkup, BillingAbsorb, c.Billing.Mode)
 	}
 	if c.Routing.MaxFallbackDepth < 1 {
 		return fmt.Errorf("routing.max_fallback_depth must be at least 1")

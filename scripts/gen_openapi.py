@@ -296,10 +296,16 @@ TOTALS = [
     ("prompt_tokens", p("integer")),
     ("completion_tokens", p("integer")),
     ("total_tokens", p("integer")),
-    ("cost_usd", p("number")),
+    ("cost_usd", p("number", "What the traffic cost at the provider's published rate. "
+                             "Zero for a model whose listing publishes no price and whose "
+                             "rate the operator has not supplied. This is the figure cost "
+                             "quotas are measured against.")),
+    ("charge_usd", p("number", "What is owed for the traffic. Equal to `cost_usd` unless "
+                               "the operator has put a margin on the provider rate, or is "
+                               "carrying the bill themselves, in which case it is zero.")),
 ]
 TOTALS_REQUIRED = ["requests", "prompt_tokens", "completion_tokens", "total_tokens",
-                   "cost_usd"]
+                   "cost_usd", "charge_usd"]
 
 SCHEMAS["UsageLimit"] = obj(
     [

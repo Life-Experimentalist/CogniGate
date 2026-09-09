@@ -30,6 +30,8 @@ func TestShippedManifestMatchesTheSchema(t *testing.T) {
 		{"analytics.timeout", cfg.Analytics.Timeout, def.Analytics.Timeout},
 		{"catalog.ttl", cfg.Catalog.TTL, def.Catalog.TTL},
 		{"catalog.stale_warn_after", cfg.Catalog.StaleWarnAfter, def.Catalog.StaleWarnAfter},
+		{"billing.mode", cfg.Billing.Mode, def.Billing.Mode},
+		{"billing.markup_pct", cfg.Billing.MarkupPct, def.Billing.MarkupPct},
 		{"routing.max_fallback_depth", cfg.Routing.MaxFallbackDepth, def.Routing.MaxFallbackDepth},
 		{"routing.breaker.open_duration", cfg.Routing.Breaker.OpenDuration, def.Routing.Breaker.OpenDuration},
 		{"quotas.enforcement", cfg.Quotas.Enforcement, def.Quotas.Enforcement},

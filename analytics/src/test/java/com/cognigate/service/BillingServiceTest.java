@@ -31,22 +31,24 @@ class BillingServiceTest {
     private BillingService billingService;
 
     private static UsageTotalsResponse totalling(long totalTokens) {
-        return new UsageTotalsResponse(1L, 4000L, 6000L, totalTokens, new BigDecimal("0.015"));
+        return new UsageTotalsResponse(1L, 4000L, 6000L, totalTokens,
+            new BigDecimal("0.015"), new BigDecimal("0.018"));
     }
 
     @Test
-    @DisplayName("calculateTenantInvoice() should return correct cost for token usage")
-    void calculateInvoice_withTokenUsage_returnsCorrectCost() {
-        // 10,000 total tokens * $0.0015 per 1K = $0.015
+    @DisplayName("calculateTenantInvoice() bills the charge the gateway recorded, not the cost")
+    void calculateInvoice_withTokenUsage_returnsTheRecordedCharge() {
+        // The window cost the operator $0.015 and was charged on at $0.018. An
+        // invoice that reported the cost would be giving the margin away.
         when(usageMetricRepo.totals(eq("test-org"), any(), any()))
             .thenReturn(totalling(10_000L));
 
         Instant end = Instant.parse("2026-03-01T00:00:00Z");
         Instant start = end.minus(Duration.ofDays(30));
 
-        BigDecimal cost = billingService.calculateTenantInvoice("test-org", start, end);
+        BigDecimal charged = billingService.calculateTenantInvoice("test-org", start, end);
 
-        assertThat(cost).isEqualByComparingTo(new BigDecimal("0.01500"));
+        assertThat(charged).isEqualByComparingTo(new BigDecimal("0.01800"));
         verify(usageMetricRepo, times(1)).totals(eq("test-org"), eq(start), eq(end));
     }
 
@@ -55,7 +57,7 @@ class BillingServiceTest {
     void calculateInvoice_withNoUsage_returnsZero() {
         // What an aggregate over an empty window actually returns: one row of nulls.
         when(usageMetricRepo.totals(any(), any(), any()))
-            .thenReturn(new UsageTotalsResponse(0L, null, null, null, null));
+            .thenReturn(new UsageTotalsResponse(0L, null, null, null, null, null));
 
         BigDecimal cost = billingService.calculateTenantInvoice(
             "test-org",

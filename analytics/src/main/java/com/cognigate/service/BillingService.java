@@ -1,5 +1,6 @@
 package com.cognigate.service;
 
+import com.cognigate.dto.UsageTotalsResponse;
 import com.cognigate.repository.UsageMetricRepo;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -21,6 +22,11 @@ import java.util.List;
  * Billing from a local tenant table would mean billing whoever had been
  * synchronised into it, which is not the same set as whoever generated traffic.
  *
+ * <p>The figure is the charge the gateway already computed per request, summed.
+ * Re-deriving it here from a token count and a rate of this service's own would
+ * give an invoice that disagrees with every usage response the tenant can read,
+ * and would ignore the operator's billing mode entirely.
+ *
  * <p>GW-4 keeps this outside its scope deliberately: CogniGate exposes numbers,
  * and presenting or charging them is the consumer's business. What runs here is
  * the aggregate, logged; there is no invoice document and no ledger.
@@ -31,9 +37,6 @@ public class BillingService {
     private static final Logger log = LoggerFactory.getLogger(BillingService.class);
 
     private final UsageMetricRepo usageMetricRepo;
-
-    // Price per 1K tokens ($)
-    private static final BigDecimal COST_PER_THOUSAND_TOKENS = new BigDecimal("0.0015");
 
     public BillingService(UsageMetricRepo usageMetricRepo) {
         this.usageMetricRepo = usageMetricRepo;
@@ -63,17 +66,11 @@ public class BillingService {
      * works until a tenant gets busy.
      */
     public BigDecimal calculateTenantInvoice(String tenantId, Instant start, Instant end) {
-        long totalTokens = usageMetricRepo
-                .totals(tenantId, start, end)
-                .totalTokens();
+        UsageTotalsResponse totals = usageMetricRepo.totals(tenantId, start, end);
 
-        BigDecimal cost = BigDecimal.valueOf(totalTokens)
-                .divide(BigDecimal.valueOf(1000))
-                .multiply(COST_PER_THOUSAND_TOKENS);
+        log.info("Invoice for Tenant: {} | Period: {} to {} | Total Tokens: {} | Provider Cost: ${} | Charged: ${}",
+                tenantId, start, end, totals.totalTokens(), totals.costUsd(), totals.chargeUsd());
 
-        log.info("Invoice for Tenant: {} | Period: {} to {} | Total Tokens: {} | Total Cost: ${}",
-                tenantId, start, end, totalTokens, cost);
-
-        return cost;
+        return totals.chargeUsd();
     }
 }

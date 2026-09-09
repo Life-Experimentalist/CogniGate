@@ -70,6 +70,29 @@ example file should not become a deployment's admin password.
 Use it once, to mint a real admin key through `/admin/v1/admin-keys`, then take
 it out of the environment.
 
+### What a tenant is charged
+
+```yaml
+billing:
+    mode: passthrough # passthrough | markup | absorb
+    markup_pct: 0
+```
+
+Every usage row records two figures: what the request cost at the provider's
+rate, and what its tenant owes for it. This decides the second one, for the
+whole gateway.
+
+`passthrough`, the default, charges the provider rate itself, so the charge
+tracks what the provider charges without a second price table to maintain and
+the operator keeps nothing. `markup` adds `markup_pct` on top, and is refused at
+startup if the percentage is missing. `absorb` charges nothing and leaves the
+whole bill with the operator, with usage still attributed per tenant and per
+key.
+
+A model with no published rate costs zero, so it is charged zero in every mode.
+Quota caps are measured in cost rather than charge, so a spend limit still
+works under `absorb`. [Usage & cost](/docs/billing) has the detail.
+
 ### Quota enforcement
 
 ```yaml

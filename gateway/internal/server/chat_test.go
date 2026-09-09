@@ -877,3 +877,68 @@ func TestBufferedCompletionIsAttributedToItsTenant(t *testing.T) {
 // fiberContentType is spelled out rather than imported so the test file does not
 // depend on the framework for a header name every HTTP client already knows.
 const fiberContentType = "Content-Type"
+
+// The two figures on a usage row answer different questions: what the traffic
+// cost the operator, and what the tenant owes for it. Under a markup they are
+// no longer the same number, and the difference is the operator's margin.
+func TestMarkupBillsAboveTheProviderRateWithoutChangingTheCost(t *testing.T) {
+	h := newHarness(t, func(c *config.Config) {
+		c.Billing.Mode = config.BillingMarkup
+		c.Billing.MarkupPct = 20
+	})
+	tenant := h.newTenant("acme")
+	h.addProvider(tenant.id, "primary")
+
+	h.adapter.do = func(context.Context, provider.Credential, *provider.Request) (*provider.Response, error) {
+		return upstreamOK(1000, 500), nil
+	}
+
+	res := h.do(http.MethodPost, "/v1/chat/completions", tenant.dataKey, chatRequest("test-small", false))
+	if res.status != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", res.status, res.body)
+	}
+	h.flushTelemetry()
+
+	totals, err := h.mem.Usage(context.Background(), tenant.id,
+		time.Now().Add(-time.Hour), time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatalf("reading usage: %v", err)
+	}
+	if want := 0.00045; totals.CostUSD < want*0.999 || totals.CostUSD > want*1.001 {
+		t.Errorf("usage cost = %v, want the provider rate %v unchanged by the markup", totals.CostUSD, want)
+	}
+	if want := 0.00054; totals.ChargeUSD < want*0.999 || totals.ChargeUSD > want*1.001 {
+		t.Errorf("usage charge = %v, want %v from a 20%% markup", totals.ChargeUSD, want)
+	}
+}
+
+// An operator carrying the whole bill still needs their own spend visible, so
+// absorbing the cost zeroes the charge and leaves the cost alone. This is also
+// what keeps a cost quota able to fire in this mode.
+func TestAbsorbChargesNothingAndStillRecordsTheCost(t *testing.T) {
+	h := newHarness(t, func(c *config.Config) { c.Billing.Mode = config.BillingAbsorb })
+	tenant := h.newTenant("acme")
+	h.addProvider(tenant.id, "primary")
+
+	h.adapter.do = func(context.Context, provider.Credential, *provider.Request) (*provider.Response, error) {
+		return upstreamOK(1000, 500), nil
+	}
+
+	res := h.do(http.MethodPost, "/v1/chat/completions", tenant.dataKey, chatRequest("test-small", false))
+	if res.status != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", res.status, res.body)
+	}
+	h.flushTelemetry()
+
+	totals, err := h.mem.Usage(context.Background(), tenant.id,
+		time.Now().Add(-time.Hour), time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatalf("reading usage: %v", err)
+	}
+	if want := 0.00045; totals.CostUSD < want*0.999 || totals.CostUSD > want*1.001 {
+		t.Errorf("usage cost = %v, want the provider rate %v", totals.CostUSD, want)
+	}
+	if totals.ChargeUSD != 0 {
+		t.Errorf("usage charge = %v, want 0 when the operator absorbs the bill", totals.ChargeUSD)
+	}
+}
