@@ -183,3 +183,44 @@ jobs:
           subject-name: ${{ env.ANALYTICS_IMAGE }}
           subject-digest: ${{ steps.build-analytics.outputs.digest }}
           push-to-registry: true
+
+      # ----- Scout -----
+      #
+      # A vulnerability report per published image, written to the run summary.
+      # It reads the digest that was just pushed rather than a tag, so the
+      # report always describes the artefact this run produced.
+      #
+      # exit-code is false on purpose. Almost every finding here lives in a base
+      # image, and a critical CVE in Alpine or in the JRE base can sit without a
+      # published fix for days. Failing the publish on one would stop shipping
+      # over something this repository cannot patch. The report is the point;
+      # read it, and bump the base or the managed dependency when a fix exists.
+      #
+      # Scout authenticates against Docker Hub, so the whole thing is gated on
+      # the same variable that gates the Hub push. With it unset the workflow is
+      # GHCR-only and these steps are skipped.
+      - name: Scout - Gateway
+        if: vars.DOCKERHUB_NAMESPACE != ''
+        uses: docker/scout-action@v1
+        with:
+          command: cves
+          image: ${{ env.GATEWAY_IMAGE }}@${{ steps.build-gateway.outputs.digest }}
+          only-severities: critical,high
+          only-fixed: true
+          summary: true
+          exit-code: false
+          dockerhub-user: ${{ secrets.DOCKERHUB_USERNAME }}
+          dockerhub-password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Scout - Analytics
+        if: vars.DOCKERHUB_NAMESPACE != ''
+        uses: docker/scout-action@v1
+        with:
+          command: cves
+          image: ${{ env.ANALYTICS_IMAGE }}@${{ steps.build-analytics.outputs.digest }}
+          only-severities: critical,high
+          only-fixed: true
+          summary: true
+          exit-code: false
+          dockerhub-user: ${{ secrets.DOCKERHUB_USERNAME }}
+          dockerhub-password: ${{ secrets.DOCKERHUB_TOKEN }}

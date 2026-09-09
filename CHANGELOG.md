@@ -208,6 +208,19 @@ because the documentation was public and someone may have planned against it.
 
 ### Security
 
+- **Tomcat pinned to 11.0.25.** Spring Boot 4.1.1 manages 11.0.24, which
+  carries three critical advisories, and the parent has not moved yet.
+  Overriding the managed `tomcat.version` takes the patch without changing the
+  Boot version CI builds against. The override comes out when the parent
+  passes 11.0.25.
+
+- **Docker Scout reports on every published image.** The publish workflow scans
+  each image by the digest it just pushed and writes critical and high findings
+  with a known fix to the run summary. It does not fail the publish: nearly
+  every finding lives in a base image, and refusing to ship over a CVE this
+  repository cannot patch would stop releases for something a rebuild will not
+  fix. The report is the point.
+
 - **Fiber updated from v2.52.4 to v2.52.12, closing two advisories the gateway
   could actually reach.** `GO-2026-4543` is a denial of service through
   route-parameter overflow, reachable from the router itself, and

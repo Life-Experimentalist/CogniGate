@@ -19,6 +19,11 @@
 
     <properties>
         <java.version>25</java.version>
+        <!-- Spring Boot 4.1.1 manages Tomcat 11.0.24, which carries three
+             critical advisories fixed in 11.0.25. Overriding the managed
+             property keeps the Boot version CI pins and takes the patch.
+             Drop this line once the parent moves past 11.0.25. -->
+        <tomcat.version>11.0.25</tomcat.version>
     </properties>
 
     <dependencies>
