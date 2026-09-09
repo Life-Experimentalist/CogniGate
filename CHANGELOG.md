@@ -215,6 +215,13 @@ because the documentation was public and someone may have planned against it.
 
 ### Security
 
+- **The gateway image upgrades its Alpine packages before it installs any.**
+  A base image pinned to a release tag ships whatever was current when that
+  image was built, which lags the repository the patches land in: the pinned
+  base carried an openssl with two critical and seven high advisories that the
+  repository had already fixed. Upgrading first takes them, and the published
+  image now scans clean.
+
 - **Tomcat pinned to 11.0.25.** Spring Boot 4.1.1 manages 11.0.24, which
   carries three critical advisories, and the parent has not moved yet.
   Overriding the managed `tomcat.version` takes the patch without changing the

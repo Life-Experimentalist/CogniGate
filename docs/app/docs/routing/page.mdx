@@ -145,9 +145,8 @@ exactly that long and the next request skips straight past it, rather than
 spending a round trip rediscovering a limit the provider already reported. The
 window is read from the header and nothing else: a provider that sends no
 `Retry-After` rotates exactly as it did before. Both forms the HTTP spec allows
-are understood, a delay in seconds and an absolute date. Google’s Gemini
-endpoint sends neither, so its pools are unaffected; OpenAI and Anthropic both
-send one.
+are understood, a delay in seconds and an absolute date. Which providers send it,
+and when, is theirs to decide; nothing here assumes any of them do.
 
 A parked key is skipped, never dropped. If every key in a pool is inside a
 window the whole pool is tried anyway, because the window is the provider’s

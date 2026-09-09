@@ -30,7 +30,12 @@ FROM alpine:3.24
 
 # ca-certificates so the gateway can dial provider APIs over TLS; wget is
 # busybox's and is what the container healthcheck below runs.
-RUN apk add --no-cache ca-certificates
+#
+# The upgrade is not tidiness. Alpine publishes a patched package days
+# before the base image that carries it is rebuilt, so a build pinned to a
+# release tag installs the openssl the image was frozen with rather than the
+# one the repository has. Upgrading first takes the patch on every build.
+RUN apk upgrade --no-cache && apk add --no-cache ca-certificates
 
 # An unprivileged user: nothing the gateway does needs root, and the process
 # writes nothing to disk.
