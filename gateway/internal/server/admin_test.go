@@ -1,12 +1,14 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
 
 	"github.com/cognigate/gateway/internal/apierr"
+	"github.com/cognigate/gateway/internal/provider"
 	"github.com/cognigate/gateway/internal/store"
 )
 
@@ -349,6 +351,106 @@ func TestAdminAPINeverReturnsSecretMaterial(t *testing.T) {
 		if strings.Contains(body, providerKey) || strings.Contains(body, hookSecret) {
 			t.Errorf("GET %s leaked secret material: %s", path, body)
 		}
+	}
+}
+
+// --- GW-3 key pools ---------------------------------------------------------
+
+// TestProviderKeyStrategyRoundTrips covers the path the dispatcher's own tests
+// cannot see. keyOrder reads KeyStrategy off whatever the store hands back, so a
+// field that were dropped anywhere between the request body, the stored record
+// and the clone the dispatcher reads would silently downgrade every provider to
+// the default, and every test that exercises keyOrder directly would still pass.
+func TestProviderKeyStrategyRoundTrips(t *testing.T) {
+	h := newHarness(t)
+	tenant := h.newTenant("acme")
+	base := "/admin/v1/tenants/" + tenant.id + "/providers"
+
+	res := h.do(http.MethodPost, base, testBootstrapKey, map[string]any{
+		"name": "openai", "kind": "openai",
+		"base_url":     "https://upstream.invalid/v1",
+		"keys":         []string{"one", "two"},
+		"key_strategy": "failover",
+	})
+	if res.status != http.StatusCreated {
+		t.Fatalf("creating provider: status %d, body %s", res.status, res.body)
+	}
+	var created struct {
+		ID          string `json:"id"`
+		KeyStrategy string `json:"key_strategy"`
+	}
+	res.decode(t, &created)
+	if created.KeyStrategy != "failover" {
+		t.Fatalf("creation returned key_strategy %q, want failover", created.KeyStrategy)
+	}
+
+	stored, err := h.mem.GetProvider(context.Background(), tenant.id, created.ID)
+	if err != nil {
+		t.Fatalf("reading the provider back: %v", err)
+	}
+	if stored.KeyStrategy != store.KeyStrategyFailover {
+		t.Errorf("the stored provider has key_strategy %q, want failover", stored.KeyStrategy)
+	}
+
+	res = h.do(http.MethodPatch, base+"/"+created.ID, testBootstrapKey, map[string]any{
+		"key_strategy": "round_robin",
+	})
+	if res.status != http.StatusOK {
+		t.Fatalf("patching key_strategy: status %d, body %s", res.status, res.body)
+	}
+	res.decode(t, &created)
+	if created.KeyStrategy != "round_robin" {
+		t.Errorf("the patch returned key_strategy %q, want round_robin", created.KeyStrategy)
+	}
+
+	res = h.do(http.MethodPatch, base+"/"+created.ID, testBootstrapKey, map[string]any{
+		"key_strategy": "whatever",
+	})
+	if res.status != http.StatusBadRequest {
+		t.Errorf("an unknown key_strategy returned %d, want 400: %s", res.status, res.body)
+	}
+}
+
+// TestProviderKindDefaultsItsBaseURL covers the two kinds that carry an
+// endpoint. An operator registering Gemini should not have to know a URL that
+// Google's own documentation does not lead with, and the kind is lowercased on
+// the way in because the registry matches it exactly.
+func TestProviderKindDefaultsItsBaseURL(t *testing.T) {
+	h := newHarness(t)
+	tenant := h.newTenant("acme")
+	base := "/admin/v1/tenants/" + tenant.id + "/providers"
+
+	for _, tc := range []struct{ name, kind, wantKind, wantBase string }{
+		{"gemini", "gemini", provider.KindGemini,
+			"https://generativelanguage.googleapis.com/v1beta/openai"},
+		{"claude", "Anthropic", provider.KindAnthropic,
+			"https://api.anthropic.com/v1"},
+	} {
+		res := h.do(http.MethodPost, base, testBootstrapKey, map[string]any{
+			"name": tc.name, "kind": tc.kind, "keys": []string{"upstream-key"},
+		})
+		if res.status != http.StatusCreated {
+			t.Fatalf("%s: status %d, body %s", tc.name, res.status, res.body)
+		}
+		var got struct {
+			Kind    string `json:"kind"`
+			BaseURL string `json:"base_url"`
+		}
+		res.decode(t, &got)
+		if got.Kind != tc.wantKind {
+			t.Errorf("%s: kind is %q, want %q", tc.name, got.Kind, tc.wantKind)
+		}
+		if got.BaseURL != tc.wantBase {
+			t.Errorf("%s: base_url is %q, want %q", tc.name, got.BaseURL, tc.wantBase)
+		}
+	}
+
+	// openai has no one address, so it still has to be told where to go.
+	res := h.do(http.MethodPost, base, testBootstrapKey, map[string]any{
+		"name": "local", "kind": "openai", "keys": []string{"unused"},
+	})
+	if res.status != http.StatusBadRequest {
+		t.Errorf("openai without a base_url returned %d, want 400: %s", res.status, res.body)
 	}
 }
 

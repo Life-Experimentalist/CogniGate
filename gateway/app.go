@@ -103,8 +103,15 @@ func build(cfg config.Config, dev bool, logger *slog.Logger, version string) (*a
 		Logger:      logger,
 	})
 
+	// One HTTP client serves every kind. Gemini and Anthropic are the same
+	// adapter pointed at each vendor's OpenAI-compatible endpoint, so giving
+	// them their own connection pools would triple the idle sockets to buy
+	// nothing.
+	openaiAdapter := provider.NewOpenAI(cfg.Limits.UpstreamConnectTimeout, cfg.Limits.MaxResponseBytes)
 	registry := provider.NewRegistry(
-		provider.NewOpenAI(cfg.Limits.UpstreamConnectTimeout, cfg.Limits.MaxResponseBytes),
+		openaiAdapter,
+		provider.NewCompat(provider.KindGemini, openaiAdapter),
+		provider.NewCompat(provider.KindAnthropic, openaiAdapter),
 	)
 
 	cat := catalog.New(mem, registry, catalog.Options{

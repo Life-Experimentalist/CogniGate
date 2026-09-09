@@ -371,8 +371,8 @@ const features = [
     },
     {
         icon: "🔌",
-        title: "Any OpenAI-Compatible Provider",
-        desc: "One adapter covers OpenAI, Together, Groq, Fireworks, OpenRouter, Azure OpenAI, vLLM, Ollama and LM Studio. Register a base URL and a key.",
+        title: "OpenAI, Gemini, Claude and the rest",
+        desc: "Register a key. Gemini and Claude need nothing else: their endpoints are built in. One adapter covers OpenAI, Together, Groq, Fireworks, OpenRouter, Azure OpenAI, vLLM, Ollama and LM Studio. Pool several keys and they rotate.",
         color: "#ec4899",
     },
     {

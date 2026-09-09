@@ -242,12 +242,62 @@ curl -X POST http://localhost:8080/admin/v1/tenants/ten_7f3a/providers \
   }'
 ```
 
-`kind` selects the adapter, and `openai` is the only one CogniGate ships. It
-covers every provider that reimplements the OpenAI wire format — Together,
-Groq, Fireworks, OpenRouter, Azure OpenAI, vLLM, Ollama, LM Studio — because
-only the base URL differs between them. An unrecognised `kind` falls back to
-it rather than refusing to route, since that is what almost everything speaks.
-A provider with its own protocol needs a translating proxy in front of it.
+`kind` selects the adapter. `openai` covers every provider that reimplements
+the OpenAI wire format (Together, Groq, Fireworks, OpenRouter, Azure OpenAI,
+vLLM, Ollama, LM Studio) because only the base URL differs between them. An
+unrecognised `kind` falls back to it rather than refusing to route, since that
+is what almost everything speaks.
+
+`gemini` and `anthropic` are that same adapter aimed at each vendor's
+OpenAI-compatible endpoint. What they add is the endpoint itself: neither
+vendor leads with that URL in its own documentation, so these kinds carry it as
+a default and `base_url` may be omitted for them. They also name the vendor
+rather than `openai` in logs and in `X-CogniGate-Served-By`.
+
+```bash
+curl -X POST http://localhost:8080/admin/v1/tenants/ten_7f3a/providers \
+  -H "Authorization: Bearer $COGNIGATE_ADMIN_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "gemini",
+    "kind": "gemini",
+    "keys": ["<your provider key>"]
+  }'
+```
+
+Anthropic documents its compatibility layer as a way to evaluate Claude with
+OpenAI client code rather than as a production API, and it ignores rather than
+rejects the request fields it does not implement: `response_format`, `seed`,
+`logprobs`, `presence_penalty`, `frequency_penalty`. A caller relying on one of
+those gets a successful answer computed without it. Nothing here translates to
+Anthropic's Messages API or Google's `generateContent`, so features exposed
+only natively are out of reach; a provider with no compatibility endpoint at
+all still needs a translating proxy in front of it.
+
+### Spreading load across several keys
+
+`keys` is a pool, and `key_strategy` decides which key a request starts from.
+
+| Strategy | Behaviour |
+| --- | --- |
+| `round_robin` (default) | Advances one key per request. Four keys take a quarter of the load each. |
+| `failover` | Always starts at the first key, reaching the rest only when it is rate limited. |
+
+Under both, a `429` walks the remaining keys in the pool before the request
+cascades to another provider, so no working credential is ever left untried.
+Pick `failover` when the keys are not interchangeable (a paid key with a free
+one behind it) and `round_robin` when they are, which is the usual reason for
+registering a second key at all.
+
+```bash
+curl -X PATCH http://localhost:8080/admin/v1/tenants/ten_7f3a/providers/prv_9c21 \
+  -H "Authorization: Bearer $COGNIGATE_ADMIN_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "keys": ["<key one>", "<key two>", "<key three>"],
+    "key_strategy": "round_robin"
+  }'
+```
 
 Provider keys are held in memory and are never serialised back out — a listing
 shows `key_prefixes`, not keys.

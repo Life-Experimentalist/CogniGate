@@ -34,6 +34,18 @@ The first release has not been cut. Everything below is the state of `main`.
 - **Fallback chains (GW-3).** Ordered per-tenant cascades with a circuit breaker
   per provider and model, a bounded depth, and `X-CogniGate-Fallback-Depth` on
   the response so a caller can see what it cost.
+- **Gemini and Anthropic provider kinds.** `kind: gemini` and `kind: anthropic`
+  register against each vendor's OpenAI-compatible endpoint, which they carry as
+  a default so `base_url` may be omitted. Both are the existing OpenAI adapter
+  under the vendor's own name, so logs, metrics and `X-CogniGate-Served-By`
+  attribute the traffic correctly. Nothing translates to Anthropic's Messages
+  API or Google's `generateContent`, so native-only features stay out of reach.
+- **Key rotation within a provider (`key_strategy`).** A provider's `keys` pool
+  is walked round robin by default, one key forward per request, so several
+  keys from the same vendor share a steady load instead of piling onto the
+  first. `failover` keeps the older behaviour of always starting at key one.
+  Under either, a 429 walks the rest of the pool before GW-3 cascades to
+  another provider.
 - **Quota and budget API (GW-4).** Token and spend limits per window, enforced
   or reported depending on configuration, with `X-CogniGate-Quota-State` and a
   `quota_exceeded` rejection when enforcement is on.

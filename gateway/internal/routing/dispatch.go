@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/cognigate/gateway/internal/apierr"
@@ -58,10 +59,54 @@ type Dispatcher struct {
 	breaker  *Breaker
 	registry *provider.Registry
 	store    store.Store
+
+	// cursors is where each provider's key pool has got to, keyed by provider
+	// id. It lives here rather than on store.Provider because the store hands
+	// out a fresh copy of the provider on every read, so a counter kept on the
+	// struct would be reset by the very lookup that was about to read it.
+	//
+	// Entries are never removed. A deleted provider leaves one integer behind,
+	// bounded by how many providers have ever been registered in this process,
+	// and the alternative is having the dispatcher observe deletes for no gain
+	// worth the coupling.
+	cursorMu sync.Mutex
+	cursors  map[string]uint64
 }
 
 func NewDispatcher(r *Resolver, b *Breaker, reg *provider.Registry, s store.Store) *Dispatcher {
-	return &Dispatcher{resolver: r, breaker: b, registry: reg, store: s}
+	return &Dispatcher{
+		resolver: r,
+		breaker:  b,
+		registry: reg,
+		store:    s,
+		cursors:  make(map[string]uint64),
+	}
+}
+
+// keyOrder returns the provider's pool arranged so the request starts at the
+// right key, and still contains every key exactly once.
+//
+// The whole pool is always returned. GW-3 requires that a 429 rotates through
+// the remaining keys before the chain cascades to another provider, and that
+// holds regardless of where the walk begins: starting at key three simply
+// means keys three, four, one, two. Only the starting point is a strategy.
+func (d *Dispatcher) keyOrder(p *store.Provider) []string {
+	n := len(p.Keys)
+	if n < 2 || p.KeyStrategy == store.KeyStrategyFailover {
+		return p.Keys
+	}
+
+	d.cursorMu.Lock()
+	start := d.cursors[p.ID]
+	d.cursors[p.ID] = start + 1
+	d.cursorMu.Unlock()
+
+	offset := int(start % uint64(n))
+	ordered := make([]string, 0, n)
+	for i := 0; i < n; i++ {
+		ordered = append(ordered, p.Keys[(offset+i)%n])
+	}
+	return ordered
 }
 
 // Breaker exposes the breaker for /v1/health and the state gauge.
@@ -203,8 +248,9 @@ func renderAttempts(attempts []Attempt) []apierr.Attempt {
 	return out
 }
 
-// tryCandidate issues one candidate's request, rotating through the provider's
-// key pool while the answer is 429.
+// tryCandidate issues one candidate's request, walking the provider's key pool
+// while the answer is 429. Where the walk starts is the provider's key
+// strategy; that it covers the whole pool before returning is GW-3.
 //
 // Returns (response, attempt, nil) on success, (nil, attempt, nil) when the
 // caller should cascade, and (nil, attempt, err) when it must not.
@@ -217,7 +263,7 @@ func (d *Dispatcher) tryCandidate(
 ) (*provider.Response, Attempt, error) {
 	attempt := Attempt{Candidate: cand}
 
-	for _, key := range p.Keys {
+	for _, key := range d.keyOrder(p) {
 		resp, err := adapter.Do(ctx, provider.Credential{BaseURL: p.BaseURL, APIKey: key}, req)
 		if resp != nil {
 			attempt.Status = resp.StatusCode

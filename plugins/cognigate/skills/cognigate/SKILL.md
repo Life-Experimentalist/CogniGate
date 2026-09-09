@@ -144,15 +144,38 @@ curl -sS -X POST $CG/admin/v1/tenants/$TENANT/providers -H "Authorization: Beare
 | Field | Meaning |
 | --- | --- |
 | `name` | Your label for it. Appears in `X-CogniGate-Served-By`. |
-| `base_url` | Required. A trailing slash is stripped. |
-| `keys` | One or more; at least one is required. Several rotate. |
-| `kind` | Optional, defaults to `openai`. |
+| `base_url` | Required, unless `kind` is one that has a known endpoint. A trailing slash is stripped. |
+| `keys` | One or more; at least one is required. See `key_strategy`. |
+| `kind` | Optional, defaults to `openai`. Also `gemini`, `anthropic`. |
+| `key_strategy` | Optional, `round_robin` (default) or `failover`. |
 | `enabled` | Optional, defaults to `true`. |
 
-There is one adapter, `openai`, and it is enough for every OpenAI-compatible
-endpoint: Together, Groq, Fireworks, Azure OpenAI, OpenRouter, vLLM, Ollama,
-LM Studio. An unrecognised `kind` falls back to it. Registering a second
-provider is how failover gets somewhere to fail over to.
+Three kinds are registered. `openai` covers every endpoint that reimplements
+the OpenAI wire format (Together, Groq, Fireworks, Azure OpenAI, OpenRouter,
+vLLM, Ollama, LM Studio) and an unrecognised `kind` falls back to it.
+`gemini` and `anthropic` are the same adapter pointed at each vendor's
+OpenAI-compatible endpoint, and they carry that endpoint as their default, so
+those two can be registered without a `base_url`:
+
+```bash
+curl -sS -X POST $CG/admin/v1/tenants/$TENANT/providers -H "Authorization: Bearer $CG_ADMIN" -H 'Content-Type: application/json' -d '{"name":"gemini","kind":"gemini","keys":["THE_PROVIDER_KEY"]}'
+```
+
+Anthropic's compatibility layer is documented by Anthropic as a way to
+evaluate Claude with OpenAI client code rather than as a production API, and it
+silently ignores the request fields it does not implement (`response_format`,
+`seed`, `logprobs`, `presence_penalty`, `frequency_penalty`) instead of
+rejecting them. Requests succeed; a caller depending on one of those fields
+gets an answer computed without it. Register `kind: anthropic` knowing that.
+
+`key_strategy` decides which pooled key a request starts from. `round_robin`,
+the default, advances one key per request, so four keys take a quarter of the
+load each. `failover` always starts at the first key and reaches the others
+only when it is rate limited, which is what you want when the keys are not
+equivalent, such as a paid key backed by a free one. Under both, a 429 walks
+the rest of the pool before the request cascades to another provider, so no
+working credential is left untried. Registering a second provider is how that
+cascade gets somewhere to go.
 
 **3 — Mint the key the application will hold.**
 

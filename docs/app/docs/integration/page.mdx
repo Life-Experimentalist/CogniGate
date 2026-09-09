@@ -46,6 +46,26 @@ Anything that can set a base URL works the same way — LangChain, LlamaIndex,
 Vercel AI SDK, Semantic Kernel, Spring AI, a hand-rolled `fetch`. Point it at
 `/v1` and give it the `cg-` key.
 
+## If the application calls Gemini or Claude natively
+
+CogniGate speaks one wire format inbound: OpenAI Chat Completions. An
+application built on `google-generativeai` or `anthropic` is not two settings
+away, because the request and response shapes differ.
+
+The gateway still reaches both vendors: register a provider with `kind: gemini`
+or `kind: anthropic` and it routes there over each vendor's own
+OpenAI-compatible endpoint. What changes is the client. Swap the vendor SDK for
+an OpenAI one pointed at CogniGate, and accept that anything only the native
+API exposes is out of reach: prompt caching, structured outputs, Anthropic's
+thinking blocks. Anthropic also documents its compatibility endpoint as a way
+to evaluate Claude with OpenAI client code rather than as a production API, and
+it ignores rather than rejects fields it does not implement, so a request
+carrying `response_format` or `seed` succeeds with those quietly dropped.
+
+Worth doing when the point of the exercise is one key, one budget and one usage
+record across every vendor. Not worth doing for a single-vendor application
+that depends on native-only features.
+
 ## The seven steps
 
 Do them in this order. Each one is reversible on its own, and the order is what
@@ -169,6 +189,13 @@ amount of key management.
   provider and model, and the request falls through to the next candidate in
   the chain. Register at least two providers in production or there is nothing
   to fall through to.
+- **A `429` from the provider** is absorbed before the cascade sees it. A
+  provider's `keys` are a pool, and the request walks the rest of the pool
+  before falling through to the next candidate, so a throttled credential with
+  a healthy sibling costs the caller nothing. `key_strategy` decides which key
+  a request starts from: `round_robin`, the default, spreads load evenly;
+  `failover` pins traffic to the first key and uses the rest only when it
+  refuses.
 - **A `429` from CogniGate** is a quota or rate limit, not a provider refusal.
   The application's own key can read `GET /v1/usage` to see what it has
   spent; the ceiling itself is admin-side, at

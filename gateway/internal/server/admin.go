@@ -13,6 +13,7 @@ import (
 	"github.com/cognigate/gateway/internal/apierr"
 	"github.com/cognigate/gateway/internal/events"
 	"github.com/cognigate/gateway/internal/httpx"
+	"github.com/cognigate/gateway/internal/provider"
 	"github.com/cognigate/gateway/internal/routing"
 	"github.com/cognigate/gateway/internal/store"
 )
@@ -718,11 +719,12 @@ func (s *Server) createProvider(c *fiber.Ctx) error {
 	}
 
 	var req struct {
-		Name    string   `json:"name"`
-		Kind    string   `json:"kind"`
-		BaseURL string   `json:"base_url"`
-		Keys    []string `json:"keys"`
-		Enabled *bool    `json:"enabled"`
+		Name        string   `json:"name"`
+		Kind        string   `json:"kind"`
+		BaseURL     string   `json:"base_url"`
+		Keys        []string `json:"keys"`
+		Enabled     *bool    `json:"enabled"`
+		KeyStrategy string   `json:"key_strategy"`
 	}
 	if err := parse(c, &req); err != nil {
 		return httpx.Fail(c, err)
@@ -732,8 +734,35 @@ func (s *Server) createProvider(c *fiber.Ctx) error {
 	if req.Name == "" {
 		return httpx.Fail(c, apierr.InvalidRequest("A provider name is required.").WithParam("name"))
 	}
+
+	// Kinds are matched exactly by the registry, so a request that spelled one
+	// with a capital would quietly fall back to the plain OpenAI adapter.
+	kind := strings.ToLower(strings.TrimSpace(req.Kind))
+	if kind == "" {
+		kind = provider.KindOpenAI
+	}
+	// A kind whose endpoint is known needs no base_url. Gemini and Anthropic
+	// are each reachable at exactly one OpenAI-compatible address, and it is
+	// not the address their own documentation leads with, so requiring it here
+	// only creates a way to get it wrong.
+	if strings.TrimSpace(req.BaseURL) == "" {
+		if def, ok := provider.DefaultBaseURL(kind); ok {
+			req.BaseURL = def
+		}
+	}
 	if err := validateBaseURL(req.BaseURL); err != nil {
 		return httpx.Fail(c, err)
+	}
+	if !store.ValidKeyStrategy(req.KeyStrategy) {
+		return httpx.Fail(c, apierr.
+			InvalidRequest(`key_strategy must be "round_robin" or "failover".`).
+			WithParam("key_strategy"))
+	}
+	// Stored rather than left empty so a provider always reports the strategy it
+	// will actually use. Dispatch treats the two identically; a reader of the
+	// admin API should not have to know that.
+	if req.KeyStrategy == "" {
+		req.KeyStrategy = store.KeyStrategyRoundRobin
 	}
 	keys := nonEmpty(req.Keys)
 	if len(keys) == 0 {
@@ -745,21 +774,18 @@ func (s *Server) createProvider(c *fiber.Ctx) error {
 	if req.Enabled != nil {
 		enabled = *req.Enabled
 	}
-	kind := strings.TrimSpace(req.Kind)
-	if kind == "" {
-		kind = "openai"
-	}
 
 	ctx, cancel := s.opContext(c)
 	defer cancel()
 
 	p, err := s.Store.CreateProvider(ctx, &store.Provider{
-		TenantID: tenantID,
-		Name:     req.Name,
-		Kind:     kind,
-		BaseURL:  strings.TrimRight(req.BaseURL, "/"),
-		Enabled:  enabled,
-		Keys:     keys,
+		TenantID:    tenantID,
+		Name:        req.Name,
+		Kind:        kind,
+		BaseURL:     strings.TrimRight(req.BaseURL, "/"),
+		Enabled:     enabled,
+		Keys:        keys,
+		KeyStrategy: req.KeyStrategy,
 	})
 	if err != nil {
 		return httpx.Fail(c, storeErr(err, "provider", req.Name))
@@ -806,19 +832,32 @@ func (s *Server) updateProvider(c *fiber.Ctx) error {
 	id := param(c, "id")
 
 	var req struct {
-		BaseURL *string   `json:"base_url"`
-		Enabled *bool     `json:"enabled"`
-		Keys    *[]string `json:"keys"`
+		BaseURL     *string   `json:"base_url"`
+		Enabled     *bool     `json:"enabled"`
+		Keys        *[]string `json:"keys"`
+		KeyStrategy *string   `json:"key_strategy"`
 	}
 	if err := parse(c, &req); err != nil {
 		return httpx.Fail(c, err)
 	}
-	if req.BaseURL == nil && req.Enabled == nil && req.Keys == nil {
+	if req.BaseURL == nil && req.Enabled == nil && req.Keys == nil && req.KeyStrategy == nil {
 		return httpx.Fail(c, apierr.
-			InvalidRequest("A provider update must change base_url, enabled or keys."))
+			InvalidRequest("A provider update must change base_url, enabled, keys or key_strategy."))
 	}
 
 	patch := store.ProviderPatch{Enabled: req.Enabled}
+	if req.KeyStrategy != nil {
+		if !store.ValidKeyStrategy(*req.KeyStrategy) {
+			return httpx.Fail(c, apierr.
+				InvalidRequest(`key_strategy must be "round_robin" or "failover".`).
+				WithParam("key_strategy"))
+		}
+		strategy := *req.KeyStrategy
+		if strategy == "" {
+			strategy = store.KeyStrategyRoundRobin
+		}
+		patch.KeyStrategy = &strategy
+	}
 	if req.BaseURL != nil {
 		if err := validateBaseURL(*req.BaseURL); err != nil {
 			return httpx.Fail(c, err)

@@ -144,17 +144,48 @@ func (k *APIKey) Active(now time.Time) bool {
 // Provider is one upstream account. Keys is a pool: GW-3 rotates within the
 // pool on a 429 before it gives up on the provider and cascades onward.
 type Provider struct {
-	ID       string   `json:"id"`
-	TenantID string   `json:"tenant_id"`
-	Name     string   `json:"name"` // openai, anthropic, … — the routing identifier
-	Kind     string   `json:"kind"` // adapter to use; "openai" covers every compatible API
-	BaseURL  string   `json:"base_url"`
-	Enabled  bool     `json:"enabled"`
-	Keys     []string `json:"-"` // plaintext only in memory, never serialised outward
+	ID       string `json:"id"`
+	TenantID string `json:"tenant_id"`
+	Name     string `json:"name"` // openai, anthropic, … — the routing identifier
+	Kind     string `json:"kind"` // adapter to use; see the provider package's Kind constants
+	BaseURL  string `json:"base_url"`
+	Enabled  bool   `json:"enabled"`
+	// KeyStrategy decides which pooled key a request starts from. See the
+	// KeyStrategy constants; empty means the default.
+	KeyStrategy string   `json:"key_strategy"`
+	Keys        []string `json:"-"` // plaintext only in memory, never serialised outward
 	// KeyPrefixes mirrors Keys for display, so the admin API can show which
 	// credentials are registered without ever returning one.
 	KeyPrefixes []string  `json:"key_prefixes"`
 	CreatedAt   time.Time `json:"created_at"`
+}
+
+// How a provider picks which of its pooled keys to try first. Either way every
+// key in the pool is tried before the provider is counted as failing, so GW-3's
+// rotate-then-cascade order holds under both; the difference is only where the
+// walk begins.
+const (
+	// KeyStrategyRoundRobin advances one key per request, so a pool of four
+	// keys spreads a steady load four ways. This is the default, because the
+	// reason to register a second key is almost always that one key's quota is
+	// not enough, and a strategy that only reaches the second key after the
+	// first is already being throttled delivers that late, every request until
+	// then has paid the latency of a 429 and a retry.
+	KeyStrategyRoundRobin = "round_robin"
+
+	// KeyStrategyFailover always starts at the first key and moves down the
+	// pool only when one is rate limited, which is what a pool means when the
+	// keys are not equivalent: a paid key with a free one behind it, or a
+	// primary account plus a colleague's borrowed credential. Spreading load
+	// evenly across those is the wrong answer, so it stays available.
+	KeyStrategyFailover = "failover"
+)
+
+// ValidKeyStrategy reports whether s names a strategy. The empty string is
+// valid and means the default: a provider written before the field existed, or
+// by a client that does not set it, is not a configuration error.
+func ValidKeyStrategy(s string) bool {
+	return s == "" || s == KeyStrategyRoundRobin || s == KeyStrategyFailover
 }
 
 // ProviderPatch is a partial update, with the same pointer convention as
@@ -164,9 +195,10 @@ type Provider struct {
 // would only produce a provider that fails at dispatch time instead of at the
 // moment someone made the mistake.
 type ProviderPatch struct {
-	BaseURL *string
-	Enabled *bool
-	Keys    []string
+	BaseURL     *string
+	Enabled     *bool
+	KeyStrategy *string
+	Keys        []string
 }
 
 // AuditEntry is one line of the append-only admin log GW-6 requires.

@@ -563,16 +563,24 @@ SCHEMAS["Provider"] = obj(
         ("tenant_id", p("string")),
         ("name", p("string", "The routing identifier — `openai`, `anthropic`, …")),
         ("kind", p("string", "Which adapter to use. `openai` covers every "
-                             "OpenAI-compatible API.")),
+                             "OpenAI-compatible API; `gemini` and `anthropic` are "
+                             "that same adapter carrying each vendor's "
+                             "compatibility endpoint as its default base URL. An "
+                             "unrecognised kind falls back to `openai`.",
+                   enum=["openai", "gemini", "anthropic"])),
         ("base_url", p("string", None, format="uri")),
         ("enabled", p("boolean")),
+        ("key_strategy", p("string", "Which pooled key a request starts from. "
+                                     "Always set; a provider registered without "
+                                     "one is stored as `round_robin`.",
+                           enum=["round_robin", "failover"])),
         ("key_prefixes", arr(p("string"),
                              "Display prefixes for the registered credentials. The "
                              "credentials themselves are never returned.")),
         ("created_at", dt()),
     ],
-    required=["id", "tenant_id", "name", "kind", "base_url", "enabled", "key_prefixes",
-              "created_at"],
+    required=["id", "tenant_id", "name", "kind", "base_url", "enabled", "key_strategy",
+              "key_prefixes", "created_at"],
 )
 
 SCHEMAS["Alias"] = obj(
@@ -1303,19 +1311,30 @@ add("/admin/v1/tenants/{tenant}/keys/{id}/quota", "delete", op(
 add("/admin/v1/tenants/{tenant}/providers", "post", op(
     "Providers",
     "Register an upstream provider.",
-    "`keys` is a pool rather than a single credential: GW-3 rotates within it on a 429 "
-    "before it gives up on the provider and cascades onward. The credentials are "
-    "write-only — listing a provider returns only their display prefixes.",
+    "`keys` is a pool rather than a single credential. `key_strategy` decides which key "
+    "a request starts from; under either strategy a 429 walks the rest of the pool "
+    "before GW-3 gives up on the provider and cascades onward. The credentials are "
+    "write-only: listing a provider returns only their display prefixes.",
     [ok("Created.", ref("Provider"), status="201")],
     ["BadRequest", "Unauthorized", "Forbidden", "NotFound", "Conflict",
      "TooManyRequests"], ADMIN,
     params=[TENANT_PARAM],
     body=body(obj([("name", p("string", "The routing identifier.")),
-                   ("kind", p("string", "Which adapter to use.")),
-                   ("base_url", p("string", None, format="uri")),
+                   ("kind", p("string", "Defaults to `openai`.",
+                              enum=["openai", "gemini", "anthropic"])),
+                   ("base_url", p("string", "Required for `openai`; optional for the "
+                                            "two kinds that carry a default.",
+                                  format="uri")),
                    ("keys", arr(p("string"), "At least one. Never returned again.")),
+                   ("key_strategy", p("string", "Defaults to `round_robin`.",
+                                      enum=["round_robin", "failover"])),
                    ("enabled", p("boolean", None, default=True))],
-                  required=["name", "kind", "base_url", "keys"])),
+                  required=["name", "keys"]),
+              example=D(("name", "openai"),
+                        ("kind", "openai"),
+                        ("base_url", "https://api.openai.com/v1"),
+                        ("keys", ["THE_PROVIDER_KEY"]),
+                        ("key_strategy", "round_robin"))),
     op_id="createProvider"))
 
 add("/admin/v1/tenants/{tenant}/providers", "get", op(
@@ -1337,7 +1356,9 @@ add("/admin/v1/tenants/{tenant}/providers/{id}", "patch", op(
     params=[TENANT_PARAM, path_param("id", "Provider id.")],
     body=body(obj([("base_url", p("string", None, format="uri")),
                    ("enabled", p("boolean")),
-                   ("keys", arr(p("string"), "Replaces the whole pool."))])),
+                   ("keys", arr(p("string"), "Replaces the whole pool.")),
+                   ("key_strategy", p("string", None,
+                                      enum=["round_robin", "failover"]))])),
     op_id="updateProvider"))
 
 add("/admin/v1/tenants/{tenant}/providers/{id}", "delete", op(

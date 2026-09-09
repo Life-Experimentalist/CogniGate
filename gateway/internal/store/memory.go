@@ -362,6 +362,9 @@ func (m *Memory) UpdateProvider(_ context.Context, tenantID, id string, patch Pr
 		if patch.Enabled != nil {
 			p.Enabled = *patch.Enabled
 		}
+		if patch.KeyStrategy != nil {
+			p.KeyStrategy = *patch.KeyStrategy
+		}
 		if patch.Keys != nil {
 			p.Keys = append([]string(nil), patch.Keys...)
 			p.KeyPrefixes = make([]string, 0, len(patch.Keys))

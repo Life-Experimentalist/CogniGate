@@ -44,12 +44,17 @@ README claimed all of them, and they were never built:
 - **No invoicing.** Usage is metered and stored; no invoice document, ledger, or
   route that reads one back exists.
 - **No Kubernetes assets.** No `deploy/`, `k8s/` or `charts/` directory.
-- **One provider adapter**, `kind: "openai"`. It covers everything that
-  reimplements the OpenAI wire format — Together, Groq, Fireworks, Azure OpenAI,
-  OpenRouter, vLLM, Ollama, LM Studio — because only the base URL differs. An
-  unrecognised `kind` falls back to it rather than refusing to route. A provider
-  with its own protocol (Anthropic's native API, Bedrock) needs a translating
-  proxy in front of it.
+- **No native non-OpenAI protocol.** Three kinds are registered (`openai`,
+  `gemini`, `anthropic`) but all three are the same adapter: the OpenAI wire
+  format, pointed at a different base URL. `gemini` and `anthropic` carry each
+  vendor's OpenAI-compatibility endpoint as their default so no base URL need be
+  supplied, and `gemini` strips the `models/` prefix Google returns on catalog
+  ids. Nothing translates to Anthropic's Messages API or Google's
+  `generateContent`, so what those two vendors expose only natively (prompt
+  caching, structured outputs, thinking blocks) is not reachable through here.
+  An unrecognised `kind` falls back to `openai` rather than refusing to route. A
+  provider with a protocol of its own and no compatibility endpoint (Bedrock)
+  still needs a translating proxy in front of it.
 - **Only `POST /v1/chat/completions` is proxied.** No embeddings, images or
   audio route exists, whatever a model's `transcribe` alias suggests.
 
@@ -116,7 +121,12 @@ created with every tenant) resolve against the live catalogue, so a client
 written against `balanced` keeps working as providers ship new models.
 
 A rule's `chain` is an ordered cascade. Within one provider, keys are a pool and
-CogniGate rotates through them before moving to the next candidate. A candidate
+CogniGate rotates through them before moving to the next candidate. Which key a
+request starts from is the provider's `key_strategy`: `round_robin` (the
+default, and what an unset value means) advances one key per request, while
+`failover` starts every request at the first key and reaches the rest only when
+it refuses. Either way the whole pool is offered before the cascade moves on. A
+candidate
 whose breaker is open is skipped without a call. When every candidate fails the
 response is `upstream_exhausted` (502) carrying an `attempts` array naming each
 provider, model, failure kind and status.
