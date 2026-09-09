@@ -140,6 +140,20 @@ for when it begins refusing, which is what a paid key backed by a free one
 wants. Neither changes the paragraph above: whatever the starting offset, the
 whole pool is tried before the cascade moves on.
 
+When the `429` carries a `Retry-After`, the key it came from is parked for
+exactly that long and the next request skips straight past it, rather than
+spending a round trip rediscovering a limit the provider already reported. The
+window is read from the header and nothing else: a provider that sends no
+`Retry-After` rotates exactly as it did before. Both forms the HTTP spec allows
+are understood, a delay in seconds and an absolute date. Google’s Gemini
+endpoint sends neither, so its pools are unaffected; OpenAI and Anthropic both
+send one.
+
+A parked key is skipped, never dropped. If every key in a pool is inside a
+window the whole pool is tried anyway, because the window is the provider’s
+estimate of when it will accept traffic again and not a fact about when it
+will.
+
 ### The failure that is never retried
 
 A `4xx` the request itself caused — a malformed body, an oversized prompt, a

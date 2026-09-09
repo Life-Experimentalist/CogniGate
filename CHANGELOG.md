@@ -25,6 +25,13 @@ The first release has not been cut. Everything below is the state of `main`.
 
 ### Added
 
+- **Rate-limit cooldowns from `Retry-After`.** A key that answers `429` with a
+  `Retry-After` is parked for exactly that long, so the next request skips it
+  instead of spending a round trip rediscovering a limit the provider already
+  reported. Both forms of the header are read, a delay in seconds and an
+  absolute date. A provider that sends no `Retry-After` rotates as before, and
+  a pool whose keys are all inside a window is still tried.
+
 - **Dynamic model discovery (GW-1).** Per-tenant catalogues refreshed from each
   configured provider, served at `GET /v1/models`, with a stale-catalogue
   warning rather than a hard failure when a provider stops answering.

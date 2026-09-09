@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -52,6 +54,12 @@ func (r *Result) CostUSD(usage *provider.Usage) float64 {
 	return (float64(usage.PromptTokens)/1e6)*in + (float64(usage.CompletionTokens)/1e6)*out
 }
 
+// poolKey identifies one key inside one provider's pool.
+type poolKey struct {
+	providerID string
+	key        string
+}
+
 // Dispatcher runs the GW-3 cascade: try candidates in order, rotate keys within
 // a provider on a 429, and stop the moment the failure is the caller's fault.
 type Dispatcher struct {
@@ -71,15 +79,27 @@ type Dispatcher struct {
 	// worth the coupling.
 	cursorMu sync.Mutex
 	cursors  map[string]uint64
+
+	// cooldowns is when a rate limited key may be used again, keyed by provider
+	// id and key. It is written only from an upstream Retry-After, so a provider
+	// that sends none routes exactly as it did before. Entries are deleted as
+	// they expire, on the read that finds them expired.
+	coolMu    sync.Mutex
+	cooldowns map[poolKey]time.Time
+
+	// now is the clock, so a test can park a key without waiting for it.
+	now func() time.Time
 }
 
 func NewDispatcher(r *Resolver, b *Breaker, reg *provider.Registry, s store.Store) *Dispatcher {
 	return &Dispatcher{
-		resolver: r,
-		breaker:  b,
-		registry: reg,
-		store:    s,
-		cursors:  make(map[string]uint64),
+		resolver:  r,
+		breaker:   b,
+		registry:  reg,
+		store:     s,
+		cursors:   make(map[string]uint64),
+		cooldowns: make(map[poolKey]time.Time),
+		now:       time.Now,
 	}
 }
 
@@ -107,6 +127,70 @@ func (d *Dispatcher) keyOrder(p *store.Provider) []string {
 		ordered = append(ordered, p.Keys[(offset+i)%n])
 	}
 	return ordered
+}
+
+// coolKey parks a key until the time the provider asked for. The longest
+// standing request wins, so a short window cannot shorten a long one.
+func (d *Dispatcher) coolKey(providerID, key string, until time.Time) {
+	d.coolMu.Lock()
+	defer d.coolMu.Unlock()
+	if cur, ok := d.cooldowns[poolKey{providerID, key}]; ok && cur.After(until) {
+		return
+	}
+	d.cooldowns[poolKey{providerID, key}] = until
+}
+
+// readyKeys drops the keys still inside a Retry-After window.
+//
+// If that would leave nothing, the order is returned untouched. A pool where
+// every key is cooling has to be tried anyway: the alternative is refusing to
+// send a request the provider might now accept, and the window is the
+// provider's own estimate, not a fact.
+func (d *Dispatcher) readyKeys(providerID string, order []string) []string {
+	d.coolMu.Lock()
+	defer d.coolMu.Unlock()
+	if len(d.cooldowns) == 0 {
+		return order
+	}
+
+	now := d.now()
+	ready := make([]string, 0, len(order))
+	for _, key := range order {
+		k := poolKey{providerID, key}
+		if until, ok := d.cooldowns[k]; ok {
+			if until.After(now) {
+				continue
+			}
+			delete(d.cooldowns, k)
+		}
+		ready = append(ready, key)
+	}
+	if len(ready) == 0 {
+		return order
+	}
+	return ready
+}
+
+// retryAfter reads RFC 9110's Retry-After, which is either a delay in seconds
+// or an HTTP date. Zero when the header is absent, unparseable, or already in
+// the past, which is the same as not having been sent.
+func retryAfter(h http.Header, now time.Time) time.Duration {
+	v := strings.TrimSpace(h.Get("Retry-After"))
+	if v == "" {
+		return 0
+	}
+	if secs, err := strconv.Atoi(v); err == nil {
+		if secs <= 0 {
+			return 0
+		}
+		return time.Duration(secs) * time.Second
+	}
+	if t, err := http.ParseTime(v); err == nil {
+		if wait := t.Sub(now); wait > 0 {
+			return wait
+		}
+	}
+	return 0
 }
 
 // Breaker exposes the breaker for /v1/health and the state gauge.
@@ -263,7 +347,7 @@ func (d *Dispatcher) tryCandidate(
 ) (*provider.Response, Attempt, error) {
 	attempt := Attempt{Candidate: cand}
 
-	for _, key := range d.keyOrder(p) {
+	for _, key := range d.readyKeys(p.ID, d.keyOrder(p)) {
 		resp, err := adapter.Do(ctx, provider.Credential{BaseURL: p.BaseURL, APIKey: key}, req)
 		if resp != nil {
 			attempt.Status = resp.StatusCode
@@ -299,6 +383,16 @@ func (d *Dispatcher) tryCandidate(
 		case resp.Failure == provider.FailRateLimit:
 			// Try the next key in this provider's pool before giving up on the
 			// provider: a per-key quota is not a provider outage.
+			//
+			// When the upstream said how long to wait, park the key for that long
+			// so the next request does not spend a round trip rediscovering a
+			// limit the provider already reported. Nothing is invented: a provider
+			// that sends no Retry-After parks no key.
+			if resp.Header != nil {
+				if wait := retryAfter(resp.Header, d.now()); wait > 0 {
+					d.coolKey(p.ID, key, d.now().Add(wait))
+				}
+			}
 			continue
 
 		default: // FailServer

@@ -4,12 +4,17 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/cognigate/gateway/internal/store"
 )
 
 func newTestDispatcher() *Dispatcher {
-	return &Dispatcher{cursors: make(map[string]uint64)}
+	return &Dispatcher{
+		cursors:   make(map[string]uint64),
+		cooldowns: make(map[poolKey]time.Time),
+		now:       time.Now,
+	}
 }
 
 func pool(strategy string, keys ...string) *store.Provider {
