@@ -138,13 +138,21 @@ This single command:
 
 ### Or Pull the Published Images
 
-Every push to `main` publishes both services to the GitHub Container
-Registry, built for `linux/amd64` and `linux/arm64`. The packages are public,
+Every push to `main` publishes both services to the GitHub Container Registry
+and to Docker Hub, built for `linux/amd64` and `linux/arm64`. Both are public,
 so no `docker login` is needed to pull them:
 
 ```bash
 docker pull ghcr.io/life-experimentalist/cognigate-gateway:main
 docker pull ghcr.io/life-experimentalist/cognigate-analytics:main
+```
+
+The same digests are on Docker Hub, for environments that already authenticate
+there:
+
+```bash
+docker pull vkrishna04/cognigate-gateway:main
+docker pull vkrishna04/cognigate-analytics:main
 ```
 
 `docker-compose.yml` names those images alongside its build contexts, so a
@@ -168,8 +176,9 @@ carry `X.Y.Z` and `X.Y` — none has been cut yet.
 #### Checking where an image came from
 
 Both images are published with signed build provenance and an SPDX SBOM,
-attached to the image digest and stored in the registry beside it. Nothing
-needs to be cloned to check one:
+attached to the image digest and stored in the registry beside it. That
+attestation lives on the GitHub Container Registry copy, which is where the
+verification below reads it from. Nothing needs to be cloned to check one:
 
 ```bash
 gh attestation verify oci://ghcr.io/life-experimentalist/cognigate-gateway:main --repo Life-Experimentalist/CogniGate
