@@ -118,6 +118,7 @@ func build(cfg config.Config, dev bool, logger *slog.Logger, version string) (*a
 		TTL:             cfg.Catalog.TTL,
 		StaleWarnAfter:  cfg.Catalog.StaleWarnAfter,
 		ProviderTimeout: cfg.Catalog.ProviderTimeout,
+		Prices:          catalogPrices(cfg.Catalog.Prices),
 		OnChange:        events.CatalogHook(a.events),
 	})
 
@@ -175,6 +176,23 @@ func build(cfg config.Config, dev bool, logger *slog.Logger, version string) (*a
 	}
 
 	return a, nil
+}
+
+// catalogPrices converts the configured rate table into the catalog's own type,
+// so the catalog package does not have to import config.
+func catalogPrices(in map[string]map[string]config.ModelPrice) map[string]map[string]catalog.Price {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]map[string]catalog.Price, len(in))
+	for kind, models := range in {
+		byModel := make(map[string]catalog.Price, len(models))
+		for id, price := range models {
+			byModel[id] = catalog.Price{Input: price.Input, Output: price.Output}
+		}
+		out[kind] = byModel
+	}
+	return out
 }
 
 // seedDev creates the tenant and the two credentials a dev process starts with.

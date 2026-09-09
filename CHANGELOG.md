@@ -46,6 +46,12 @@ The first release has not been cut. Everything below is the state of `main`.
   first. `failover` keeps the older behaviour of always starting at key one.
   Under either, a 429 walks the rest of the pool before GW-3 cascades to
   another provider.
+- **Operator-set model prices (`catalog.prices`).** A rate is normally carried by
+  the provider's own `/models` listing, which Gemini's and Anthropic's do not
+  publish. Rates configured here, keyed by provider kind and then model id, price
+  those models so `cost_usd` and cost quotas mean something for them. Nothing is
+  built in: a model with no entry still costs zero rather than a figure the
+  gateway guessed.
 - **Quota and budget API (GW-4).** Token and spend limits per window, enforced
   or reported depending on configuration, with `X-CogniGate-Quota-State` and a
   `quota_exceeded` rejection when enforcement is on.

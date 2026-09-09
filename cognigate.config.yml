@@ -52,6 +52,24 @@ catalog:
   ttl: 1h
   stale_warn_after: 6h
   provider_timeout: 10s
+  # Per-token rates, in US dollars per million tokens, for models whose provider
+  # publishes none. Most OpenAI-compatible listings carry their own prices and
+  # need nothing here; Google's Gemini endpoint and Anthropic's compatibility
+  # layer carry none, so their usage is recorded at zero cost and a cost quota
+  # can never fire until an entry below gives them a rate. Keys are the provider
+  # kind, then the model id as the listing reports it; case does not matter.
+  # Nothing is built in, because a rate the gateway invented would flow into
+  # billing: copy the figures from the vendor's own pricing page, and keep them
+  # current.
+  prices: {}
+  #  gemini:
+  #    gemini-2.5-flash:
+  #      input: 0.00
+  #      output: 0.00
+  #  anthropic:
+  #    claude-sonnet-4-5:
+  #      input: 0.00
+  #      output: 0.00
 
 routing:
   # How many providers a single request may fall through before giving up.

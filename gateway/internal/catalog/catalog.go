@@ -61,11 +61,24 @@ func (s *Snapshot) Age(now time.Time) time.Duration {
 	return now.Sub(s.FetchedAt)
 }
 
+// Price is a model's rate in US dollars per million tokens, as an operator read
+// it off the vendor's pricing page.
+type Price struct {
+	Input  float64
+	Output float64
+}
+
 // Options configures a Catalog.
 type Options struct {
 	TTL             time.Duration
 	StaleWarnAfter  time.Duration
 	ProviderTimeout time.Duration
+	// Prices supplies rates for models whose provider listing publishes none,
+	// keyed by provider kind and then model id. Google's Gemini endpoint and
+	// Anthropic's compatibility layer both omit pricing, so without an entry
+	// here their usage records cost nothing and a cost quota can never fire.
+	// A configured rate wins over the listing's, because an operator typed it.
+	Prices map[string]map[string]Price
 	// OnChange is called when a refresh adds or removes models, so the caller
 	// can emit catalog.model_added / catalog.model_removed events. It runs on
 	// the refresh goroutine and must not block.
@@ -93,6 +106,7 @@ type tenantState struct {
 }
 
 func New(s store.Store, registry *provider.Registry, opts Options) *Catalog {
+	opts.Prices = normalizePrices(opts.Prices)
 	if opts.TTL <= 0 {
 		opts.TTL = time.Hour
 	}
@@ -245,6 +259,35 @@ func (c *Catalog) Invalidate(tenantID string) {
 	st.mu.Unlock()
 }
 
+// normalizePrices folds the table's keys to lower case once, so a kind or model
+// id that differs from the configured spelling only by case still matches.
+func normalizePrices(in map[string]map[string]Price) map[string]map[string]Price {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]map[string]Price, len(in))
+	for kind, models := range in {
+		byModel := make(map[string]Price, len(models))
+		for id, price := range models {
+			byModel[foldKey(id)] = price
+		}
+		out[foldKey(kind)] = byModel
+	}
+	return out
+}
+
+func foldKey(s string) string { return strings.ToLower(strings.TrimSpace(s)) }
+
+// priceFor returns the operator's configured rate for a model, if there is one.
+func (c *Catalog) priceFor(kind, modelID string) (Price, bool) {
+	byModel, ok := c.opts.Prices[foldKey(kind)]
+	if !ok {
+		return Price{}, false
+	}
+	price, ok := byModel[foldKey(modelID)]
+	return price, ok
+}
+
 // refresh fetches every enabled provider's model list and merges them.
 func (c *Catalog) refresh(ctx context.Context, tenantID string) (*Snapshot, error) {
 	providers, err := c.store.ListProviders(ctx, tenantID)
@@ -285,6 +328,10 @@ func (c *Catalog) refresh(ctx context.Context, tenantID string) (*Snapshot, erro
 
 		for _, m := range models {
 			m.Provider = p.Name
+			if price, ok := c.priceFor(p.Kind, m.ID); ok {
+				m.InputCostPerMTok = price.Input
+				m.OutputCostPerMTok = price.Output
+			}
 			entry := Entry{Model: m, ProviderID: p.ID}
 			// First provider to claim an id wins. Registration order is the
 			// tenant's stated preference, so honouring it here means a tenant

@@ -81,9 +81,26 @@ is easier to notice than a plausible one that is wrong. Two other things go
 quiet with it — the `cheapest` and `best` cost tiers have nothing to order by
 and fall through to the tie-break, and a `cost` budget can never be reached.
 
-If you need prices for a provider that does not publish them, the place to add
-them is a proxy in front of that provider's `/models`, which is the same seam a
-self-hosted catalogue already uses.
+Google's Gemini endpoint and Anthropic's compatibility layer are both in that
+position: neither listing carries a rate. To price them, put the figures from the
+vendor's pricing page in `catalog.prices`, keyed by provider kind and then model
+id:
+
+```yaml
+catalog:
+  prices:
+    gemini:
+      gemini-2.5-flash:
+        input: 0.30
+        output: 2.50
+```
+
+A rate configured there wins over the listing's own, and it applies to every
+tenant using that kind, since it is the vendor's price rather than an account's.
+Nothing is built in and nothing is guessed: an unlisted model still costs zero.
+The figures above are an example of the shape, not current pricing, so read the
+real ones off the vendor and keep them current, since a stale rate is a wrong
+number in a billing column rather than a missing one.
 
 ## Reading it back
 

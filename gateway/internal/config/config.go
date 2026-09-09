@@ -89,6 +89,16 @@ type Catalog struct {
 	TTL             time.Duration `yaml:"ttl"`
 	StaleWarnAfter  time.Duration `yaml:"stale_warn_after"`
 	ProviderTimeout time.Duration `yaml:"provider_timeout"`
+	// Prices carries rates for models whose provider listing publishes none,
+	// keyed by provider kind and then model id. Empty by default, and no rate
+	// is built in: a price the gateway invented would flow into billing.
+	Prices map[string]map[string]ModelPrice `yaml:"prices"`
+}
+
+// ModelPrice is a model's rate in US dollars per million tokens.
+type ModelPrice struct {
+	Input  float64 `yaml:"input"`
+	Output float64 `yaml:"output"`
 }
 
 type Routing struct {
@@ -350,6 +360,13 @@ func (c Config) Validate() error {
 		return fmt.Errorf("gateway.tls_cert_file is set but gateway.tls_key_file is not; TLS needs both")
 	case c.Gateway.TLSKeyFile != "" && c.Gateway.TLSCertFile == "":
 		return fmt.Errorf("gateway.tls_key_file is set but gateway.tls_cert_file is not; TLS needs both")
+	}
+	for kind, models := range c.Catalog.Prices {
+		for id, price := range models {
+			if price.Input < 0 || price.Output < 0 {
+				return fmt.Errorf("catalog.prices.%s.%s: rates cannot be negative", kind, id)
+			}
+		}
 	}
 	if c.Routing.MaxFallbackDepth < 1 {
 		return fmt.Errorf("routing.max_fallback_depth must be at least 1")
