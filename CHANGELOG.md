@@ -307,6 +307,20 @@ because the documentation was public and someone may have planned against it.
 
 ### Fixed
 
+- **A provider key the provider refuses now says so.** A wrong or revoked
+  key is the most common way a first deployment fails and it was the least
+  legible failure the gateway had. `ListModels` reported "upstream returned
+  401", which sends an operator to a provider status page for a key they
+  mistyped, and `GET /v1/health` reported `degraded` with nothing beside it:
+  the per-provider rows in the report take their reasons from a catalog
+  snapshot, and a deployment whose only key is rejected never produces one.
+  A 401 or 403 is now named as a rejected key, the catalog error carries
+  every provider's reason in a stable order, and the health report has an
+  `error` field on its catalog block for the case where there is no catalog
+  to describe. The key itself is not quoted anywhere in this path. What a
+  tenant sees is unchanged: still 503 with `upstream_unavailable`, still no
+  detail about a credential it does not hold.
+
 - **`GET /v1/health` and `GET /v1/meta` no longer spend the tenant's rate-limit
   budget.** Both sat behind the per-tenant limiter, so a monitoring poll
   competed with real traffic and a tenant that had just exhausted its budget got

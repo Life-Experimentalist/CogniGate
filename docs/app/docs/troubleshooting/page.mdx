@@ -60,6 +60,13 @@ requires. It is separated from `model_not_found` because it is a configuration
 problem the caller cannot see or fix — a bare 404 would send them looking in
 the wrong place.
 
+If a provider is registered and the catalogue is still empty, the reason is
+on `GET /v1/health` as `catalog.error`. It is present only when every
+provider failed and no snapshot exists at all, which is the one case the
+per-provider rows cannot report, and it names the provider and its own
+reason. A key the provider refuses is called that in as many words. No key
+material appears in it.
+
 `upstream_exhausted` carries an `attempts` array naming what was tried:
 
 ```json

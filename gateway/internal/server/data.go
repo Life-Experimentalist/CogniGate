@@ -431,6 +431,11 @@ type catalogHealth struct {
 	State      string `json:"state"` // fresh | stale
 	Stale      bool   `json:"stale"`
 	FetchedAt  string `json:"fetched_at,omitempty"`
+	// Error is why there is no catalog at all, which is the case the
+	// per-provider rows below cannot report: they take their reason from a
+	// snapshot that a total failure never produced. Without it a deployment
+	// whose only provider key is wrong reports "degraded" and nothing else.
+	Error string `json:"error,omitempty"`
 }
 
 // providerHealth is one provider this tenant has registered, with the breaker
@@ -588,6 +593,7 @@ func (s *Server) buildHealth(ctx context.Context, tenantID string) healthReport 
 	catalogStale := false
 	switch {
 	case err != nil:
+		report.Catalog.Error = err.Error()
 		degrade(&report, healthDegraded)
 	default:
 		catalogStale = snap.Stale || snap.Age(now) > s.Config.Catalog.StaleWarnAfter

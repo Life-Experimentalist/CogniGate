@@ -100,6 +100,14 @@ func (o *OpenAI) ListModels(ctx context.Context, cred Credential) ([]store.Model
 		return nil, fmt.Errorf("list models: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
+		// A rejected credential is called one. It is the most common reason a
+		// catalog will not load, it is the only one the operator fixes rather
+		// than waits out, and "upstream returned 401" sends them reading a
+		// provider status page for a key they mistyped. The key itself is never
+		// quoted: this string reaches a log line and a health report.
+		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+			return nil, fmt.Errorf("list models: the provider rejected this key (%d)", resp.StatusCode)
+		}
 		return nil, fmt.Errorf("list models: upstream returned %d", resp.StatusCode)
 	}
 

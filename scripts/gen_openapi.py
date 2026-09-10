@@ -414,6 +414,9 @@ SCHEMAS["CatalogHealth"] = obj(
         ("state", p("string", None, enum=["fresh", "stale"])),
         ("stale", p("boolean")),
         ("fetched_at", dt()),
+        ("error", p("string", "Why no catalog could be built at all. Present only "
+                              "when every provider failed, which is the one case the "
+                              "per-provider rows cannot report.")),
     ],
     required=["models", "age_seconds", "state", "stale"],
 )

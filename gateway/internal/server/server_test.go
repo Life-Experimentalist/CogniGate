@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -696,6 +697,54 @@ func TestHealthDegradesButStillAnswers200(t *testing.T) {
 	res.decode(t, &report)
 	if report.Status != "degraded" {
 		t.Errorf("status = %q, want %q (report %+v)", report.Status, "degraded", report)
+	}
+}
+
+// A provider key the provider refuses is the most common way a first
+// deployment fails, and until now it was also the least legible: the catalog
+// never loads, so there is no snapshot to hang a per-provider reason on, and
+// the report said "degraded" without saying what was wrong. The reason belongs
+// on the catalog block, which is the thing that is missing.
+func TestHealthSaysWhyThereIsNoCatalogAtAll(t *testing.T) {
+	h := newHarness(t)
+	tenant := h.newTenant("acme")
+	h.addProvider(tenant.id, "test")
+	h.adapter.listErr = errors.New("list models: the provider rejected this key (401)")
+	h.srv.Catalog.Invalidate(tenant.id)
+
+	res := h.do(http.MethodGet, "/v1/health", tenant.dataKey, nil)
+	var report healthReport
+	res.decode(t, &report)
+
+	if report.Catalog.Error == "" {
+		t.Fatalf("catalog.error is empty; the report says only %q (report %+v)",
+			report.Status, report)
+	}
+	if !strings.Contains(report.Catalog.Error, "test") {
+		t.Errorf("catalog.error = %q, want the failing provider named", report.Catalog.Error)
+	}
+	if !strings.Contains(report.Catalog.Error, "rejected this key") {
+		t.Errorf("catalog.error = %q, want the provider's own reason carried through",
+			report.Catalog.Error)
+	}
+}
+
+// The tenant-facing answer is unchanged by the above. A caller cannot fix a
+// key it does not hold, so it is still told the catalog is unavailable and
+// nothing about why: the reason is the operator's, and it reaches them through
+// the health report and the log line instead.
+func TestARejectedKeyStillReadsAsUnavailableToTheCaller(t *testing.T) {
+	h := newHarness(t)
+	tenant := h.routeTenant("acme")
+	h.adapter.listErr = errors.New("list models: the provider rejected this key (401)")
+	h.srv.Catalog.Invalidate(tenant.id)
+
+	res := h.chat(tenant, chatRequest("test-small", false), nil)
+	if res.status != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503; body %s", res.status, res.body)
+	}
+	if strings.Contains(string(res.body), "rejected this key") {
+		t.Errorf("the caller was told about the operator's credential: %s", res.body)
 	}
 }
 

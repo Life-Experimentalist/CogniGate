@@ -2912,6 +2912,10 @@ components:
         fetched_at:
           type: string
           format: date-time
+        error:
+          type: string
+          description: Why no catalog could be built at all. Present only when every provider
+            failed, which is the one case the per-provider rows cannot report.
     ProviderHealth:
       type: object
       required:

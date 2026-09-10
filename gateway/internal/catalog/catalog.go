@@ -354,8 +354,14 @@ func (c *Catalog) refresh(ctx context.Context, tenantID string) (*Snapshot, erro
 	// Every provider failed and none had cached data: that is a hard failure,
 	// not an empty catalog. Reporting zero models would turn a transient
 	// outage into a stream of 404s that look like a configuration error.
+	//
+	// The reasons come with it. This error is what a caller sees the effect of
+	// and an operator has to diagnose, and the per-provider entries in
+	// snap.Errors are discarded with the snapshot: without them the log line
+	// behind a 503 says only that everything failed, which is the one thing
+	// the operator already knew.
 	if len(snap.Models) == 0 && len(snap.Errors) > 0 {
-		return nil, fmt.Errorf("catalog: every provider failed to refresh")
+		return nil, fmt.Errorf("catalog: every provider failed to refresh: %s", joinErrors(snap.Errors))
 	}
 
 	sort.Slice(snap.Models, func(i, j int) bool {
@@ -365,6 +371,21 @@ func (c *Catalog) refresh(ctx context.Context, tenantID string) (*Snapshot, erro
 		return snap.Models[i].ID < snap.Models[j].ID
 	})
 	return snap, nil
+}
+
+// joinErrors renders the per-provider failures in a stable order, so two runs
+// of the same outage produce the same line and a log search finds both.
+func joinErrors(errs map[string]string) string {
+	names := make([]string, 0, len(errs))
+	for name := range errs {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	parts := make([]string, 0, len(names))
+	for _, name := range names {
+		parts = append(parts, name+": "+errs[name])
+	}
+	return strings.Join(parts, "; ")
 }
 
 // diff reports model ids added and removed between two snapshots, for the
