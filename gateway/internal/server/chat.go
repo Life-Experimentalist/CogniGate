@@ -43,8 +43,8 @@ import (
 // they are numbers, not content, so reading them does not touch what GW-14 puts
 // out of bounds.
 type chatEnvelope struct {
-	Model  string `json:"model"`
-	Stream bool   `json:"stream"`
+	Model  string      `json:"model"`
+	Stream lenientBool `json:"stream"`
 	// Raw rather than *float64/*int, because a typed decode makes the gateway
 	// refuse requests the upstream would accept: {"n": 1.0} is what a Python
 	// client's json.dumps of a float emits, and it does not fit an int. These
@@ -53,6 +53,26 @@ type chatEnvelope struct {
 	Temperature json.RawMessage `json:"temperature"`
 	TopP        json.RawMessage `json:"top_p"`
 	N           json.RawMessage `json:"n"`
+}
+
+// lenientBool is a bool that also reads the 1 and 0 some clients send for
+// "stream". It is the same argument the sampling fields make below: a typed
+// decode here would refuse a request the upstream would have accepted, and the
+// body is relayed as it arrived either way, so the provider sees the 1 the
+// caller wrote and answers for itself. Only the gateway's own decision, buffer
+// or stream, is taken from this. Anything else is still a bad request.
+type lenientBool bool
+
+func (b *lenientBool) UnmarshalJSON(raw []byte) error {
+	switch string(raw) {
+	case "true", "1":
+		*b = true
+	case "false", "0", "null":
+		*b = false
+	default:
+		return fmt.Errorf("expected a boolean, got %s", raw)
+	}
+	return nil
 }
 
 // notNumber is what a present but non-numeric sampling field reads as. NaN

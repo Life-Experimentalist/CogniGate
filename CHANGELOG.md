@@ -307,6 +307,18 @@ because the documentation was public and someone may have planned against it.
 
 ### Fixed
 
+- **`"stream": 1` is no longer a malformed request.** Some clients send `1`
+  and `0` where the OpenAI schema says `true` and `false`. The gateway
+  decodes the request envelope to decide whether to buffer or relay, so the
+  whole decode failed on those and the caller was told its body was not
+  valid JSON, which it was. `stream` now reads `1` and `0` as well, on the
+  same argument the sampling fields already made: a typed decode here
+  refuses a request the provider would have accepted, and the body is
+  relayed as it arrived either way. Leniency stops there. A value that is
+  not a boolean in one of those spellings is still a 400, because the
+  gateway would have to guess which of the two response shapes the caller
+  wanted.
+
 - **A provider key the provider refuses now says so.** A wrong or revoked
   key is the most common way a first deployment fails and it was the least
   legible failure the gateway had. `ListModels` reported "upstream returned

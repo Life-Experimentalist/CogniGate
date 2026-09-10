@@ -1148,3 +1148,61 @@ func TestChangingATenantInstructionDoesNotReplayTheOldAnswer(t *testing.T) {
 		t.Errorf("upstream calls = %d, want 2: one for each instruction", n)
 	}
 }
+
+// --- what "stream" is allowed to look like ----------------------------------
+
+// Some clients send 1 and 0 for "stream" rather than true and false. The whole
+// envelope decode used to fail on that, and the caller was told its body was not
+// valid JSON, which it was. The body is relayed as it arrived either way, so the
+// provider still sees the 1 the caller wrote; only whether the gateway buffers
+// or streams is taken from this field.
+func TestStreamAcceptsOneAndZeroAsWellAsTrueAndFalse(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		value  any
+		stream bool
+	}{
+		{"true", true, true},
+		{"one", 1, true},
+		{"false", false, false},
+		{"zero", 0, false},
+		{"null", nil, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			tenant := h.routeTenant("acme")
+			if tc.stream {
+				h.adapter.do = func(context.Context, provider.Credential, *provider.Request) (*provider.Response, error) {
+					return upstreamStream(), nil
+				}
+			}
+
+			body := chatRequest("test-small", false)
+			body["stream"] = tc.value
+			res := h.chat(tenant, body, nil)
+			if res.status != http.StatusOK {
+				t.Fatalf("status = %d, body %s", res.status, res.body)
+			}
+
+			streamed := strings.HasPrefix(res.header.Get(fiberContentType), "text/event-stream")
+			if streamed != tc.stream {
+				t.Errorf("streamed = %v, want %v (content-type %q)",
+					streamed, tc.stream, res.header.Get(fiberContentType))
+			}
+		})
+	}
+}
+
+// Leniency stops there. A value that is not a boolean in any spelling is still
+// a bad request, because the gateway would have to guess which of the two paths
+// the caller wanted and either guess is wrong half the time.
+func TestStreamStillRejectsAValueThatIsNotABoolean(t *testing.T) {
+	h := newHarness(t)
+	tenant := h.routeTenant("acme")
+
+	body := chatRequest("test-small", false)
+	body["stream"] = "yes"
+	if res := h.chat(tenant, body, nil); res.status != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400; body %s", res.status, res.body)
+	}
+}

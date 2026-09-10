@@ -82,7 +82,7 @@ func (s *Server) planCache(c *fiber.Ctx, env chatEnvelope) cachePlan {
 	}
 
 	// Opted in. Whether it can be honoured is a property of the request.
-	if env.Stream || !env.deterministic() {
+	if bool(env.Stream) || !env.deterministic() {
 		return cachePlan{header: cacheBypass}
 	}
 	return cachePlan{lookup: true, ttl: s.cacheTTL(tenant)}

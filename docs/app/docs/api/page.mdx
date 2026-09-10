@@ -69,7 +69,9 @@ curl -X POST http://localhost:8080/v1/chat/completions \
 
 `model` may be a concrete model id or one of the tenant's capability aliases.
 Set `"stream": true` for server-sent events; the response is relayed chunk by
-chunk and the usage record is written when the stream ends.
+chunk and the usage record is written when the stream ends. `1` and `0` are
+accepted for it as well, because some clients send those; anything that is
+not a boolean in one of those spellings is a 400.
 
 Every response carries `X-CogniGate-Request-Id`. A routed one also carries
 `X-CogniGate-Served-By` — the provider and model that actually answered — and
