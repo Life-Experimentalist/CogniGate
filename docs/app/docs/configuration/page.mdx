@@ -225,6 +225,12 @@ Both are then sent as one system message, the deployment's text first, separated
 by a blank line. Neither is merged into a system message the caller wrote: that
 one still arrives after both, in the caller's own words.
 
+That is what the gateway sends. What an upstream does with two system messages is
+the upstream's own behaviour, and it varies: Anthropic's OpenAI-compatible
+endpoint documents that it hoists every system and developer message into one
+initial system message joined by newlines, in order, so the instruction still
+leads. Google's OpenAI-compatibility page states no rule either way.
+
 Read the billing line before switching this on. The injected text is prompt text
 like any other, so the provider counts its tokens and they land in `cost_usd` and
 in whatever the tenant is charged. A long instruction on high-volume traffic is a
