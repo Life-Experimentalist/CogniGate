@@ -200,6 +200,25 @@ func TestAHitIsRecordedAsCached(t *testing.T) {
 	if cached != 1 {
 		t.Errorf("rows marked cached = %d, want exactly the hit", cached)
 	}
+
+	// The same fact has to survive aggregation. Without it a tenant reading
+	// its totals cannot tell a quiet window from a well-cached one, and the
+	// low spend against the request count looks like a metering fault.
+	totals, err := h.mem.Usage(context.Background(), tenant.id,
+		time.Now().Add(-time.Hour), time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatalf("reading usage: %v", err)
+	}
+	if totals.CachedRequests != 1 {
+		t.Errorf("cached requests = %d, want 1 of the 2", totals.CachedRequests)
+	}
+	if totals.Requests != 2 {
+		t.Errorf("requests = %d; a hit is counted in the total, not instead of it",
+			totals.Requests)
+	}
+	if totals.CostUSD == 0 {
+		t.Error("cost is zero; the miss that filled the cache still cost something")
+	}
 }
 
 // --- AC-3: bypass ------------------------------------------------------------

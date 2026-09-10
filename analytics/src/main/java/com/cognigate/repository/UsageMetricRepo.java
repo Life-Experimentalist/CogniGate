@@ -21,7 +21,7 @@ import java.util.List;
  *
  * <p>The aggregations are done by the database and returned already shaped.
  * Summing in Java would mean loading a billing period's every request into
- * heap to produce six numbers.
+ * heap to produce a handful of numbers.
  *
  * <p>The charge sums read {@code coalesce(u.chargeUsd, u.costUsd)} because rows
  * stored before a charge was recorded separately were billed at the provider
@@ -55,7 +55,8 @@ public interface UsageMetricRepo extends JpaRepository<UsageMetric, Long> {
 
     @Query("""
             select new com.cognigate.dto.UsageTotalsResponse(
-                count(u), sum(u.promptTokens), sum(u.completionTokens),
+                count(u), sum(case when u.cached = true then 1L else 0L end),
+                sum(u.promptTokens), sum(u.completionTokens),
                 sum(u.totalTokens), sum(u.costUsd), sum(coalesce(u.chargeUsd, u.costUsd)))
             from UsageMetric u
             where u.tenantId = :tenantId
@@ -67,7 +68,8 @@ public interface UsageMetricRepo extends JpaRepository<UsageMetric, Long> {
 
     @Query("""
             select new com.cognigate.dto.UsageTotalsResponse(
-                count(u), sum(u.promptTokens), sum(u.completionTokens),
+                count(u), sum(case when u.cached = true then 1L else 0L end),
+                sum(u.promptTokens), sum(u.completionTokens),
                 sum(u.totalTokens), sum(u.costUsd), sum(coalesce(u.chargeUsd, u.costUsd)))
             from UsageMetric u
             where u.tenantId = :tenantId and u.keyPrefix = :keyPrefix
@@ -89,7 +91,8 @@ public interface UsageMetricRepo extends JpaRepository<UsageMetric, Long> {
 
     @Query("""
             select new com.cognigate.dto.UsageBucketResponse(
-                u.model, count(u), sum(u.promptTokens), sum(u.completionTokens),
+                u.model, count(u), sum(case when u.cached = true then 1L else 0L end),
+                sum(u.promptTokens), sum(u.completionTokens),
                 sum(u.totalTokens), sum(u.costUsd), sum(coalesce(u.chargeUsd, u.costUsd)))
             from UsageMetric u
             where u.tenantId = :tenantId
@@ -103,7 +106,8 @@ public interface UsageMetricRepo extends JpaRepository<UsageMetric, Long> {
 
     @Query("""
             select new com.cognigate.dto.UsageBucketResponse(
-                u.provider, count(u), sum(u.promptTokens), sum(u.completionTokens),
+                u.provider, count(u), sum(case when u.cached = true then 1L else 0L end),
+                sum(u.promptTokens), sum(u.completionTokens),
                 sum(u.totalTokens), sum(u.costUsd), sum(coalesce(u.chargeUsd, u.costUsd)))
             from UsageMetric u
             where u.tenantId = :tenantId
@@ -117,7 +121,8 @@ public interface UsageMetricRepo extends JpaRepository<UsageMetric, Long> {
 
     @Query("""
             select new com.cognigate.dto.UsageBucketResponse(
-                u.keyPrefix, count(u), sum(u.promptTokens), sum(u.completionTokens),
+                u.keyPrefix, count(u), sum(case when u.cached = true then 1L else 0L end),
+                sum(u.promptTokens), sum(u.completionTokens),
                 sum(u.totalTokens), sum(u.costUsd), sum(coalesce(u.chargeUsd, u.costUsd)))
             from UsageMetric u
             where u.tenantId = :tenantId
@@ -137,7 +142,8 @@ public interface UsageMetricRepo extends JpaRepository<UsageMetric, Long> {
      */
     @Query("""
             select new com.cognigate.dto.UsageBucketResponse(
-                u.clientRequestId, count(u), sum(u.promptTokens), sum(u.completionTokens),
+                u.clientRequestId, count(u), sum(case when u.cached = true then 1L else 0L end),
+                sum(u.promptTokens), sum(u.completionTokens),
                 sum(u.totalTokens), sum(u.costUsd), sum(coalesce(u.chargeUsd, u.costUsd)))
             from UsageMetric u
             where u.tenantId = :tenantId

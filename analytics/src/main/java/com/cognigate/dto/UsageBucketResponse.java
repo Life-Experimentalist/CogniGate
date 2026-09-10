@@ -14,6 +14,10 @@ import java.math.BigDecimal;
 public record UsageBucketResponse(
         @JsonProperty("key") String key,
         @JsonProperty("requests") Long requests,
+        // How many of the requests the gateway answered from its completion
+        // cache. A cache hit consumes no tokens and costs nothing, so this is
+        // why a window's spend can look low against its request count.
+        @JsonProperty("cached_requests") Long cachedRequests,
         @JsonProperty("prompt_tokens") Long promptTokens,
         @JsonProperty("completion_tokens") Long completionTokens,
         @JsonProperty("total_tokens") Long totalTokens,
@@ -22,6 +26,7 @@ public record UsageBucketResponse(
 
     public UsageBucketResponse {
         requests = requests == null ? 0L : requests;
+        cachedRequests = cachedRequests == null ? 0L : cachedRequests;
         promptTokens = promptTokens == null ? 0L : promptTokens;
         completionTokens = completionTokens == null ? 0L : completionTokens;
         totalTokens = totalTokens == null ? 0L : totalTokens;

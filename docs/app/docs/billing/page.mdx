@@ -194,6 +194,7 @@ curl "http://localhost:8080/v1/usage?window=month" \
     "since": "2026-09-01T00:00:00Z",
     "until": "2026-09-03T11:04:22Z",
     "requests": 1482,
+    "cached_requests": 96,
     "prompt_tokens": 391204,
     "completion_tokens": 88317,
     "total_tokens": 479521,
@@ -204,13 +205,18 @@ curl "http://localhost:8080/v1/usage?window=month" \
 }
 ```
 
+`cached_requests` is how many of `requests` the completion cache answered.
+Those rows carry no tokens and cost nothing, so a window whose spend looks
+low against its request count is explained by that number rather than by a
+metering fault.
+
 `window` is `day` or `month` and the bounds are resolved for you, half-open,
 and returned. There is no arbitrary date range: a metering read is either
 "this billing period" or "today", and a free-form window would invite a tenant
 to scan its whole history on every dashboard refresh.
 
 `GET /v1/usage/breakdown` takes the same `window` plus `group_by`, one of
-`model`, `provider`, `key` or `client_request_id`, and returns the same six
+`model`, `provider`, `key` or `client_request_id`, and returns the same
 numbers per bucket under `data`, most expensive first. It is capped at the 200
 costliest buckets and says `"truncated": true` when it had to cut. An operator
 reads any tenant's through `GET /admin/v1/tenants/{id}/usage` and

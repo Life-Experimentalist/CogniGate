@@ -746,6 +746,9 @@ func inWindow(t, since, until time.Time) bool {
 
 func addUsage(dst *UsageTotals, r *UsageRecord) {
 	dst.Requests++
+	if r.Cached {
+		dst.CachedRequests++
+	}
 	dst.PromptTokens += int64(r.PromptTokens)
 	dst.CompletionTokens += int64(r.CompletionToken)
 	dst.TotalTokens += int64(r.TotalTokens)

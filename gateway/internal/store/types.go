@@ -358,28 +358,28 @@ type Webhook struct {
 // content — GW-14 forbids that in any durable store — only the dimensions
 // billing and debugging need.
 type UsageRecord struct {
-	RequestID       string    `json:"request_id"`
-	ClientRequestID string    `json:"client_request_id,omitempty"`
-	TenantID        string    `json:"tenant_id"`
-	KeyPrefix       string    `json:"key_prefix"`
-	Provider        string    `json:"provider"`
-	Model           string    `json:"model"`
-	RequestedModel  string    `json:"requested_model"`
-	FallbackDepth   int       `json:"fallback_depth"`
-	PromptTokens    int       `json:"prompt_tokens"`
-	CompletionToken int       `json:"completion_tokens"`
-	TotalTokens     int       `json:"total_tokens"`
-	CostUSD         float64   `json:"cost_usd"`
-	ChargeUSD       float64   `json:"charge_usd"`
+	RequestID       string  `json:"request_id"`
+	ClientRequestID string  `json:"client_request_id,omitempty"`
+	TenantID        string  `json:"tenant_id"`
+	KeyPrefix       string  `json:"key_prefix"`
+	Provider        string  `json:"provider"`
+	Model           string  `json:"model"`
+	RequestedModel  string  `json:"requested_model"`
+	FallbackDepth   int     `json:"fallback_depth"`
+	PromptTokens    int     `json:"prompt_tokens"`
+	CompletionToken int     `json:"completion_tokens"`
+	TotalTokens     int     `json:"total_tokens"`
+	CostUSD         float64 `json:"cost_usd"`
+	ChargeUSD       float64 `json:"charge_usd"`
 	// BillingMode is the mode that produced ChargeUSD, stamped per row so a
 	// window read back after the setting changed still says how each request
 	// in it was priced.
-	BillingMode     string    `json:"billing_mode"`
-	Cached          bool      `json:"cached"`
-	Streamed        bool      `json:"streamed"`
-	StatusCode      int       `json:"status_code"`
-	DurationMS      int64     `json:"duration_ms"`
-	RecordedAt      time.Time `json:"recorded_at"`
+	BillingMode string    `json:"billing_mode"`
+	Cached      bool      `json:"cached"`
+	Streamed    bool      `json:"streamed"`
+	StatusCode  int       `json:"status_code"`
+	DurationMS  int64     `json:"duration_ms"`
+	RecordedAt  time.Time `json:"recorded_at"`
 }
 
 // UsageTotals is the aggregate behind GET /v1/usage. CostUSD is what the
@@ -387,7 +387,12 @@ type UsageRecord struct {
 // tenant owes for them, which the two differ by only when billing.mode
 // puts a margin on the rate or drops the charge entirely.
 type UsageTotals struct {
-	Requests         int64   `json:"requests"`
+	Requests int64 `json:"requests"`
+	// CachedRequests is how many of Requests the completion cache answered.
+	// They carry no tokens and no cost, so a window whose figures look low
+	// against its request count is explained by this number rather than by a
+	// metering fault.
+	CachedRequests   int64   `json:"cached_requests"`
 	PromptTokens     int64   `json:"prompt_tokens"`
 	CompletionTokens int64   `json:"completion_tokens"`
 	TotalTokens      int64   `json:"total_tokens"`

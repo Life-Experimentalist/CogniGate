@@ -82,9 +82,9 @@ GET  /healthz                  (unauthenticated liveness)
 
 `GET /v1/usage` takes `?window=day|month` — default `day`, and **not** `since` /
 `until`; anything else is a 400 with `param: "window"`. It returns `object`,
-`window`, the resolved half-open `since` / `until`, the six totals (`requests`,
-`prompt_tokens`, `completion_tokens`, `total_tokens`, `cost_usd`, `charge_usd`),
-a `state`,
+`window`, the resolved half-open `since` / `until`, the totals (`requests`,
+`cached_requests`, `prompt_tokens`, `completion_tokens`, `total_tokens`,
+`cost_usd`, `charge_usd`), a `state`,
 and a `limits` array. `/v1/usage/breakdown` adds
 `?group_by=model|provider|key|client_request_id` (default `model`), returns
 `data[]` capped at the 200 costliest buckets, and sets `truncated` when it cut.

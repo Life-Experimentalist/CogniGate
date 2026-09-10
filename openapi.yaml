@@ -2622,6 +2622,7 @@ components:
       - state
       - limits
       - requests
+      - cached_requests
       - prompt_tokens
       - completion_tokens
       - total_tokens
@@ -2644,6 +2645,11 @@ components:
           format: date-time
         requests:
           type: integer
+        cached_requests:
+          type: integer
+          description: How many of `requests` the completion cache answered. A cache hit consumes
+            no tokens and costs nothing, so this is why a window's spend can look low against
+            its request count.
         prompt_tokens:
           type: integer
         completion_tokens:
@@ -2685,6 +2691,7 @@ components:
       - state
       - limits
       - requests
+      - cached_requests
       - prompt_tokens
       - completion_tokens
       - total_tokens
@@ -2708,6 +2715,11 @@ components:
           format: date-time
         requests:
           type: integer
+        cached_requests:
+          type: integer
+          description: How many of `requests` the completion cache answered. A cache hit consumes
+            no tokens and costs nothing, so this is why a window's spend can look low against
+            its request count.
         prompt_tokens:
           type: integer
         completion_tokens:
@@ -2748,6 +2760,7 @@ components:
       required:
       - key
       - requests
+      - cached_requests
       - prompt_tokens
       - completion_tokens
       - total_tokens
@@ -2759,6 +2772,11 @@ components:
           description: The value of the grouping dimension for this row.
         requests:
           type: integer
+        cached_requests:
+          type: integer
+          description: How many of `requests` the completion cache answered. A cache hit consumes
+            no tokens and costs nothing, so this is why a window's spend can look low against
+            its request count.
         prompt_tokens:
           type: integer
         completion_tokens:

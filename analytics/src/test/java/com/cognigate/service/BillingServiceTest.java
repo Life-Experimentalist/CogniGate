@@ -31,7 +31,7 @@ class BillingServiceTest {
     private BillingService billingService;
 
     private static UsageTotalsResponse totalling(long totalTokens) {
-        return new UsageTotalsResponse(1L, 4000L, 6000L, totalTokens,
+        return new UsageTotalsResponse(1L, 0L, 4000L, 6000L, totalTokens,
             new BigDecimal("0.015"), new BigDecimal("0.018"));
     }
 
@@ -57,7 +57,7 @@ class BillingServiceTest {
     void calculateInvoice_withNoUsage_returnsZero() {
         // What an aggregate over an empty window actually returns: one row of nulls.
         when(usageMetricRepo.totals(any(), any(), any()))
-            .thenReturn(new UsageTotalsResponse(0L, null, null, null, null, null));
+            .thenReturn(new UsageTotalsResponse(0L, null, null, null, null, null, null));
 
         BigDecimal cost = billingService.calculateTenantInvoice(
             "test-org",

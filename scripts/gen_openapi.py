@@ -293,6 +293,10 @@ SCHEMAS["ModelList"] = obj(
 # its fields sit at the top level of the response rather than under a key.
 TOTALS = [
     ("requests", p("integer")),
+    ("cached_requests", p("integer", "How many of `requests` the completion cache "
+                                     "answered. A cache hit consumes no tokens and "
+                                     "costs nothing, so this is why a window's spend "
+                                     "can look low against its request count.")),
     ("prompt_tokens", p("integer")),
     ("completion_tokens", p("integer")),
     ("total_tokens", p("integer")),
@@ -307,8 +311,8 @@ TOTALS = [
                                "the operator has put a margin on the provider rate, or is "
                                "carrying the bill themselves, in which case it is zero.")),
 ]
-TOTALS_REQUIRED = ["requests", "prompt_tokens", "completion_tokens", "total_tokens",
-                   "cost_usd", "charge_usd"]
+TOTALS_REQUIRED = ["requests", "cached_requests", "prompt_tokens", "completion_tokens",
+                   "total_tokens", "cost_usd", "charge_usd"]
 
 SCHEMAS["UsageLimit"] = obj(
     [

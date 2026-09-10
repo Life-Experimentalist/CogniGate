@@ -225,6 +225,17 @@ The first release has not been cut. Everything below is the state of `main`.
   `cache` policy the specification describes is not implemented — the switch is
   per tenant and per request.
 
+- **Usage totals say how many requests the cache answered.** A hit is
+  recorded like any other request, with a status and a duration and no
+  tokens and no cost, which is what makes the traffic countable. Until now
+  that fact stopped at the row: the aggregate said 1,482 requests and a
+  spend that did not look like 1,482 requests, and nothing on the response
+  explained the gap. `cached_requests` sits beside `requests` on every
+  usage total, per tenant, per key and per breakdown bucket, on both the
+  data plane and the admin plane. A window whose figures look low against
+  its request count is now explained by a number rather than mistaken for a
+  metering fault.
+
 - **Content-blind design, with an opt-in debug capture (GW-14).** No prompt and
   no completion reaches anything the deployment keeps. Log lines, metric labels,
   events, webhook deliveries, usage records and everything sent to the analytics

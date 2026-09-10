@@ -214,7 +214,7 @@ class UsageControllerTest {
     @DisplayName("totals come back in the gateway's field names")
     void totals_areReportedInTheWireShape() throws Exception {
         when(usageMetricRepo.totals(eq("tnt_dev"), any(), any()))
-                .thenReturn(new UsageTotalsResponse(3L, 30L, 45L, 75L,
+                .thenReturn(new UsageTotalsResponse(3L, 1L, 30L, 45L, 75L,
                         new BigDecimal("0.01500"), new BigDecimal("0.01800")));
 
         mockMvc.perform(get("/api/v1/usage/totals")
@@ -223,6 +223,7 @@ class UsageControllerTest {
                         .param("until", "2026-03-02T00:00:00Z"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.requests").value(3))
+                .andExpect(jsonPath("$.cached_requests").value(1))
                 .andExpect(jsonPath("$.prompt_tokens").value(30))
                 .andExpect(jsonPath("$.completion_tokens").value(45))
                 .andExpect(jsonPath("$.total_tokens").value(75))
@@ -236,7 +237,7 @@ class UsageControllerTest {
         // An aggregate over an empty window returns one row of nulls; a tenant
         // that has sent nothing has used nothing, not an unknown amount.
         when(usageMetricRepo.totals(any(), any(), any()))
-                .thenReturn(new UsageTotalsResponse(0L, null, null, null, null, null));
+                .thenReturn(new UsageTotalsResponse(0L, null, null, null, null, null, null));
 
         mockMvc.perform(get("/api/v1/usage/totals")
                         .param("tenant_id", "tnt_quiet")
@@ -244,6 +245,7 @@ class UsageControllerTest {
                         .param("until", "2026-03-02T00:00:00Z"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.requests").value(0))
+                .andExpect(jsonPath("$.cached_requests").value(0))
                 .andExpect(jsonPath("$.total_tokens").value(0))
                 .andExpect(jsonPath("$.cost_usd").value(0))
                 .andExpect(jsonPath("$.charge_usd").value(0));
@@ -253,7 +255,7 @@ class UsageControllerTest {
     @DisplayName("key_prefix narrows the totals to one key")
     void totals_withKeyPrefix_useTheKeyQuery() throws Exception {
         when(usageMetricRepo.keyTotals(eq("tnt_dev"), eq("cg-dev-abcd"), any(), any()))
-                .thenReturn(new UsageTotalsResponse(1L, 10L, 10L, 20L,
+                .thenReturn(new UsageTotalsResponse(1L, 0L, 10L, 10L, 20L,
                         new BigDecimal("0.002"), new BigDecimal("0.002")));
 
         mockMvc.perform(get("/api/v1/usage/totals")
@@ -272,7 +274,7 @@ class UsageControllerTest {
     void breakdown_routesEachGrouping() throws Exception {
         when(usageMetricRepo.breakdownByModel(any(), any(), any()))
                 .thenReturn(List.of(new UsageBucketResponse(
-                        "gpt-4o-mini", 2L, 20L, 30L, 50L,
+                        "gpt-4o-mini", 2L, 0L, 20L, 30L, 50L,
                         new BigDecimal("0.01"), new BigDecimal("0.012"))));
         when(usageMetricRepo.breakdownByProvider(any(), any(), any())).thenReturn(List.of());
         when(usageMetricRepo.breakdownByKey(any(), any(), any())).thenReturn(List.of());
