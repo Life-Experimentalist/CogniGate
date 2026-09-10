@@ -1,6 +1,6 @@
 ---
 name: cognigate
-description: Use when installing, operating, or wiring an application into CogniGate — the self-hosted OpenAI-compatible LLM gateway. Covers first install, tenant and key provisioning, provider registration, routing aliases, quotas, health checks, and the integration path for any codebase that already calls an LLM API.
+description: Use when installing, operating, or wiring an application into CogniGate — the self-hosted OpenAI-compatible LLM gateway. Covers first install, tenant and key provisioning, provider registration, routing aliases, quotas, rate limits and concurrency caps, what a tenant is charged and how much of the cost it can see, a system instruction put in front of every prompt, health checks, and the integration path for any codebase that already calls an LLM API.
 ---
 
 # CogniGate
@@ -212,14 +212,14 @@ Tenant-scoped, all under `/admin/v1/tenants/:tenant`:
 | `PUT /aliases/:name` | Define an alias. Body: `pin`, `capabilities[]`, `min_context_window`, `provider_preference[]`, `cost_tier` (`cheapest`, `balanced`, `best`). An alias that collides with a real model id is refused. |
 | `GET /aliases`, `DELETE /aliases/:name` | List, remove. |
 | `PUT /routing-rules`, `GET`, `DELETE /routing-rules/:id` | Fallback chains and ordering. |
-| `PUT /quota`, `GET /quota`, `DELETE /quota` | Per-tenant ceilings. |
-| `PUT /keys/:id/quota` and friends | The same, narrowed to one key. |
+| `PUT /quota`, `GET /quota`, `DELETE /quota` | Per-tenant ceilings. Windows `day` and `month`, units `tokens`, `cost` and `requests`, each a `cap` with an optional `soft_threshold_pct`. |
+| `PUT /keys/:id/quota` and friends | The same, narrowed to one key. Both are evaluated, so a key cap can only narrow what the tenant is already allowed, never widen it. |
 | `GET /usage`, `GET /usage/breakdown` | Metered consumption. |
 | `GET /events`, `GET /captures` | What happened, and captured requests for debugging. |
 | `POST /webhooks`, `GET`, `DELETE /webhooks/:id` | Outbound notifications. |
 | `POST /cache/flush` | Drop this tenant's catalog cache. |
 | `GET /keys`, `DELETE /keys/:id` | List and revoke. |
-| `PATCH /tenants/:tenant`, `DELETE /tenants/:tenant` | Update, remove. |
+| `PATCH /tenants/:tenant`, `DELETE /tenants/:tenant` | Update, remove. The body takes `name`, `status`, `limits`, `cache`, `debug_capture` and `system_instruction`, each optional and each replacing what is there. |
 
 Root-only, not tenant-scoped: `GET /admin/v1/meta`, `POST /admin/v1/catalog/refresh`,
 `GET /admin/v1/audit`, and `POST /admin/v1/admin-keys` — which is how a
@@ -231,6 +231,129 @@ Data plane, with a `cg-` key: `POST /v1/chat/completions`, `GET /v1/models`,
 `GET /v1/health`, `GET /v1/meta`.
 
 Routing is case-sensitive on purpose. `/V1/Chat/Completions` is a 404.
+
+
+---
+
+## Operator settings
+
+The settings below live in `cognigate.config.yml` and are what an operator
+tunes once the install works. The file is bind-mounted, so changing it needs
+`docker compose up -d --force-recreate gateway`, which empties the control
+plane along with everything else held in memory. Set them before provisioning,
+not after. The billing and chat settings below also have an environment
+spelling, which is what a deployment that keeps its configuration in a secret
+store uses instead; both `CG_NAME` and a bare `NAME` are read. The rate and
+concurrency figures have none, and are set in the file or per tenant through
+`PATCH /admin/v1/tenants/:tenant`.
+
+**What the tenant is charged.** `cost_usd` is what the provider charged the
+operator; `charge_usd` is what the tenant owes. `billing.mode` is the whole
+difference between them.
+
+```yaml
+billing:
+  mode: passthrough # passthrough | markup | absorb
+  markup_pct: 0 # only read in markup mode
+  cost_visibility: exact # exact | hint
+```
+
+`passthrough` charges the provider rate itself, so the operator collects
+nothing and there is no second price table to keep current. `markup` charges
+that plus `markup_pct`, and a `markup` mode with no percentage is refused at
+startup rather than quietly behaving as passthrough. `absorb` charges nothing
+at all: `charge_usd` is zero on every row and the operator carries the bill. A
+cost quota is measured in cost rather than charge, so a spend cap still stops
+runaway usage under `absorb`.
+
+`cost_visibility: hint` coarsens `cost_usd` on the data plane to one
+significant figure. A tenant still sees the order of magnitude of what its
+traffic cost, but cannot divide the charge beside it by an exact cost and
+recover the operator's margin. The charge itself is never rounded, because it
+is what the tenant owes; the admin plane and the stored row stay exact
+whatever this is set to; and enforcement reads the exact position, so what
+stops traffic never depends on how it is displayed.
+
+Environment: `CG_BILLING_MODE`, `CG_BILLING_MARKUP_PCT`,
+`CG_BILLING_COST_VISIBILITY`.
+
+**Rate limits, a concurrency cap, and quotas.** Three different things, and
+reaching for the wrong one is the usual reason a limit does not do what an
+operator expected.
+
+```yaml
+rate_limit:
+  requests_per_second: 50 # token bucket, per tenant
+  burst_capacity: 100 # how far above it a burst may go
+  requests_per_minute: 3600 # fixed minute window; 0 switches it off
+limits:
+  max_concurrent_per_key: 32 # requests in flight, per key
+```
+
+`requests_per_second` with `burst_capacity` is a bucket that refills
+continuously: it smooths traffic, but a caller that has been idle can spend
+the whole burst at once. `requests_per_minute` is a plain count over a fixed
+window, which is how a provider allowance is usually written, so set it when
+you are trying to stay under one. The shipped 3600 clears what the bucket
+admits in a minute at the two figures above, so out of the box it never
+refuses a request the bucket would have allowed; lower it to make it bind.
+
+Both are per tenant rather than per key, because a tenant that could lift its
+own ceiling by minting another key would not have a ceiling.
+`max_concurrent_per_key` goes the other way on purpose: it bounds how many
+requests one key may have in flight, so one integration cannot starve another
+inside the same tenant. Reach for it when a client opens twenty streams,
+because a rate limit counts arrivals and a long stream arrives once.
+
+A per-day allowance is a quota rather than a rate limit. It resets at midnight
+UTC, reads back with a remaining figure, can be narrowed to one key, and can
+be run in observe mode first: `quotas.enforcement: observe`, or
+`CG_QUOTA_ENFORCEMENT=observe`, emits the events and the headers without
+rejecting anything, which is how to size a cap before it starts biting.
+
+```bash
+curl -sS -X PUT $CG/admin/v1/tenants/$TENANT/quota \
+  -H "Authorization: Bearer $CG_ADMIN" -H 'Content-Type: application/json' \
+  -d '{"day":{"requests":{"cap":50000}},"month":{"cost":{"cap":250,"soft_threshold_pct":80}}}'
+```
+
+Windows are `day` and `month`, units are `tokens`, `cost` and `requests`, and
+each unit is a `cap` with an optional `soft_threshold_pct`. A unit left out is
+unlimited rather than capped at zero. Only served requests count against a
+`requests` cap: anything a rate limit, a quota or the concurrency cap refused
+writes no usage row, so retrying against a full cap does not dig the hole
+deeper.
+
+Any of the rate and concurrency figures can be overridden for one tenant
+through `PATCH /admin/v1/tenants/:tenant` with a `limits` object. That object
+replaces the whole block rather than merging into it, so send every override
+the tenant should have, and an empty object clears them all.
+
+**A system instruction in front of every prompt.**
+
+```yaml
+chat:
+  system_instruction: "" # empty, the default, adds nothing
+```
+
+The text goes out as a system message ahead of whatever the caller sent. A
+tenant can be given its own through `PATCH /admin/v1/tenants/:tenant` with
+`system_instruction`, and then both are sent as one message with the
+deployment's text first. An empty string there is a value rather than an
+omission: it takes the tenant's own text away again. Neither is merged into a
+system message the caller wrote, which still arrives after both, unchanged.
+
+Three things to tell an operator before they set one:
+
+- It is prompt text. The provider counts its tokens on every request, so it
+  lands in `cost_usd` and in whatever the tenant is charged.
+- A caller cannot opt out. The rewrite happens before the cache key is
+  computed and before the buffered and streamed paths split.
+- What an upstream does with two system messages is the upstream's business.
+  Anthropic's compatibility endpoint documents joining them into one, in
+  order, so a configured instruction still leads. Google states no rule.
+
+Environment: `CG_CHAT_SYSTEM_INSTRUCTION`.
 
 ---
 
@@ -303,7 +426,10 @@ nothing about what the calling application does, and nothing in it needs to.
 | An alias write is refused | The name collides with a real model id in the catalog | Choose another name; the collision is the point |
 | Requests route somewhere unexpected | The alias resolved differently than you assumed | Read `X-CogniGate-Served-By`, then `GET /aliases` and `POST /cache/flush` |
 | A provider stops being tried | Its circuit breaker opened after repeated failures | Expected. It closes on its own — register a second provider so there is somewhere to fall back to |
-| `429` | A tenant or key quota | `GET /quota`, and `GET /usage` for what consumed it |
+| `429` | A quota, a rate limit, or the per-key concurrency cap | The error code says which: `quota_exceeded`, `budget_exceeded`, `rate_limited` or `concurrency_exceeded`. Then `GET /quota`, and `GET /usage` for what consumed it |
+| The catalog is empty and a provider is registered | Every provider failed to refresh, most often a key the provider refuses | `GET /v1/health`, and read `catalog.error`. It names each provider and its reason, and quotes no key material |
+| `prompt_tokens` is higher than what the caller sent | A system instruction is configured, and it is prompt text on every request | Expected. Check `chat.system_instruction` and the tenant's own, and remember both are charged |
+| Spend looks low against the request count | The cache answered some of them, at no tokens and no cost | Read `cached_requests` on the same usage response. That is a working cache, not a metering fault |
 
 Logs: `docker compose logs -f gateway`, and the same for `analytics` and
 `postgres-db`.
