@@ -123,10 +123,18 @@ randhex() {
 # so on a .env with no line for this key at all -- one written by hand, or
 # trimmed -- the old version wrote nothing and then reported that the secret had
 # been saved. The caller would start the stack with the variable still unset.
+#
+# The newline before the append is for the same kind of .env: one whose last
+# line has no terminator. Appending straight onto it would glue the new
+# assignment to the end of the previous value. $(...) strips trailing newlines,
+# so the test is empty exactly when the file already ends in one.
 set_env() {
   if grep -q "^$1=" .env; then
     sed -i.bak "s|^$1=.*|$1=$2|" .env && rm -f .env.bak
   else
+    if [ -s .env ] && [ -n "$(tail -c 1 .env)" ]; then
+      printf '\n' >> .env
+    fi
     printf '%s=%s\n' "$1" "$2" >> .env
   fi
   grep -q "^$1=$2\$" .env
