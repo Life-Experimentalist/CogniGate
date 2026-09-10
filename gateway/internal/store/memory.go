@@ -196,6 +196,9 @@ func (m *Memory) UpdateTenant(_ context.Context, id string, patch TenantPatch) (
 	if patch.DebugCapture != nil {
 		t.DebugCapture = *patch.DebugCapture
 	}
+	if patch.SystemInstruction != nil {
+		t.SystemInstruction = *patch.SystemInstruction
+	}
 	return cloneTenant(t), nil
 }
 

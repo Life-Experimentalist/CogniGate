@@ -42,6 +42,7 @@ not.
 | `CG_BILLING_MODE`            | `passthrough` \| `markup` \| `absorb`    |
 | `CG_BILLING_MARKUP_PCT`      | The percentage `markup` adds             |
 | `CG_BILLING_COST_VISIBILITY` | `exact` \| `hint`                        |
+| `CG_CHAT_SYSTEM_INSTRUCTION` | Text put in front of every prompt        |
 
 The analytics service is a separate process with its own configuration. It
 reads standard Spring properties:
@@ -196,6 +197,38 @@ routing:
 `max_fallback_depth` bounds how many providers one request may try. The breaker
 counts failures per provider: `error_threshold` of them inside `window` opens
 it, and it stays open for `open_duration` before a probe is allowed through.
+
+### System instructions
+
+```yaml
+chat:
+    system_instruction: ""
+```
+
+The one thing the gateway adds to a completion request. The text goes in front
+of every prompt as a system message, ahead of whatever the caller sent, and
+empty (the default) means nothing is added and the body reaches the provider as
+it arrived. `CG_CHAT_SYSTEM_INSTRUCTION` sets it from the environment, which is
+usually where it belongs: it is the value most likely to differ between two
+deployments of the same image.
+
+A tenant can be given its own text as well:
+
+```bash
+curl -X PATCH http://localhost:8080/admin/v1/tenants/ten_7f3a \
+  -H "Authorization: Bearer $COGNIGATE_ADMIN_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"system_instruction": "Never mention the weather."}'
+```
+
+Both are then sent as one system message, the deployment's text first, separated
+by a blank line. Neither is merged into a system message the caller wrote: that
+one still arrives after both, in the caller's own words.
+
+Read the billing line before switching this on. The injected text is prompt text
+like any other, so the provider counts its tokens and they land in `cost_usd` and
+in whatever the tenant is charged. A long instruction on high-volume traffic is a
+recurring cost, not a one-off.
 
 ### Debug capture
 

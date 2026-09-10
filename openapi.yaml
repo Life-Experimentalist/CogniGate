@@ -733,6 +733,12 @@ paths:
                     $ref: '#/components/schemas/TenantCache'
                   debug_capture:
                     $ref: '#/components/schemas/TenantDebugCapture'
+                  system_instruction:
+                    type: string
+                    description: 'Text put in front of every prompt this tenant sends, as
+                      a system message ahead of the caller''s own, after any the deployment
+                      configures. Empty means the tenant adds nothing. It is charged like
+                      any other prompt text: the provider counts its tokens.'
                   warnings:
                     type: array
                     items:
@@ -751,7 +757,7 @@ paths:
       operationId: updateTenant
       summary: Update a tenant.
       description: |
-        Requires a root key: a tenant may not lift its own limits or un-suspend itself. Absent and null are distinct: a body carrying only `status` leaves the name alone. `limits`, `cache` and `debug_capture` each replace their whole block rather than merging field by field, so an empty object clears every override — "send me the policy you want this tenant to have" is the only rule to remember.
+        Requires a root key: a tenant may not lift its own limits or un-suspend itself. Absent and null are distinct: a body carrying only `status` leaves the name alone. `limits`, `cache` and `debug_capture` each replace their whole block rather than merging field by field, so an empty object clears every override — "send me the policy you want this tenant to have" is the only rule to remember. `system_instruction` follows the same rule: an empty string is a value, and sets the tenant back to adding nothing.
       security:
       - AdminKey: []
       parameters:
@@ -782,6 +788,12 @@ paths:
                   $ref: '#/components/schemas/TenantCache'
                 debug_capture:
                   $ref: '#/components/schemas/TenantDebugCapture'
+                system_instruction:
+                  type: string
+                  description: 'Text put in front of every prompt this tenant sends, as a
+                    system message ahead of the caller''s own, after any the deployment configures.
+                    Empty means the tenant adds nothing. It is charged like any other prompt
+                    text: the provider counts its tokens.'
       responses:
         '200':
           description: The updated tenant.
@@ -3148,6 +3160,12 @@ components:
           $ref: '#/components/schemas/TenantCache'
         debug_capture:
           $ref: '#/components/schemas/TenantDebugCapture'
+        system_instruction:
+          type: string
+          description: 'Text put in front of every prompt this tenant sends, as a system message
+            ahead of the caller''s own, after any the deployment configures. Empty means the
+            tenant adds nothing. It is charged like any other prompt text: the provider counts
+            its tokens.'
     APIKey:
       type: object
       required:

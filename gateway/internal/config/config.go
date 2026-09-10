@@ -26,6 +26,7 @@ type Config struct {
 	Analytics Analytics `yaml:"analytics"`
 	Catalog   Catalog   `yaml:"catalog"`
 	Billing   Billing   `yaml:"billing"`
+	Chat      Chat      `yaml:"chat"`
 	Routing   Routing   `yaml:"routing"`
 	Quotas    Quotas    `yaml:"quotas"`
 	Limits    Limits    `yaml:"limits"`
@@ -166,6 +167,17 @@ func (b Billing) Charge(cost float64) float64 {
 	default:
 		return cost
 	}
+}
+
+// Chat is what the gateway may add to a completion request, and it is one
+// thing: a system instruction the operator wants in front of every prompt.
+// Empty by default, and empty is not a special case but the ordinary one, in
+// which the body reaches the provider exactly as it arrived.
+type Chat struct {
+	// SystemInstruction is prepended to every completion request as a system
+	// message, ahead of whatever the caller sent. A tenant may be given its
+	// own text as well, and then both are sent, this one first.
+	SystemInstruction string `yaml:"system_instruction"`
 }
 
 type Routing struct {
@@ -406,6 +418,7 @@ func applyEnv(cfg *Config) {
 		}
 	})
 	envStr("BILLING_COST_VISIBILITY", func(v string) { cfg.Billing.CostVisibility = v })
+	envStr("CHAT_SYSTEM_INSTRUCTION", func(v string) { cfg.Chat.SystemInstruction = v })
 	envStr("CACHE_ENABLED", func(v string) {
 		if b, err := strconv.ParseBool(v); err == nil {
 			cfg.Cache.Enabled = b

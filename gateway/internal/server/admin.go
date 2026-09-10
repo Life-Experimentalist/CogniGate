@@ -377,19 +377,21 @@ func (s *Server) updateTenant(c *fiber.Ctx) error {
 	id := param(c, "tenant")
 
 	var req struct {
-		Name         *string                   `json:"name"`
-		Status       *string                   `json:"status"`
-		Limits       *store.TenantLimits       `json:"limits"`
-		Cache        *store.TenantCache        `json:"cache"`
-		DebugCapture *store.TenantDebugCapture `json:"debug_capture"`
+		Name              *string                   `json:"name"`
+		Status            *string                   `json:"status"`
+		Limits            *store.TenantLimits       `json:"limits"`
+		Cache             *store.TenantCache        `json:"cache"`
+		DebugCapture      *store.TenantDebugCapture `json:"debug_capture"`
+		SystemInstruction *string                   `json:"system_instruction"`
 	}
 	if err := parse(c, &req); err != nil {
 		return httpx.Fail(c, err)
 	}
 	if req.Name == nil && req.Status == nil && req.Limits == nil &&
-		req.Cache == nil && req.DebugCapture == nil {
+		req.Cache == nil && req.DebugCapture == nil && req.SystemInstruction == nil {
 		return httpx.Fail(c, apierr.
-			InvalidRequest("A tenant update must change name, status, limits, cache or debug_capture."))
+			InvalidRequest("A tenant update must change name, status, limits, cache, "+
+				"debug_capture or system_instruction."))
 	}
 	if req.Status != nil {
 		switch *req.Status {
@@ -430,11 +432,12 @@ func (s *Server) updateTenant(c *fiber.Ctx) error {
 	}
 
 	tenant, err := s.Store.UpdateTenant(ctx, id, store.TenantPatch{
-		Name:         req.Name,
-		Status:       req.Status,
-		Limits:       req.Limits,
-		Cache:        req.Cache,
-		DebugCapture: req.DebugCapture,
+		Name:              req.Name,
+		Status:            req.Status,
+		Limits:            req.Limits,
+		Cache:             req.Cache,
+		DebugCapture:      req.DebugCapture,
+		SystemInstruction: req.SystemInstruction,
 	})
 	if err != nil {
 		return httpx.Fail(c, storeErr(err, "tenant", id))

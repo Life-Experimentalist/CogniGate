@@ -154,7 +154,7 @@ deployment's customer list by guessing ids.
 | `POST`   | `/admin/v1/tenants`         | Create — `root` only |
 | `GET`    | `/admin/v1/tenants`         | List                 |
 | `GET`    | `/admin/v1/tenants/{id}`    | Read one             |
-| `PATCH`  | `/admin/v1/tenants/{id}`    | Rename, suspend, set limits, cache and capture policy |
+| `PATCH`  | `/admin/v1/tenants/{id}`    | Rename, suspend, set limits, cache, capture and instruction policy |
 | `DELETE` | `/admin/v1/tenants/{id}`    | Delete               |
 
 ```bash
@@ -172,6 +172,12 @@ curl -X POST http://localhost:8080/admin/v1/tenants \
     "created_at": "2026-09-03T11:04:22Z"
 }
 ```
+
+`PATCH` also carries `system_instruction`: text this tenant's completion
+requests put in front of the caller's own messages, after whatever the
+deployment configures. An empty string is a value rather than an absent field,
+and sets the tenant back to adding nothing. It is charged like any other prompt
+text, because the provider counts its tokens.
 
 ### Under a tenant
 

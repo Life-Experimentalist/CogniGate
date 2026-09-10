@@ -696,10 +696,10 @@
                 }
               ]
             },
-            "description": "Requires a root key: a tenant may not lift its own limits or un-suspend itself. Absent and null are distinct: a body carrying only `status` leaves the name alone. `limits`, `cache` and `debug_capture` each replace their whole block rather than merging field by field, so an empty object clears every override — \"send me the policy you want this tenant to have\" is the only rule to remember.\n",
+            "description": "Requires a root key: a tenant may not lift its own limits or un-suspend itself. Absent and null are distinct: a body carrying only `status` leaves the name alone. `limits`, `cache` and `debug_capture` each replace their whole block rather than merging field by field, so an empty object clears every override — \"send me the policy you want this tenant to have\" is the only rule to remember. `system_instruction` follows the same rule: an empty string is a value, and sets the tenant back to adding nothing.\n",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"name\": \"<name>\",\n  \"status\": \"active\",\n  \"limits\": {\n    \"max_request_bytes\": 1,\n    \"request_timeout_seconds\": 1,\n    \"stream_idle_timeout_seconds\": 1,\n    \"max_concurrent_per_key\": 1,\n    \"requests_per_second\": 1,\n    \"burst_capacity\": 1,\n    \"requests_per_minute\": 1\n  },\n  \"cache\": {\n    \"enabled\": false,\n    \"ttl_seconds\": 1\n  },\n  \"debug_capture\": {\n    \"enabled\": false,\n    \"ttl_seconds\": 1,\n    \"sample_rate\": 0.0\n  }\n}",
+              "raw": "{\n  \"name\": \"<name>\",\n  \"status\": \"active\",\n  \"limits\": {\n    \"max_request_bytes\": 1,\n    \"request_timeout_seconds\": 1,\n    \"stream_idle_timeout_seconds\": 1,\n    \"max_concurrent_per_key\": 1,\n    \"requests_per_second\": 1,\n    \"burst_capacity\": 1,\n    \"requests_per_minute\": 1\n  },\n  \"cache\": {\n    \"enabled\": false,\n    \"ttl_seconds\": 1\n  },\n  \"debug_capture\": {\n    \"enabled\": false,\n    \"ttl_seconds\": 1,\n    \"sample_rate\": 0.0\n  },\n  \"system_instruction\": \"<system instruction>\"\n}",
               "options": {
                 "raw": {
                   "language": "json"

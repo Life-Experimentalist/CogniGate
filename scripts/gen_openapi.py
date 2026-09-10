@@ -548,6 +548,7 @@ SCHEMAS["Tenant"] = obj(
         ("limits", ref("TenantLimits")),
         ("cache", ref("TenantCache")),
         ("debug_capture", ref("TenantDebugCapture")),
+        ("system_instruction", p("string", "Text put in front of every prompt this tenant sends, as a system message ahead of the caller's own, after any the deployment configures. Empty means the tenant adds nothing. It is charged like any other prompt text: the provider counts its tokens.")),
     ],
     required=["id", "name", "status", "created_at", "limits", "cache", "debug_capture"],
 )
@@ -1239,6 +1240,7 @@ add("/admin/v1/tenants/{tenant}", "get", op(
              ("created_at", dt()),
              ("limits", ref("TenantLimits")), ("cache", ref("TenantCache")),
              ("debug_capture", ref("TenantDebugCapture")),
+             ("system_instruction", p("string", "Text put in front of every prompt this tenant sends, as a system message ahead of the caller's own, after any the deployment configures. Empty means the tenant adds nothing. It is charged like any other prompt text: the provider counts its tokens.")),
              ("warnings", arr(p("string")))],
             required=["id", "name", "status", "created_at"]))],
     ["Unauthorized", "Forbidden", "NotFound", "TooManyRequests"], ADMIN,
@@ -1251,7 +1253,9 @@ add("/admin/v1/tenants/{tenant}", "patch", op(
     "itself. Absent and null are distinct: a body carrying only `status` leaves the name "
     "alone. `limits`, `cache` and `debug_capture` each replace their whole block "
     "rather than merging field by field, so an empty object clears every override — "
-    "\"send me the policy you want this tenant to have\" is the only rule to remember.",
+    "\"send me the policy you want this tenant to have\" is the only rule to remember. "
+    "`system_instruction` follows the same rule: an empty string is a value, and sets "
+    "the tenant back to adding nothing.",
     [ok("The updated tenant.", ref("Tenant"))],
     ["BadRequest", "Unauthorized", "Forbidden", "NotFound", "TooManyRequests"], ADMIN,
     params=[TENANT_PARAM],
@@ -1259,7 +1263,8 @@ add("/admin/v1/tenants/{tenant}", "patch", op(
                    ("status", p("string", None, enum=["active", "suspended"])),
                    ("limits", ref("TenantLimits")),
                    ("cache", ref("TenantCache")),
-                   ("debug_capture", ref("TenantDebugCapture"))])),
+                   ("debug_capture", ref("TenantDebugCapture")),
+                   ("system_instruction", p("string", "Text put in front of every prompt this tenant sends, as a system message ahead of the caller's own, after any the deployment configures. Empty means the tenant adds nothing. It is charged like any other prompt text: the provider counts its tokens."))])),
     op_id="updateTenant"))
 
 add("/admin/v1/tenants/{tenant}", "delete", op(

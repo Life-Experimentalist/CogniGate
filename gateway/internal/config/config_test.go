@@ -109,6 +109,42 @@ func TestFileValuesOverrideDefaultsAndEnvironmentOverridesTheFile(t *testing.T) 
 	}
 }
 
+// The system instruction is the one value here that is prose rather than a
+// number, and the one an operator is most likely to set from the environment
+// rather than the file: it changes per deployment of the same image.
+func TestTheSystemInstructionComesFromTheFileAndTheEnvironmentOverridesIt(t *testing.T) {
+	path := t.TempDir() + "/cognigate.yml"
+	body := "chat:\n  system_instruction: \"from the file\"\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("writing the fixture: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Chat.SystemInstruction != "from the file" {
+		t.Errorf("system instruction = %q, want the file's", cfg.Chat.SystemInstruction)
+	}
+
+	t.Setenv("CG_CHAT_SYSTEM_INSTRUCTION", "from the environment")
+	cfg, err = Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Chat.SystemInstruction != "from the environment" {
+		t.Errorf("system instruction = %q, want the environment's", cfg.Chat.SystemInstruction)
+	}
+}
+
+// Nothing is added by default, and that is the property every existing
+// deployment depends on: the body it sends is the body the provider receives.
+func TestNoSystemInstructionByDefault(t *testing.T) {
+	if got := Default().Chat.SystemInstruction; got != "" {
+		t.Errorf("default system instruction = %q, want none", got)
+	}
+}
+
 func TestValidateRejectsAnUnknownEnforcementMode(t *testing.T) {
 	cfg := Default()
 	cfg.Quotas.Enforcement = "sometimes"

@@ -44,6 +44,10 @@ type Tenant struct {
 	// DebugCapture is this tenant's GW-14 capture policy. Off is the zero
 	// value, which is the only default the specification permits.
 	DebugCapture TenantDebugCapture `json:"debug_capture"`
+	// SystemInstruction is text this tenant's completion requests carry in
+	// front of the caller's own messages, after the deployment's own. Empty is
+	// the default and means the tenant adds nothing.
+	SystemInstruction string `json:"system_instruction,omitempty"`
 }
 
 // TenantDebugCapture is GW-14's one exception to the content ban: while it is
@@ -114,6 +118,10 @@ type TenantPatch struct {
 	Limits       *TenantLimits
 	Cache        *TenantCache
 	DebugCapture *TenantDebugCapture
+	// SystemInstruction is a pointer for the reason the rest are: empty is a
+	// value an operator sets deliberately, to take the tenant's own text away
+	// again, and it has to be distinguishable from not mentioning the field.
+	SystemInstruction *string
 }
 
 // APIKey stores only a hash. The plaintext is returned once, at creation, and

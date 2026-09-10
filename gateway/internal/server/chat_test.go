@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"reflect"
@@ -940,5 +941,210 @@ func TestAbsorbChargesNothingAndStillRecordsTheCost(t *testing.T) {
 	}
 	if totals.ChargeUSD != 0 {
 		t.Errorf("usage charge = %v, want 0 when the operator absorbs the bill", totals.ChargeUSD)
+	}
+}
+
+// --- system instructions ----------------------------------------------------
+
+// withInstruction is the deployment half of the feature: one text, put in front
+// of every prompt the gateway relays.
+func withInstruction(text string) func(*config.Config) {
+	return func(c *config.Config) { c.Chat.SystemInstruction = text }
+}
+
+// captureUpstreamBody answers every call successfully and keeps the bytes the
+// provider was handed. That body is the only place an injected instruction is
+// observable: the gateway does not echo the request back, and GW-14 keeps it
+// out of every log and record.
+func captureUpstreamBody(h *harness, res func() *provider.Response) *[]byte {
+	var sent []byte
+	h.adapter.do = func(_ context.Context, _ provider.Credential, req *provider.Request) (*provider.Response, error) {
+		sent = append([]byte(nil), req.Body...)
+		return res(), nil
+	}
+	return &sent
+}
+
+func upstreamMessages(t *testing.T, body []byte) []map[string]any {
+	t.Helper()
+	var doc struct {
+		Messages []map[string]any `json:"messages"`
+	}
+	if err := json.Unmarshal(body, &doc); err != nil {
+		t.Fatalf("the upstream body is not JSON: %v (body %s)", err, body)
+	}
+	return doc.Messages
+}
+
+// setSystemInstruction is the per-tenant half, and asserts the read-back: a
+// value that could be set but not seen again would be a configuration an
+// operator has to remember rather than look up.
+func (h *harness) setSystemInstruction(tenantID, text string) {
+	h.t.Helper()
+
+	res := h.do(http.MethodPatch, "/admin/v1/tenants/"+tenantID, testBootstrapKey,
+		map[string]any{"system_instruction": text})
+	if res.status != http.StatusOK {
+		h.t.Fatalf("setting the system instruction: status %d, body %s", res.status, res.body)
+	}
+	var out store.Tenant
+	res.decode(h.t, &out)
+	if out.SystemInstruction != text {
+		h.t.Fatalf("system_instruction read back as %q, want %q", out.SystemInstruction, text)
+	}
+}
+
+// The default is that the gateway adds nothing, which is what every deployment
+// running today depends on: the messages the provider sees are the caller's,
+// in the caller's order, and there are no others.
+func TestNothingIsAddedWhenNoInstructionIsConfigured(t *testing.T) {
+	h := newHarness(t)
+	tenant := h.routeTenant("acme")
+	sent := captureUpstreamBody(h, func() *provider.Response { return upstreamOK(10, 5) })
+
+	if res := h.chat(tenant, chatRequest("test-small", false), nil); res.status != http.StatusOK {
+		t.Fatalf("status = %d, body %s", res.status, res.body)
+	}
+
+	msgs := upstreamMessages(t, *sent)
+	if len(msgs) != 1 {
+		t.Fatalf("upstream messages = %v, want the caller's one message and nothing else", msgs)
+	}
+	if msgs[0]["role"] != "user" || msgs[0]["content"] != "ping" {
+		t.Errorf("upstream message = %v, want the caller's own", msgs[0])
+	}
+}
+
+func TestTheDeploymentInstructionArrivesAheadOfTheCallersMessages(t *testing.T) {
+	h := newHarness(t, withInstruction("Answer in French."))
+	tenant := h.routeTenant("acme")
+	sent := captureUpstreamBody(h, func() *provider.Response { return upstreamOK(10, 5) })
+
+	if res := h.chat(tenant, chatRequest("test-small", false), nil); res.status != http.StatusOK {
+		t.Fatalf("status = %d, body %s", res.status, res.body)
+	}
+
+	msgs := upstreamMessages(t, *sent)
+	if len(msgs) != 2 {
+		t.Fatalf("upstream messages = %v, want the instruction and the caller's message", msgs)
+	}
+	if msgs[0]["role"] != "system" || msgs[0]["content"] != "Answer in French." {
+		t.Errorf("first message = %v, want the configured system instruction", msgs[0])
+	}
+	if msgs[1]["role"] != "user" || msgs[1]["content"] != "ping" {
+		t.Errorf("second message = %v, want the caller's own, unchanged", msgs[1])
+	}
+}
+
+// Both texts are sent, the deployment's first, and as one message rather than
+// two: the caller's own system message, if it sends one, still follows both, so
+// the order an operator configured is the order the provider reads.
+func TestTheTenantInstructionFollowsTheDeploymentsInOneMessage(t *testing.T) {
+	h := newHarness(t, withInstruction("Answer in French."))
+	tenant := h.routeTenant("acme")
+	h.setSystemInstruction(tenant.id, "Never mention the weather.")
+	sent := captureUpstreamBody(h, func() *provider.Response { return upstreamOK(10, 5) })
+
+	body := chatRequest("test-small", false)
+	body["messages"] = []map[string]string{
+		{"role": "system", "content": "You are terse."},
+		{"role": "user", "content": "ping"},
+	}
+	if res := h.chat(tenant, body, nil); res.status != http.StatusOK {
+		t.Fatalf("status = %d, body %s", res.status, res.body)
+	}
+
+	msgs := upstreamMessages(t, *sent)
+	if len(msgs) != 3 {
+		t.Fatalf("upstream messages = %v, want one injected and the caller's two", msgs)
+	}
+	const want = "Answer in French.\n\nNever mention the weather."
+	if msgs[0]["content"] != want {
+		t.Errorf("first message content = %q, want %q", msgs[0]["content"], want)
+	}
+	if msgs[1]["content"] != "You are terse." {
+		t.Errorf("the caller's own system message was not left alone: %v", msgs[1])
+	}
+}
+
+// A tenant is given its own text and then has it taken away again. Empty is a
+// value here, not an absent field, which is the whole reason the patch field is
+// a pointer.
+func TestClearingTheTenantInstructionLeavesTheDeploymentsInPlace(t *testing.T) {
+	h := newHarness(t, withInstruction("Answer in French."))
+	tenant := h.routeTenant("acme")
+	h.setSystemInstruction(tenant.id, "Never mention the weather.")
+	h.setSystemInstruction(tenant.id, "")
+	sent := captureUpstreamBody(h, func() *provider.Response { return upstreamOK(10, 5) })
+
+	if res := h.chat(tenant, chatRequest("test-small", false), nil); res.status != http.StatusOK {
+		t.Fatalf("status = %d, body %s", res.status, res.body)
+	}
+
+	msgs := upstreamMessages(t, *sent)
+	if len(msgs) != 2 || msgs[0]["content"] != "Answer in French." {
+		t.Fatalf("upstream messages = %v, want the deployment's instruction alone", msgs)
+	}
+}
+
+// A streamed request is rewritten the same way. It is a separate path through
+// the handler, and an instruction that applied to buffered traffic only would be
+// a policy a caller could opt out of by asking for a stream.
+func TestTheInstructionReachesAStreamedRequestToo(t *testing.T) {
+	h := newHarness(t, withInstruction("Answer in French."))
+	tenant := h.routeTenant("acme")
+	sent := captureUpstreamBody(h, upstreamStream)
+
+	if res := h.chat(tenant, chatRequest("test-small", true), nil); res.status != http.StatusOK {
+		t.Fatalf("status = %d, body %s", res.status, res.body)
+	}
+
+	msgs := upstreamMessages(t, *sent)
+	if len(msgs) != 2 || msgs[0]["role"] != "system" {
+		t.Fatalf("upstream messages = %v, want the instruction in front", msgs)
+	}
+}
+
+// A body the gateway cannot rewrite is sent as it arrived. The provider is
+// entitled to refuse it in its own words, and a gateway that invented a 400 here
+// would be refusing requests an upstream might have answered.
+func TestABodyWithoutMessagesIsRelayedRatherThanRefused(t *testing.T) {
+	h := newHarness(t, withInstruction("Answer in French."))
+	tenant := h.routeTenant("acme")
+	sent := captureUpstreamBody(h, func() *provider.Response { return upstreamOK(10, 5) })
+
+	res := h.chat(tenant, map[string]any{"model": "test-small"}, nil)
+	if res.status != http.StatusOK {
+		t.Fatalf("status = %d, want the request relayed; body %s", res.status, res.body)
+	}
+	if msgs := upstreamMessages(t, *sent); msgs != nil {
+		t.Errorf("upstream messages = %v, want none invented", msgs)
+	}
+}
+
+// The cache key is computed from the body as it will be sent, so changing what
+// is put in front of a prompt cannot serve an answer produced under the old
+// text. The alternative is worse than a stale answer: it is an answer to a
+// different instruction, indistinguishable from a correct one.
+func TestChangingATenantInstructionDoesNotReplayTheOldAnswer(t *testing.T) {
+	h := newHarness(t, cachingOn)
+	tenant := h.routeTenant("acme")
+	upstream := numberedUpstream(h)
+
+	body := deterministicRequest("test-small")
+	if got := h.chat(tenant, body, prefer).header.Get(httpx.HeaderCache); got != cacheMiss {
+		t.Fatalf("first request = %q, want %q", got, cacheMiss)
+	}
+	if got := h.chat(tenant, body, prefer).header.Get(httpx.HeaderCache); got != cacheHit {
+		t.Fatalf("second request = %q, want %q", got, cacheHit)
+	}
+
+	h.setSystemInstruction(tenant.id, "Answer in French.")
+
+	if got := h.chat(tenant, body, prefer).header.Get(httpx.HeaderCache); got != cacheMiss {
+		t.Errorf("after the instruction changed = %q, want %q", got, cacheMiss)
+	}
+	if n := upstream.Load(); n != 2 {
+		t.Errorf("upstream calls = %d, want 2: one for each instruction", n)
 	}
 }

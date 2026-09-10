@@ -93,6 +93,19 @@ billing:
   # rounded: it is what the tenant owes.
   cost_visibility: exact
 
+# The one thing the gateway adds to a completion request. Everything else is
+# relayed to the provider exactly as it arrived.
+chat:
+  # Text put in front of every prompt as a system message, ahead of whatever
+  # the caller sent. Empty, the default, means nothing is added and the request
+  # goes out byte for byte. A tenant can be given its own text as well with
+  # PATCH /admin/v1/tenants/{id} {"system_instruction": "..."}, and then both
+  # are sent, this one first.
+  #
+  # It is charged like any other prompt text: the tokens are counted by the
+  # provider, so they land in cost_usd and in whatever the tenant is charged.
+  system_instruction: ""
+
 routing:
   # How many providers a single request may fall through before giving up.
   max_fallback_depth: 5

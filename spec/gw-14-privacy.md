@@ -35,6 +35,19 @@ deliver none of them.
   analytics beyond what proxying strictly requires (JSON framing, token
   accounting via provider-reported `usage`, SSE re-framing).
 
+A deployment may configure a system instruction, and where one is set the
+relay invariant reads "relayed as it arrived unless a system instruction is
+configured". The gateway then puts the operator's text at the front of the
+request's `messages` as one system message, ahead of any the caller wrote.
+That is framing, which the last bullet allows, and not inspection: the
+caller's messages are moved as raw JSON, none of them is read, and nothing
+in them changes the text that goes in front or whether it goes in at all. A
+body whose `messages` cannot be re-framed is forwarded exactly as it arrived.
+Nothing here is persisted, logged or emitted that was not before, and with no
+instruction configured, the default, nothing is added at all. The tokens the
+text costs are counted by the provider like any other prompt text, so they
+reach `cost_usd` through the same `usage` figures.
+
 ### Debug capture (the one exception, off by default)
 
 - A deployment MAY enable **debug capture** per tenant via GW-6:

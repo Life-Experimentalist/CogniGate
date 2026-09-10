@@ -124,6 +124,30 @@ The first release has not been cut. Everything below is the state of `main`.
   absolute date. A provider that sends no `Retry-After` rotates as before, and
   a pool whose keys are all inside a window is still tried.
 
+- **A system instruction the gateway puts in front of every prompt.** Set
+  `chat.system_instruction` (or `CG_CHAT_SYSTEM_INSTRUCTION`) and the text is
+  sent as a system message ahead of whatever the caller sent. A tenant can be
+  given its own with `PATCH /admin/v1/tenants/{id}`, and then both are sent as
+  one message, the deployment's text first; an empty string there is a value
+  and takes the tenant's own text away again.
+
+  ```yaml
+  chat:
+    system_instruction: ""
+  ```
+
+  Neither text is merged into a system message the caller wrote, which still
+  arrives after both and unchanged. Empty is the default and nothing is added,
+  so existing deployments send the same bytes they sent before. A body whose
+  `messages` the gateway cannot re-frame is forwarded as it arrived rather than
+  refused. The cache key is computed from the body as it will be sent, so
+  changing an instruction cannot serve back an answer produced under the old
+  one.
+
+  It costs money to switch on: the injected text is prompt text, the provider
+  counts its tokens, and they land in `cost_usd` and in whatever the tenant is
+  charged.
+
 - **Dynamic model discovery (GW-1).** Per-tenant catalogues refreshed from each
   configured provider, served at `GET /v1/models`, with a stale-catalogue
   warning rather than a hard failure when a provider stops answering.

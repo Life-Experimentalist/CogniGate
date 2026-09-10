@@ -221,6 +221,18 @@ quota: `requests` is a quota unit beside `tokens` and `cost`, set per window as
 request refused by a rate limit, a quota or the concurrency cap writes no usage
 row.
 
+**The gateway adds one thing to a completion request, and only when asked for.**
+`chat.system_instruction`, or `CG_CHAT_SYSTEM_INSTRUCTION`, is text put in front
+of every prompt as a system message; a tenant can be given its own through
+`PATCH /admin/v1/tenants/{id}` with `{"system_instruction": "..."}`. Both are
+sent as one message, the deployment's text first, ahead of any system message
+the caller wrote rather than merged into it. Empty is the default and means the
+body reaches the provider as it arrived. The text is priced like any other
+prompt text: the provider counts its tokens, so it lands in `cost_usd` and in
+the charge. A body whose `messages` the gateway cannot re-frame is forwarded
+untouched rather than refused, because the provider is entitled to answer or
+reject it in its own words.
+
 ## 7. Behaviours users misread as bugs
 
 - **A restart loses all configuration.** Tenants, keys, providers, aliases,

@@ -25,12 +25,18 @@ import (
 	"github.com/cognigate/gateway/internal/store"
 )
 
-// chatEnvelope is the only part of a completion request the gateway parses.
+// chatEnvelope is the only part of a completion request the gateway reads in
+// order to decide anything.
 //
-// Everything else — messages, tools, provider extensions — is forwarded byte
-// for byte. Reading a field here never removes it from what the upstream
-// receives; the request is relayed from the original bytes, and this struct is
-// only how the gateway learns what it must decide.
+// Everything else, messages, tools, provider extensions, is forwarded unread.
+// Reading a field here never removes it from what the upstream receives, and
+// this struct is only how the gateway learns what it must decide.
+//
+// Two things are rewritten on the way out, and both are structural: the
+// dispatcher substitutes the resolved model id (routing.withModel), and a
+// configured system instruction is put in front of the messages
+// (prependSystem). Neither reads a word the caller wrote, and with no
+// instruction configured the second does nothing at all.
 //
 // Routing needs the model and whether the caller wants a stream. The three
 // sampling parameters are here for GW-12's eligibility rule and nothing else:
@@ -113,6 +119,9 @@ func (s *Server) handleChatCompletions(c *fiber.Ctx) error {
 	// The body is copied because fasthttp reuses its buffer once the handler
 	// returns, and a streamed response outlives the handler.
 	payload := append([]byte(nil), body...)
+	if rewritten := prependSystem(payload, s.systemInstruction(c)); rewritten != nil {
+		payload = rewritten
+	}
 
 	plan := s.planCache(c, env)
 	if plan.header != "" {
@@ -123,6 +132,67 @@ func (s *Server) handleChatCompletions(c *fiber.Ctx) error {
 		return s.streamCompletion(c, tenantID, env.Model, payload)
 	}
 	return s.completion(c, tenantID, env.Model, payload, plan)
+}
+
+// systemInstruction is what this request should carry in front of whatever the
+// caller wrote: the deployment's text, then the tenant's, joined by a blank
+// line. Either may be empty, and both usually are.
+func (s *Server) systemInstruction(c *fiber.Ctx) string {
+	dep := s.Config.Chat.SystemInstruction
+	var own string
+	if t := httpx.Tenant(c); t != nil {
+		own = t.SystemInstruction
+	}
+	switch {
+	case dep == "":
+		return own
+	case own == "":
+		return dep
+	}
+	return dep + "\n\n" + own
+}
+
+// prependSystem puts one system message at the front of the request's messages
+// and returns the rewritten body, or nil to say "send what arrived".
+//
+// This is the one place the gateway does not relay a completion request byte
+// for byte, and it does it without reading a word of what the caller wrote: the
+// messages are moved as raw JSON, so the operator's text goes in front of them
+// and nothing else about them is looked at. GW-14 puts content out of bounds for
+// routing, moderation and analytics; framing is not one of those, and it is what
+// this does.
+//
+// Nil on anything unexpected. A body without a usable `messages` array is one
+// the provider is entitled to reject in its own words, and a gateway that
+// invented a 400 here would be refusing requests an upstream would have
+// answered.
+func prependSystem(body []byte, text string) []byte {
+	if text == "" {
+		return nil
+	}
+	var doc map[string]json.RawMessage
+	if err := json.Unmarshal(body, &doc); err != nil {
+		return nil
+	}
+	var msgs []json.RawMessage
+	if err := json.Unmarshal(doc["messages"], &msgs); err != nil {
+		return nil
+	}
+	content, err := json.Marshal(text)
+	if err != nil {
+		return nil
+	}
+	head := json.RawMessage(`{"role":"system","content":` + string(content) + `}`)
+	joined, err := json.Marshal(append([]json.RawMessage{head}, msgs...))
+	if err != nil {
+		return nil
+	}
+	doc["messages"] = joined
+	out, err := json.Marshal(doc)
+	if err != nil {
+		return nil
+	}
+	return out
 }
 
 // completion serves a buffered chat completion, from the cache when GW-12 says
