@@ -332,7 +332,7 @@ func (l *rateLimiter) take(id string, rps, burst, rpm int) (time.Duration, bool)
 	now := l.now()
 	b, ok := l.buckets[id]
 	if !ok {
-		b = &bucket{tokens: float64(burst), minuteStart: now}
+		b = &bucket{tokens: float64(burst), minuteStart: now, last: now}
 		l.buckets[id] = b
 		if len(l.buckets) > sweepAbove {
 			l.sweep(now, rps, burst)
