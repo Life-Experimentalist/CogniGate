@@ -550,6 +550,7 @@ func (s *Server) record(
 		FallbackDepth:   result.Depth,
 		CostUSD:         cost,
 		ChargeUSD:       charge,
+		BillingMode:     s.Config.Billing.Mode,
 		Streamed:        streamed,
 		StatusCode:      status,
 		DurationMS:      elapsed.Milliseconds(),

@@ -32,6 +32,7 @@ public record UsageRecordRequest(
         @JsonProperty("total_tokens") int totalTokens,
         @JsonProperty("cost_usd") BigDecimal costUsd,
         @JsonProperty("charge_usd") BigDecimal chargeUsd,
+        @JsonProperty("billing_mode") String billingMode,
         @JsonProperty("cached") boolean cached,
         @JsonProperty("streamed") boolean streamed,
         @JsonProperty("status_code") int statusCode,

@@ -226,6 +226,14 @@ type usageResponse struct {
 	Limits []usageLimit `json:"limits"`
 }
 
+// tenantCost applies billing.cost_visibility to one figure. Under the default
+// it is the identity; under "hint" the cost is coarsened to one significant
+// figure so the exact charge beside it cannot be divided into it. It is used on
+// the data plane only: the admin plane and the stored row stay exact.
+func (s *Server) tenantCost(v float64) float64 {
+	return s.Config.Billing.TenantCost(v)
+}
+
 func (s *Server) handleUsage(c *fiber.Ctx) error {
 	window, since, until, err := usageWindow(c)
 	if err != nil {
@@ -249,6 +257,8 @@ func (s *Server) handleUsage(c *fiber.Ctx) error {
 		return httpx.Fail(c, apierr.From(err))
 	}
 
+	totals.CostUSD = s.tenantCost(totals.CostUSD)
+
 	resp := usageResponse{
 		Object:      "usage",
 		Window:      window,
@@ -268,7 +278,17 @@ func (s *Server) handleUsage(c *fiber.Ctx) error {
 		if p.keyLevel {
 			scope = "key"
 		}
-		remaining := p.cap - p.used
+		// A cost cap is reported at whatever precision billing.cost_visibility
+		// allows, and Remaining is derived from that rather than from the exact
+		// figure: the tenant knows its own cap, so an exact remainder would
+		// subtract straight back to the consumption the hint is meant to blur.
+		// State is unaffected: it is computed from the exact position, because
+		// what stops traffic must not depend on how it is displayed.
+		used := p.used
+		if p.unit == unitCost {
+			used = s.tenantCost(used)
+		}
+		remaining := p.cap - used
 		if remaining < 0 {
 			remaining = 0
 		}
@@ -278,7 +298,7 @@ func (s *Server) handleUsage(c *fiber.Ctx) error {
 			Unit:             p.unit,
 			Cap:              p.cap,
 			SoftThresholdPct: p.softPct,
-			Consumed:         p.used,
+			Consumed:         used,
 			Remaining:        remaining,
 			ResetsAt:         p.resetsAt.Format(time.RFC3339),
 			State:            p.state,
@@ -337,6 +357,12 @@ func (s *Server) handleUsageBreakdown(c *fiber.Ctx) error {
 	truncated := len(buckets) > maxBreakdownBuckets
 	if truncated {
 		buckets = buckets[:maxBreakdownBuckets]
+	}
+	// Ordering is by exact spend and stays that way; only the reported figure
+	// is coarsened, so two buckets that round to the same hint still appear in
+	// the order they actually cost.
+	for i := range buckets {
+		buckets[i].CostUSD = s.tenantCost(buckets[i].CostUSD)
 	}
 	return c.JSON(breakdownResponse{
 		Object:    "usage_breakdown",

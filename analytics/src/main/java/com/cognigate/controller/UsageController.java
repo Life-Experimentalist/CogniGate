@@ -136,6 +136,9 @@ public class UsageController {
         // A sender that omits the charge is one that predates the field, and it
         // was billing the provider rate, so the cost is the charge.
         metric.setChargeUsd(r.chargeUsd() == null ? metric.getCostUsd() : r.chargeUsd());
+        // Likewise: no mode named means the row came from a sender that had only
+        // one, and that one charged the provider rate.
+        metric.setBillingMode(isBlank(r.billingMode()) ? "passthrough" : r.billingMode());
         metric.setCached(r.cached());
         metric.setStreamed(r.streamed());
         metric.setStatusCode(r.statusCode());

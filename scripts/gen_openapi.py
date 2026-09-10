@@ -299,7 +299,10 @@ TOTALS = [
     ("cost_usd", p("number", "What the traffic cost at the provider's published rate. "
                              "Zero for a model whose listing publishes no price and whose "
                              "rate the operator has not supplied. This is the figure cost "
-                             "quotas are measured against.")),
+                             "quotas are measured against. A deployment that sets "
+                             "`billing.cost_visibility: hint` rounds it to one significant "
+                             "figure on the data plane; the admin plane and the stored row "
+                             "are always exact.")),
     ("charge_usd", p("number", "What is owed for the traffic. Equal to `cost_usd` unless "
                                "the operator has put a margin on the provider rate, or is "
                                "carrying the bill themselves, in which case it is zero.")),
@@ -314,8 +317,11 @@ SCHEMAS["UsageLimit"] = obj(
         ("unit", p("string", None, enum=["tokens", "cost"])),
         ("cap", p("number")),
         ("soft_threshold_pct", p("integer")),
-        ("consumed", p("number")),
-        ("remaining", p("number")),
+        ("consumed", p("number", "Consumption in this slot's own unit. A cost slot "
+                                 "follows `billing.cost_visibility`, so it can be a "
+                                 "rounded figure on the data plane.")),
+        ("remaining", p("number", "`cap` minus `consumed`, floored at zero, so the two "
+                                  "always sum to the cap as reported.")),
         ("resets_at", dt()),
         ("state", p("string", None, enum=["ok", "soft-exceeded", "hard-exceeded"])),
     ],
@@ -323,21 +329,33 @@ SCHEMAS["UsageLimit"] = obj(
               "remaining", "resets_at", "state"],
 )
 
-SCHEMAS["UsageResponse"] = obj(
-    [
-        ("object", p("string", None, const="usage")),
-        ("window", p("string", None, enum=["day", "month"])),
-        ("since", dt()),
-        ("until", dt()),
-    ] + TOTALS + [
-        ("state", p("string", "The worst state across `limits`.",
-                    enum=["ok", "soft-exceeded", "hard-exceeded"])),
-        ("limits", arr(ref("UsageLimit"),
-                       "Every quota slot that applies, tenant and key alike. Empty "
-                       "when nothing is capped.")),
+USAGE_PROPS = [
+    ("object", p("string", None, const="usage")),
+    ("window", p("string", None, enum=["day", "month"])),
+    ("since", dt()),
+    ("until", dt()),
+] + TOTALS + [
+    ("state", p("string", "The worst state across `limits`.",
+                enum=["ok", "soft-exceeded", "hard-exceeded"])),
+    ("limits", arr(ref("UsageLimit"),
+                   "Every quota slot that applies, tenant and key alike. Empty "
+                   "when nothing is capped.")),
+]
+USAGE_REQUIRED = ["object", "window", "since", "until", "state",
+                  "limits"] + TOTALS_REQUIRED
+
+SCHEMAS["UsageResponse"] = obj(USAGE_PROPS, required=USAGE_REQUIRED)
+
+# The operator's view of the same aggregate. It differs by the one field a
+# tenant has no business reading: what the deployment kept on top of the
+# provider rate.
+SCHEMAS["AdminUsageResponse"] = obj(
+    USAGE_PROPS + [
+        ("margin_usd", p("number", "`charge_usd` minus `cost_usd`, quantised to eight "
+                                   "decimal places. Zero under `passthrough`, negative "
+                                   "under `absorb`.")),
     ],
-    required=["object", "window", "since", "until", "state",
-              "limits"] + TOTALS_REQUIRED,
+    required=USAGE_REQUIRED + ["margin_usd"],
 )
 
 SCHEMAS["UsageBucket"] = obj(
@@ -1540,8 +1558,9 @@ add("/admin/v1/tenants/{tenant}/usage", "get", op(
     "Usage",
     "Usage and quota state for one tenant.",
     "The admin-plane view of `GET /v1/usage`, for an operator who holds no data key "
-    "for the tenant.",
-    [ok("Totals and every quota slot that applies.", ref("UsageResponse"))],
+    "for the tenant. Money figures are exact here whatever `billing.cost_visibility` "
+    "publishes to the tenant, and the margin is reported.",
+    [ok("Totals and the margin they imply.", ref("AdminUsageResponse"))],
     ["BadRequest", "Unauthorized", "Forbidden", "NotFound", "TooManyRequests"], ADMIN,
     params=[TENANT_PARAM, WINDOW_PARAM], op_id="getTenantUsage"))
 

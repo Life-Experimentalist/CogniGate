@@ -179,6 +179,49 @@ func TestNoRateMeansNoChargeInEveryMode(t *testing.T) {
 	}
 }
 
+// The default has to publish the figure the gateway actually computed. A
+// deployment that never heard of cost_visibility reports cost exactly.
+func TestDefaultCostVisibilityIsExact(t *testing.T) {
+	if got := Default().Billing.TenantCost(1.8734); got != 1.8734 {
+		t.Errorf("tenant cost = %v, want the exact figure under the default", got)
+	}
+}
+
+func TestHintRoundsToOneSignificantFigure(t *testing.T) {
+	b := Billing{Mode: BillingMarkup, MarkupPct: 15, CostVisibility: CostHint}
+	for _, tc := range []struct {
+		cost float64
+		want float64
+	}{
+		{1.8734, 2},
+		{0.0018734, 0.002},
+		{14.2, 10},
+		{0, 0},
+	} {
+		if got := b.TenantCost(tc.cost); got != tc.want {
+			t.Errorf("hint of %v = %v, want %v", tc.cost, got, tc.want)
+		}
+	}
+}
+
+// The hint blurs what the traffic cost the operator. It must never touch what
+// the tenant owes: a figure someone is billed on cannot be approximate.
+func TestHintDoesNotChangeTheCharge(t *testing.T) {
+	b := Billing{Mode: BillingMarkup, MarkupPct: 15, CostVisibility: CostHint}
+	if got := b.Charge(1.8734); got != 1.8734*1.15 {
+		t.Errorf("charge = %v, want the exact charge regardless of cost visibility", got)
+	}
+}
+
+func TestValidateRejectsAnUnknownCostVisibility(t *testing.T) {
+	cfg := Default()
+	cfg.Billing.CostVisibility = "vague"
+
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("an unknown billing.cost_visibility was accepted")
+	}
+}
+
 func TestValidateRejectsAnUnknownBillingMode(t *testing.T) {
 	cfg := Default()
 	cfg.Billing.Mode = "commission"

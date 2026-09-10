@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"github.com/cognigate/gateway/internal/config"
 	"github.com/cognigate/gateway/internal/httpx"
 	"github.com/cognigate/gateway/internal/routing"
+	"github.com/cognigate/gateway/internal/store"
 )
 
 // --- GW-6 two-plane authentication ------------------------------------------
@@ -490,6 +492,108 @@ func TestUsageBreakdownGroupBy(t *testing.T) {
 
 	res := h.do(http.MethodGet, "/v1/usage/breakdown?group_by=colour", tenant.dataKey, nil)
 	h.expectError(res, http.StatusBadRequest, apierr.CodeInvalidRequest)
+}
+
+// billingHarness is a markup deployment that publishes cost as a hint, with one
+// recorded request behind it: $1.8734 of provider cost charged on at 15%.
+func billingHarness(t *testing.T, visibility string) (*harness, tenantFixture) {
+	t.Helper()
+
+	h := newHarness(t, func(c *config.Config) {
+		c.Billing.Mode = config.BillingMarkup
+		c.Billing.MarkupPct = 15
+		c.Billing.CostVisibility = visibility
+	})
+	tenant := h.newTenant("acme")
+	err := h.mem.RecordUsage(context.Background(), &store.UsageRecord{
+		RequestID:   store.NewID(store.IDRequest),
+		TenantID:    tenant.id,
+		KeyPrefix:   "cg-testkey",
+		Provider:    "test",
+		Model:       "test-small",
+		TotalTokens: 1000,
+		CostUSD:     1.8734,
+		ChargeUSD:   2.1544,
+		BillingMode: config.BillingMarkup,
+		StatusCode:  http.StatusOK,
+		RecordedAt:  time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("recording usage: %v", err)
+	}
+	return h, tenant
+}
+
+// Under the hint the tenant sees roughly what its traffic cost and exactly
+// what it owes, which is the pair that makes the margin underivable. Dividing
+// 2.1544 by a cost of 2 gives no useful answer about the 15%.
+func TestCostHintCoarsensTheTenantPlane(t *testing.T) {
+	h, tenant := billingHarness(t, config.CostHint)
+
+	var out usageResponse
+	h.do(http.MethodGet, "/v1/usage", tenant.dataKey, nil).decode(t, &out)
+	if out.CostUSD != 2 {
+		t.Errorf("cost_usd = %v, want the 1-significant-figure hint 2", out.CostUSD)
+	}
+	if out.ChargeUSD != 2.1544 {
+		t.Errorf("charge_usd = %v, want the exact charge 2.1544", out.ChargeUSD)
+	}
+
+	var bd breakdownResponse
+	h.do(http.MethodGet, "/v1/usage/breakdown", tenant.dataKey, nil).decode(t, &bd)
+	if len(bd.Data) != 1 {
+		t.Fatalf("breakdown returned %d buckets, want 1", len(bd.Data))
+	}
+	if bd.Data[0].CostUSD != 2 {
+		t.Errorf("bucket cost_usd = %v, want the hint 2", bd.Data[0].CostUSD)
+	}
+}
+
+// The operator is the one who needs the real numbers, and the one entitled to
+// the margin. The admin plane is exact whatever the tenant plane publishes.
+func TestAdminUsageStaysExactAndCarriesTheMargin(t *testing.T) {
+	h, tenant := billingHarness(t, config.CostHint)
+
+	var out adminUsageResponse
+	h.do(http.MethodGet, "/admin/v1/tenants/"+tenant.id+"/usage", tenant.adminKey, nil).
+		decode(t, &out)
+	if out.CostUSD != 1.8734 {
+		t.Errorf("admin cost_usd = %v, want the exact 1.8734", out.CostUSD)
+	}
+	if out.MarginUSD != 0.281 {
+		t.Errorf("margin_usd = %v, want 0.281", out.MarginUSD)
+	}
+}
+
+// A cap the tenant already knows plus an exact remainder is the exact
+// consumption again, so the remainder is derived from the hint. The state is
+// not: what stops traffic is computed from the real position.
+func TestCostHintDerivesRemainingFromTheHint(t *testing.T) {
+	h, tenant := billingHarness(t, config.CostHint)
+	res := h.do(http.MethodPut, "/admin/v1/tenants/"+tenant.id+"/quota", tenant.adminKey,
+		map[string]any{"month": map[string]any{"cost": map[string]any{"cap": 10}}})
+	if res.status != http.StatusOK {
+		t.Fatalf("setting a quota: status %d, body %s", res.status, res.body)
+	}
+
+	var out usageResponse
+	h.do(http.MethodGet, "/v1/usage?window=month", tenant.dataKey, nil).decode(t, &out)
+	var cost *usageLimit
+	for i := range out.Limits {
+		if out.Limits[i].Unit == unitCost {
+			cost = &out.Limits[i]
+		}
+	}
+	if cost == nil {
+		t.Fatal("the cost cap is missing from /v1/usage")
+	}
+	if cost.Consumed != 2 {
+		t.Errorf("consumed = %v, want the hint 2", cost.Consumed)
+	}
+	if cost.Remaining != 8 {
+		t.Errorf("remaining = %v, want 8 so that cap minus remaining is the hint",
+			cost.Remaining)
+	}
 }
 
 // TestUsageIsTenantIsolated guards the number a customer is billed on.

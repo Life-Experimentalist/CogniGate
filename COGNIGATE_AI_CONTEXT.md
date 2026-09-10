@@ -183,7 +183,8 @@ The gateway itself reads `cognigate.config.yml`. Environment beats file, file
 beats defaults, and these override individual settings — each is also read
 without the `CG_` prefix: `CG_PORT`, `CG_ADMIN_BOOTSTRAP_KEY`,
 `CG_ANALYTICS_URL`, `CG_ANALYTICS_TOKEN`, `CG_METRICS_TOKEN`, `CG_LOG_LEVEL`,
-`CG_QUOTA_ENFORCEMENT` (`on` | `observe`), `CG_CACHE_ENABLED`.
+`CG_QUOTA_ENFORCEMENT` (`on` | `observe`), `CG_CACHE_ENABLED`,
+`CG_BILLING_MODE`, `CG_BILLING_MARKUP_PCT`, `CG_BILLING_COST_VISIBILITY`.
 
 `cognigate.config.yml` is the authoritative list and is commented. Read it
 rather than trusting a remembered key name.
@@ -194,6 +195,19 @@ adds `billing.markup_pct` on top and is refused at startup without one, `absorb`
 charges nothing and leaves the bill with the operator. Both figures are on every
 usage row. Quota caps are measured in `cost_usd`, not `charge_usd`, so a spend
 limit still fires under `absorb`.
+
+**`billing.cost_visibility` decides how precise `cost_usd` is on the data plane.**
+`exact` is the default. `hint` rounds it to one significant figure so a tenant
+reading `/v1/usage` cannot divide the exact charge beside it by an exact cost and
+recover the margin. The rounding happens in response shaping only: the stored row,
+the charge, the admin plane and quota enforcement are all exact under `hint`, and
+a tenant-facing `remaining` is derived from the rounded `consumed` so subtracting
+it from a known cap does not hand the exact figure back.
+
+Each usage row carries the `billing_mode` in force when it was served, so a window
+read back after the setting changed still says how each request in it was priced.
+`GET /admin/v1/tenants/{id}/usage` adds `margin_usd`, which is `charge_usd` minus
+`cost_usd`; it exists on that plane only.
 
 ## 7. Behaviours users misread as bugs
 

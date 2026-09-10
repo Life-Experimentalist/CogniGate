@@ -112,6 +112,15 @@ const (
 	BillingAbsorb      = "absorb"
 )
 
+// How precise the cost figure is on the data plane. Exact publishes the
+// number the gateway computed. Hint rounds it to one significant figure, so a
+// tenant can see roughly what its traffic cost without being able to work the
+// operator's margin back out of it.
+const (
+	CostExact = "exact"
+	CostHint  = "hint"
+)
+
 // Billing decides what a request costs its tenant, given what it cost the
 // operator. Both numbers are recorded on every request: the cost is the
 // catalog rate the provider charges, the charge is what the tenant owes.
@@ -121,6 +130,28 @@ type Billing struct {
 	// MarkupPct is the percentage added to the provider rate in "markup"
 	// mode, and is ignored in the other two.
 	MarkupPct float64 `yaml:"markup_pct"`
+	// CostVisibility decides how precise cost_usd is on the data plane. The
+	// charge is always exact: it is what the tenant owes, and a figure someone
+	// is billed on cannot be approximate. The admin plane is always exact too.
+	CostVisibility string `yaml:"cost_visibility"`
+}
+
+// TenantCost is the cost figure as the data plane reports it. Under "hint" it
+// is rounded to one significant figure: enough for a tenant to see the order of
+// magnitude of what its traffic cost, not enough to divide into the exact
+// charge beside it and recover the operator's margin.
+//
+// Rounding through the decimal formatter rather than by arithmetic is what
+// keeps 0.002 from being published as 0.0020000000000000005.
+func (b Billing) TenantCost(cost float64) float64 {
+	if b.CostVisibility != CostHint || cost <= 0 {
+		return cost
+	}
+	out, err := strconv.ParseFloat(strconv.FormatFloat(cost, 'e', 0, 64), 64)
+	if err != nil {
+		return cost
+	}
+	return out
 }
 
 // Charge converts one request's provider cost into what its tenant is
@@ -263,7 +294,7 @@ func Default() Config {
 			StaleWarnAfter:  6 * time.Hour,
 			ProviderTimeout: 10 * time.Second,
 		},
-		Billing: Billing{Mode: BillingPassthrough},
+		Billing: Billing{Mode: BillingPassthrough, CostVisibility: CostExact},
 		Routing: Routing{
 			MaxFallbackDepth: 5,
 			Breaker: Breaker{
@@ -353,6 +384,13 @@ func applyEnv(cfg *Config) {
 	envStr("METRICS_TOKEN", func(v string) { cfg.Metrics.Token = v })
 	envStr("LOG_LEVEL", func(v string) { cfg.Log.Level = v })
 	envStr("QUOTA_ENFORCEMENT", func(v string) { cfg.Quotas.Enforcement = v })
+	envStr("BILLING_MODE", func(v string) { cfg.Billing.Mode = v })
+	envStr("BILLING_MARKUP_PCT", func(v string) {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			cfg.Billing.MarkupPct = f
+		}
+	})
+	envStr("BILLING_COST_VISIBILITY", func(v string) { cfg.Billing.CostVisibility = v })
 	envStr("CACHE_ENABLED", func(v string) {
 		if b, err := strconv.ParseBool(v); err == nil {
 			cfg.Cache.Enabled = b
@@ -414,6 +452,12 @@ func (c Config) Validate() error {
 	default:
 		return fmt.Errorf("billing.mode must be %q, %q or %q, got %q",
 			BillingPassthrough, BillingMarkup, BillingAbsorb, c.Billing.Mode)
+	}
+	switch c.Billing.CostVisibility {
+	case CostExact, CostHint:
+	default:
+		return fmt.Errorf("billing.cost_visibility must be %q or %q, got %q",
+			CostExact, CostHint, c.Billing.CostVisibility)
 	}
 	if c.Routing.MaxFallbackDepth < 1 {
 		return fmt.Errorf("routing.max_fallback_depth must be at least 1")

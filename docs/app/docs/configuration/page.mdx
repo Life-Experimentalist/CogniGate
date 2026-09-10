@@ -27,18 +27,21 @@ Secrets belong here, not in the file. Every variable is read under two
 spellings — `CG_<NAME>` and `<NAME>` — so a deployment can namespace them or
 not.
 
-| Variable                  | Sets                                     |
-| ------------------------- | ---------------------------------------- |
-| `CG_ADMIN_BOOTSTRAP_KEY`  | The bootstrap admin credential           |
-| `CG_PORT`                 | Listen port                              |
-| `CG_TLS_CERT_FILE`        | TLS certificate — set with the key below |
-| `CG_TLS_KEY_FILE`         | TLS private key                          |
-| `CG_ANALYTICS_URL`        | Where usage records are shipped          |
-| `CG_ANALYTICS_TOKEN`      | Bearer token for the analytics service   |
-| `CG_METRICS_TOKEN`        | Requires a bearer on `/metrics` when set |
-| `CG_LOG_LEVEL`            | `debug` \| `info` \| `warn` \| `error`   |
-| `CG_QUOTA_ENFORCEMENT`    | `on` \| `observe`                        |
-| `CG_CACHE_ENABLED`        | `true` \| `false`                        |
+| Variable                     | Sets                                     |
+| ---------------------------- | ---------------------------------------- |
+| `CG_ADMIN_BOOTSTRAP_KEY`     | The bootstrap admin credential           |
+| `CG_PORT`                    | Listen port                              |
+| `CG_TLS_CERT_FILE`           | TLS certificate — set with the key below |
+| `CG_TLS_KEY_FILE`            | TLS private key                          |
+| `CG_ANALYTICS_URL`           | Where usage records are shipped          |
+| `CG_ANALYTICS_TOKEN`         | Bearer token for the analytics service   |
+| `CG_METRICS_TOKEN`           | Requires a bearer on `/metrics` when set |
+| `CG_LOG_LEVEL`               | `debug` \| `info` \| `warn` \| `error`   |
+| `CG_QUOTA_ENFORCEMENT`       | `on` \| `observe`                        |
+| `CG_CACHE_ENABLED`           | `true` \| `false`                        |
+| `CG_BILLING_MODE`            | `passthrough` \| `markup` \| `absorb`    |
+| `CG_BILLING_MARKUP_PCT`      | The percentage `markup` adds             |
+| `CG_BILLING_COST_VISIBILITY` | `exact` \| `hint`                        |
 
 The analytics service is a separate process with its own configuration. It
 reads standard Spring properties:
@@ -76,6 +79,7 @@ it out of the environment.
 billing:
     mode: passthrough # passthrough | markup | absorb
     markup_pct: 0
+    cost_visibility: exact # exact | hint
 ```
 
 Every usage row records two figures: what the request cost at the provider's
@@ -91,7 +95,15 @@ key.
 
 A model with no published rate costs zero, so it is charged zero in every mode.
 Quota caps are measured in cost rather than charge, so a spend limit still
-works under `absorb`. [Usage & cost](/docs/billing) has the detail.
+works under `absorb`.
+
+`cost_visibility` decides how much of the first figure a tenant sees. `exact`
+publishes what the gateway computed. `hint` rounds it to one significant figure
+on the data plane, which leaves a tenant able to see roughly what its traffic
+cost while making the exact charge beside it useless for working out the
+margin. The admin plane, the stored row, the charge itself and quota
+enforcement are all exact either way. [Usage & cost](/docs/billing) has the
+detail.
 
 ### Quota enforcement
 

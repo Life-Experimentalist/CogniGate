@@ -250,7 +250,7 @@
                 }
               ]
             },
-            "description": "The admin-plane view of `GET /v1/usage`, for an operator who holds no data key for the tenant.\n"
+            "description": "The admin-plane view of `GET /v1/usage`, for an operator who holds no data key for the tenant. Money figures are exact here whatever `billing.cost_visibility` publishes to the tenant, and the margin is reported.\n"
           }
         },
         {

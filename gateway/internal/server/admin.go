@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -1396,6 +1397,26 @@ func validateWebhookURL(raw string) error {
 // adminUsage is the same aggregate /v1/usage serves, reachable for any tenant
 // the admin key's scope allows. Operators read usage for a tenant they are
 // supporting far more often than they hold that tenant's data key.
+// adminUsageResponse is the operator's view of the same aggregate. It carries
+// the margin the two money columns imply so an operator does not have to
+// subtract them, and it exists on this plane alone: what a tenant owes is its
+// own business, what the operator kept on top of the provider rate is not.
+type adminUsageResponse struct {
+	usageResponse
+	MarginUSD float64 `json:"margin_usd"`
+}
+
+// margin is charge minus cost, quantised to the eight decimal places the usage
+// store keeps. Subtracting two float64 dollar figures otherwise publishes
+// 0.28100000000000014 for a margin of 0.281.
+func margin(charge, cost float64) float64 {
+	v, err := strconv.ParseFloat(strconv.FormatFloat(charge-cost, 'f', 8, 64), 64)
+	if err != nil {
+		return charge - cost
+	}
+	return v
+}
+
 func (s *Server) adminUsage(c *fiber.Ctx) error {
 	tenantID, err := s.tenantScope(c)
 	if err != nil {
@@ -1413,12 +1434,15 @@ func (s *Server) adminUsage(c *fiber.Ctx) error {
 	if err != nil {
 		return httpx.Fail(c, apierr.From(err))
 	}
-	return c.JSON(usageResponse{
-		Object:      "usage",
-		Window:      window,
-		Since:       since.Format(time.RFC3339),
-		Until:       until.Format(time.RFC3339),
-		UsageTotals: totals,
+	return c.JSON(adminUsageResponse{
+		usageResponse: usageResponse{
+			Object:      "usage",
+			Window:      window,
+			Since:       since.Format(time.RFC3339),
+			Until:       until.Format(time.RFC3339),
+			UsageTotals: totals,
+		},
+		MarginUSD: margin(totals.ChargeUSD, totals.CostUSD),
 	})
 }
 

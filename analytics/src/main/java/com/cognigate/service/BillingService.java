@@ -68,8 +68,12 @@ public class BillingService {
     public BigDecimal calculateTenantInvoice(String tenantId, Instant start, Instant end) {
         UsageTotalsResponse totals = usageMetricRepo.totals(tenantId, start, end);
 
-        log.info("Invoice for Tenant: {} | Period: {} to {} | Total Tokens: {} | Provider Cost: ${} | Charged: ${}",
-                tenantId, start, end, totals.totalTokens(), totals.costUsd(), totals.chargeUsd());
+        BigDecimal marginUsd = totals.chargeUsd().subtract(totals.costUsd());
+
+        log.info("Invoice for Tenant: {} | Period: {} to {} | Total Tokens: {} | Provider Cost: ${} "
+                        + "| Charged: ${} | Margin: ${}",
+                tenantId, start, end, totals.totalTokens(), totals.costUsd(), totals.chargeUsd(),
+                marginUsd);
 
         return totals.chargeUsd();
     }

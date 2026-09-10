@@ -355,6 +355,10 @@ type UsageRecord struct {
 	TotalTokens     int       `json:"total_tokens"`
 	CostUSD         float64   `json:"cost_usd"`
 	ChargeUSD       float64   `json:"charge_usd"`
+	// BillingMode is the mode that produced ChargeUSD, stamped per row so a
+	// window read back after the setting changed still says how each request
+	// in it was priced.
+	BillingMode     string    `json:"billing_mode"`
 	Cached          bool      `json:"cached"`
 	Streamed        bool      `json:"streamed"`
 	StatusCode      int       `json:"status_code"`

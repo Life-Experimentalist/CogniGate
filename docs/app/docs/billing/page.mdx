@@ -25,6 +25,7 @@ One row per served request, in the analytics database:
 | `prompt_tokens`, `completion_tokens`, `total_tokens` | The counts                            |
 | `cost_usd`                               | What it cost, priced from the catalog (below)     |
 | `charge_usd`                             | What the tenant owes for it (below)               |
+| `billing_mode`                           | How the charge was arrived at, as of that request |
 | `cached`, `streamed`                     | How it was served                                  |
 | `status_code`, `duration_ms`             | The outcome                                        |
 | `recorded_at`                            | When the gateway served it                         |
@@ -116,6 +117,7 @@ One setting decides it, for the whole gateway:
 billing:
     mode: passthrough
     markup_pct: 0
+    cost_visibility: exact
 ```
 
 - **`passthrough`**, the default, charges the provider's rate itself. The
@@ -140,6 +142,38 @@ in a billing column.
 traffic on what it cost the operator, which is the figure that stays meaningful
 under `absorb`, where the charge is always zero and a cap on it could never
 fire. [Set a quota](/docs/api#set-a-quota) has the shape of one.
+
+## How much of the cost a tenant sees
+
+A tenant reading its own usage sees both figures, so under `markup` it could
+divide one by the other and read the margin straight off. `cost_visibility`
+decides whether it can:
+
+- **`exact`**, the default, publishes the figure the gateway computed. Nothing
+  is hidden, which is the right answer for `passthrough`, where the charge is
+  the cost and there is no margin to hide, and for an internal platform under
+  `absorb`, where teams want to know what they are spending the company.
+- **`hint`** rounds `cost_usd` to one significant figure on the data plane.
+  $1.8734 is published as $2, $0.0018734 as $0.002. The tenant still sees the
+  order of magnitude of what its traffic cost, and dividing an exact charge of
+  $2.1544 by a cost of $2 says nothing useful about a markup of 15%.
+
+Four things stay exact under `hint`, and they are the ones that matter:
+
+- `charge_usd`, on both planes. It is what the tenant owes, and nobody should
+  be billed on an approximation.
+- Everything the admin plane returns, including a `margin_usd` on
+  `GET /admin/v1/tenants/{id}/usage` so an operator does not have to subtract.
+- The stored row, so a figure is never lost, only displayed coarsely.
+- Quota enforcement. What stops traffic is computed from the real position,
+  never from what was published. A tenant does see a rounded `consumed`, and a
+  `remaining` derived from it rather than from the exact number: the tenant
+  knows its own cap, so an exact remainder would subtract straight back to the
+  figure the hint is meant to blur.
+
+The setting is deployment-wide, like the mode itself. It is not a per-tenant
+knob, because a deployment showing one tenant exact costs and another rounded
+ones has told the first one what the second is being charged over.
 
 ## Reading it back
 
@@ -172,9 +206,6 @@ and returned. There is no arbitrary date range: a metering read is either
 "this billing period" or "today", and a free-form window would invite a tenant
 to scan its whole history on every dashboard refresh.
 
-A tenant reading its own usage sees both figures, so under `markup` it can work
-out the margin.
-
 `GET /v1/usage/breakdown` takes the same `window` plus `group_by`, one of
 `model`, `provider`, `key` or `client_request_id`, and returns the same six
 numbers per bucket under `data`, most expensive first. It is capped at the 200
@@ -192,12 +223,17 @@ A scheduled job runs at midnight on the first of each month, takes the tenants
 that produced usage in the preceding 30 days, and logs a priced total for each:
 
 ```
-Invoice for Tenant: ten_9f2c41ab77d0 | Period: ... | Total Tokens: 479521 | Provider Cost: $1.8734 | Charged: $2.1544
+Invoice for Tenant: ten_9f2c41ab77d0 | Period: ... | Total Tokens: 479521 | Provider Cost: $1.8734 | Charged: $2.1544 | Margin: $0.2810
 ```
 
 The figure it returns is the summed `charge_usd`, so it agrees with what the
 tenant reads back for the same window. It is a log line and nothing more: there
 is no invoice document, no ledger, and no route that reads one back.
+
+`billing_mode` is stamped on each row rather than read from the configuration at
+aggregate time. Changing the mode changes what is charged from that point on,
+not what was charged before it, and a window that straddles the change should
+say so rather than reprice history.
 
 It is there so that a deployment which has to bill something has a worked
 starting point in the right place. The numbers a real billing system should read

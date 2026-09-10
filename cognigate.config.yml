@@ -85,6 +85,13 @@ billing:
   # "markup" with nothing here is refused at startup rather than quietly
   # behaving as passthrough.
   markup_pct: 0
+  # How precise cost_usd is on the data plane. "exact" publishes the figure the
+  # gateway computed. "hint" rounds it to one significant figure, so a tenant
+  # can still see roughly what its traffic cost without dividing the exact
+  # charge beside it by an exact cost and recovering the margin. The admin
+  # plane and the stored row are exact either way, and the charge is never
+  # rounded: it is what the tenant owes.
+  cost_visibility: exact
 
 routing:
   # How many providers a single request may fall through before giving up.

@@ -35,6 +35,7 @@ The first release has not been cut. Everything below is the state of `main`.
   billing:
       mode: passthrough # passthrough | markup | absorb
       markup_pct: 0
+      cost_visibility: exact # exact | hint
   ```
 
   `passthrough` is the default and charges the provider rate itself, so the
@@ -54,6 +55,35 @@ The first release has not been cut. Everything below is the state of `main`.
   The monthly aggregate in the analytics service now sums the recorded charge
   instead of pricing tokens at a compiled-in flat rate, so the figure it logs
   agrees with what `/v1/usage` returns for the same window.
+
+  `CG_BILLING_MODE`, `CG_BILLING_MARKUP_PCT` and `CG_BILLING_COST_VISIBILITY`
+  override the section from the environment, like every other setting.
+
+- **`billing.cost_visibility` decides how much of the cost a tenant sees.**
+  A tenant reading its own usage sees both money figures, so under `markup` it
+  could divide one by the other and read the margin straight off. `exact`, the
+  default, publishes the figure the gateway computed and is the right answer
+  under `passthrough`, where there is no margin, and under `absorb`, where teams
+  want to know what they are spending. `hint` rounds `cost_usd` to one
+  significant figure on the data plane: $1.8734 is published as $2, and dividing
+  an exact charge of $2.1544 by that says nothing useful about a markup of 15%.
+
+  The rounding is applied where the response is shaped and nowhere else, so four
+  things stay exact under `hint`: `charge_usd`, which is what the tenant owes;
+  everything the admin plane returns; the stored row; and quota enforcement,
+  which is computed from the real position rather than from what was published.
+  A tenant does see a rounded `consumed`, and a `remaining` derived from it
+  rather than from the exact number, because a tenant knows its own cap and an
+  exact remainder would subtract straight back to the figure the hint blurs.
+
+- **Usage rows record the billing mode, and the admin plane reports the margin.**
+  `billing_mode` is stamped on each usage record as it is served, so a window
+  read back after the setting changed still says how each request in it was
+  priced instead of repricing history. `GET /admin/v1/tenants/{id}/usage` adds
+  `margin_usd`, which is `charge_usd` minus `cost_usd`, and it exists on that
+  plane alone: what a tenant owes is its own business, what the operator kept on
+  top of the provider rate is not. The monthly aggregate log line carries the
+  same figure.
 
 - **Rate-limit cooldowns from `Retry-After`.** A key that answers `429` with a
   `Retry-After` is parked for exactly that long, so the next request skips it

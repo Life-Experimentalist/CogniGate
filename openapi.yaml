@@ -2069,7 +2069,7 @@ paths:
       operationId: getTenantUsage
       summary: Usage and quota state for one tenant.
       description: |
-        The admin-plane view of `GET /v1/usage`, for an operator who holds no data key for the tenant.
+        The admin-plane view of `GET /v1/usage`, for an operator who holds no data key for the tenant. Money figures are exact here whatever `billing.cost_visibility` publishes to the tenant, and the margin is reported.
       security:
       - AdminKey: []
       parameters:
@@ -2091,14 +2091,14 @@ paths:
           default: day
       responses:
         '200':
-          description: Totals and every quota slot that applies.
+          description: Totals and the margin they imply.
           headers:
             X-CogniGate-Request-Id:
               $ref: '#/components/headers/RequestId'
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/UsageResponse'
+                $ref: '#/components/schemas/AdminUsageResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
@@ -2584,8 +2584,12 @@ components:
           type: integer
         consumed:
           type: number
+          description: Consumption in this slot's own unit. A cost slot follows `billing.cost_visibility`,
+            so it can be a rounded figure on the data plane.
         remaining:
           type: number
+          description: '`cap` minus `consumed`, floored at zero, so the two always sum to
+            the cap as reported.'
         resets_at:
           type: string
           format: date-time
@@ -2635,9 +2639,11 @@ components:
           type: integer
         cost_usd:
           type: number
-          description: What the traffic cost at the provider's published rate. Zero for a
-            model whose listing publishes no price and whose rate the operator has not supplied.
-            This is the figure cost quotas are measured against.
+          description: 'What the traffic cost at the provider''s published rate. Zero for
+            a model whose listing publishes no price and whose rate the operator has not supplied.
+            This is the figure cost quotas are measured against. A deployment that sets `billing.cost_visibility:
+            hint` rounds it to one significant figure on the data plane; the admin plane and
+            the stored row are always exact.'
         charge_usd:
           type: number
           description: What is owed for the traffic. Equal to `cost_usd` unless the operator
@@ -2656,6 +2662,74 @@ components:
             is capped.
           items:
             $ref: '#/components/schemas/UsageLimit'
+    AdminUsageResponse:
+      type: object
+      required:
+      - object
+      - window
+      - since
+      - until
+      - state
+      - limits
+      - requests
+      - prompt_tokens
+      - completion_tokens
+      - total_tokens
+      - cost_usd
+      - charge_usd
+      - margin_usd
+      properties:
+        object:
+          type: string
+          const: usage
+        window:
+          type: string
+          enum:
+          - day
+          - month
+        since:
+          type: string
+          format: date-time
+        until:
+          type: string
+          format: date-time
+        requests:
+          type: integer
+        prompt_tokens:
+          type: integer
+        completion_tokens:
+          type: integer
+        total_tokens:
+          type: integer
+        cost_usd:
+          type: number
+          description: 'What the traffic cost at the provider''s published rate. Zero for
+            a model whose listing publishes no price and whose rate the operator has not supplied.
+            This is the figure cost quotas are measured against. A deployment that sets `billing.cost_visibility:
+            hint` rounds it to one significant figure on the data plane; the admin plane and
+            the stored row are always exact.'
+        charge_usd:
+          type: number
+          description: What is owed for the traffic. Equal to `cost_usd` unless the operator
+            has put a margin on the provider rate, or is carrying the bill themselves, in
+            which case it is zero.
+        state:
+          type: string
+          description: The worst state across `limits`.
+          enum:
+          - ok
+          - soft-exceeded
+          - hard-exceeded
+        limits:
+          type: array
+          description: Every quota slot that applies, tenant and key alike. Empty when nothing
+            is capped.
+          items:
+            $ref: '#/components/schemas/UsageLimit'
+        margin_usd:
+          type: number
+          description: '`charge_usd` minus `cost_usd`, quantised to eight decimal places.
+            Zero under `passthrough`, negative under `absorb`.'
     UsageBucket:
       type: object
       required:
@@ -2680,9 +2754,11 @@ components:
           type: integer
         cost_usd:
           type: number
-          description: What the traffic cost at the provider's published rate. Zero for a
-            model whose listing publishes no price and whose rate the operator has not supplied.
-            This is the figure cost quotas are measured against.
+          description: 'What the traffic cost at the provider''s published rate. Zero for
+            a model whose listing publishes no price and whose rate the operator has not supplied.
+            This is the figure cost quotas are measured against. A deployment that sets `billing.cost_visibility:
+            hint` rounds it to one significant figure on the data plane; the admin plane and
+            the stored row are always exact.'
         charge_usd:
           type: number
           description: What is owed for the traffic. Equal to `cost_usd` unless the operator

@@ -107,6 +107,22 @@ public class UsageMetric {
     @Column(name = "charge_usd", precision = 19, scale = 8)
     private BigDecimal chargeUsd;
 
+    /**
+     * The billing mode that produced {@link #chargeUsd}, stamped per row.
+     *
+     * <p>An operator who changes the mode changes what is charged from that
+     * point on, not what was charged before it. Keeping the mode on the row is
+     * what lets a window read back afterwards say how each request in it was
+     * priced instead of implying they were all priced the way the gateway is
+     * configured today.
+     *
+     * <p>Nullable for the same reason the charge beside it is: rows written
+     * before the column existed were priced at the provider rate, which is what
+     * a null reads as.
+     */
+    @Column(name = "billing_mode", length = 32)
+    private String billingMode;
+
     @Column(name = "cached", nullable = false)
     private Boolean cached;
 

@@ -170,7 +170,7 @@ class UsageControllerTest {
     private static UsageRecordRequest recordRequest(String requestId) {
         return new UsageRecordRequest(requestId, "caller-abc", "tnt_dev", "cg-dev-abcd",
                 "openai", "gpt-4o-mini", "fast", 1, 15, 20, 35,
-                new BigDecimal("0.00042"), new BigDecimal("0.00050"), false, true, 200, 812L,
+                new BigDecimal("0.00042"), new BigDecimal("0.00050"), "markup", false, true, 200, 812L,
                 Instant.parse("2026-03-01T10:30:00Z"));
     }
 
