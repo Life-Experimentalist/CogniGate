@@ -314,7 +314,7 @@ SCHEMAS["UsageLimit"] = obj(
     [
         ("scope", p("string", None, enum=["tenant", "key"])),
         ("window", p("string", None, enum=["day", "month"])),
-        ("unit", p("string", None, enum=["tokens", "cost"])),
+        ("unit", p("string", None, enum=["tokens", "cost", "requests"])),
         ("cap", p("number")),
         ("soft_threshold_pct", p("integer")),
         ("consumed", p("number", "Consumption in this slot's own unit. A cost slot "
@@ -483,6 +483,9 @@ SCHEMAS["MetaLimits"] = obj(
         ("max_fallback_depth", p("integer")),
         ("requests_per_second", p("integer")),
         ("burst_capacity", p("integer")),
+        ("requests_per_minute", p("integer", "The fixed minute window over the "
+                                             "token bucket. Zero when the deployment "
+                                             "has switched it off.")),
     ],
 )
 
@@ -503,6 +506,7 @@ SCHEMAS["TenantLimits"] = obj(
         ("max_concurrent_per_key", p("integer")),
         ("requests_per_second", p("integer")),
         ("burst_capacity", p("integer")),
+        ("requests_per_minute", p("integer")),
     ],
     extra={"description": Literal(
         "Per-tenant ceilings (GW-13). Each may only lower the deployment's own "
@@ -655,9 +659,13 @@ SCHEMAS["QuotaWindow"] = obj(
     [
         ("tokens", ref("QuotaLimit")),
         ("cost", ref("QuotaLimit")),
+        ("requests", ref("QuotaLimit")),
     ],
-    extra={"description": "Either may be absent, so a tenant can be capped on spend "
-                          "without also being capped on tokens."},
+    extra={"description": "Any may be absent, so a holder can be capped on spend "
+                          "without also being capped on tokens or on calls. "
+                          "`requests` counts served requests only: one refused by a "
+                          "rate limit, a quota or the concurrency cap writes no usage "
+                          "row and so does not count against it."},
 )
 
 SCHEMAS["Quota"] = obj(

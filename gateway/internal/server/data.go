@@ -803,11 +803,16 @@ type metaLimits struct {
 	StreamIdleTimeout   int   `json:"stream_idle_timeout_seconds"`
 	MaxConcurrentPerKey int   `json:"max_concurrent_per_key"`
 	MaxFallbackDepth    int   `json:"max_fallback_depth"`
-	// The rate limit GW-13 pairs with the concurrency cap. Published for the
+	// The rate limits GW-13 pairs with the concurrency cap. Published for the
 	// same reason as the rest: a client that has to discover its own ceiling by
 	// being refused will discover it in production.
+	//
+	// The pair holds the short term, the minute window the long: a client sizing
+	// its own concurrency reads the first, one budgeting a batch job reads the
+	// second. Either is zero when the deployment has switched it off.
 	RequestsPerSecond int `json:"requests_per_second"`
 	BurstCapacity     int `json:"burst_capacity"`
+	RequestsPerMinute int `json:"requests_per_minute"`
 }
 
 // metaLimits publishes the limits this caller is actually held to, which is what
@@ -827,6 +832,7 @@ func (s *Server) metaLimits(c *fiber.Ctx) metaLimits {
 		MaxFallbackDepth:    s.Config.Routing.MaxFallbackDepth,
 		RequestsPerSecond:   lim.RequestsPerSecond,
 		BurstCapacity:       lim.BurstCapacity,
+		RequestsPerMinute:   lim.RequestsPerMinute,
 	}
 }
 

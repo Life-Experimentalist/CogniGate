@@ -48,6 +48,12 @@ with distinct codes clients can handle — not mystery connection resets.
   (`rate_limit.requests_per_second: 50`, `burst_capacity: 100` in
   `cognigate.config.yml`) remain; when tripped they return 429
   `error.code = "rate_limited"` with `Retry-After`.
+- `rate_limit.requests_per_minute` is a fixed minute window over that bucket,
+  default **3600**, and returns the same code. Both ceilings are measured
+  before either is charged, so a request refused by one consumes none of the
+  other's allowance, and the `Retry-After` is the longer of the two waits: a
+  cooldown that expires while the other ceiling is still refusing would send
+  the client straight back into a 429. Zero switches either one off.
 - `GET /v1/health` (GW-5) and `GET /v1/meta` (GW-9) are outside the rate
   limit. Both exist to be polled, and a tenant that has spent its budget is
   the one that most needs to learn the gateway is degraded — metering them
@@ -70,11 +76,13 @@ with distinct codes clients can handle — not mystery connection resets.
 | `limits.max_concurrent_per_key`      | `32`    | In-flight cap |
 | `rate_limit.requests_per_second`      | `50`    | Sustained per-tenant rate |
 | `rate_limit.burst_capacity`          | `100`   | Token bucket depth |
+| `rate_limit.requests_per_minute`     | `3600`  | Fixed minute window over the bucket |
 | Per-tenant overrides (≤ ceilings)    | unset   | `limits` on `PATCH /admin/v1/tenants/{id}` |
 
-Six of those keys are overridable per tenant, under the names
+Seven of those keys are overridable per tenant, under the names
 `max_request_bytes`, `request_timeout_seconds`, `stream_idle_timeout_seconds`,
-`max_concurrent_per_key`, `requests_per_second` and `burst_capacity`. Each may
+`max_concurrent_per_key`, `requests_per_second`, `burst_capacity` and
+`requests_per_minute`. Each may
 only narrow: a value above the deployment's is rejected with 400
 `invalid_request` rather than clamped, so an operator reads back the tenant they
 configured. Zero means "no override"; the block is replaced wholesale, so

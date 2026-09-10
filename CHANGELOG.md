@@ -85,6 +85,38 @@ The first release has not been cut. Everything below is the state of `main`.
   top of the provider rate is not. The monthly aggregate log line carries the
   same figure.
 
+- **A minute ceiling beside the token bucket, and a per-day request cap.**
+  `rate_limit.requests_per_minute` holds a tenant to a plain count against a
+  wall-clock minute, which is how an allowance is quoted to a customer, while
+  `requests_per_second` and `burst_capacity` go on shaping traffic second by
+  second. Both ceilings are measured before either is charged, so a request one
+  refuses spends none of the other's allowance, and the `Retry-After` a client
+  gets is the longer of the two waits rather than one that expires into a second
+  refusal. The default is `3600`, which clears what the bucket already admits in
+  a minute, so nothing that used to be served is refused; zero switches either
+  ceiling off, and a tenant override may lower it but never raise it.
+
+  ```yaml
+  rate_limit:
+    requests_per_second: 50
+    burst_capacity: 100
+    requests_per_minute: 3600
+  ```
+
+  A per-day allowance is a quota rather than a third window: `requests` joins
+  `tokens` and `cost` as a quota unit, so
+  `{"day": {"requests": {"cap": 50000}}}` caps calls the way the other two cap
+  usage. A day resets at a fixed hour, reads back through `/v1/usage` with its
+  own `remaining` figure, can be scoped to a single key and can be run in
+  observe mode first, none of which a token bucket does. Only served requests
+  count: one refused by a rate limit, a quota or the concurrency cap writes no
+  usage row, so retrying against a full cap does not dig the hole deeper.
+
+  Rate is per tenant and concurrency stays per key. A tenant that could lift
+  its own ceiling by minting another key would not have one, while the
+  concurrency cap exists to stop one integration starving another inside the
+  same tenant.
+
 - **Rate-limit cooldowns from `Retry-After`.** A key that answers `429` with a
   `Retry-After` is parked for exactly that long, so the next request skips it
   instead of spending a round trip rediscovering a limit the provider already
@@ -119,7 +151,7 @@ The first release has not been cut. Everything below is the state of `main`.
   those models so `cost_usd` and cost quotas mean something for them. Nothing is
   built in: a model with no entry still costs zero rather than a figure the
   gateway guessed.
-- **Quota and budget API (GW-4).** Token and spend limits per window, enforced
+- **Quota and budget API (GW-4).** Token, spend and request limits per window, enforced
   or reported depending on configuration, with `X-CogniGate-Quota-State` and a
   `quota_exceeded` rejection when enforcement is on.
 - **Health and honest degradation (GW-5).** `GET /v1/health` reports what is

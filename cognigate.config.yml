@@ -132,6 +132,23 @@ limits:
 rate_limit:
   requests_per_second: 50
   burst_capacity: 100
+  # A fixed minute window over the bucket, which is how a request allowance is
+  # usually quoted to a customer. 3600 clears what the bucket admits in a minute
+  # at the two figures above (60 x 50, plus a full burst of 100), so out of the
+  # box this never refuses a request the bucket would have allowed; lower it to
+  # make it the binding ceiling. Zero switches it off.
+  #
+  # Both figures here are per tenant, not per key: a tenant that could lift its
+  # own ceiling by minting another key would not have a ceiling. The concurrency
+  # cap under `limits` goes the other way and is per key, so that one integration
+  # cannot starve another inside the same tenant.
+  #
+  # For a per-day allowance, set a `requests` quota rather than a rate limit:
+  # PUT /admin/v1/tenants/{id}/quota with {"day": {"requests": {"cap": 50000}}}.
+  # A day resets at a fixed hour, reads back with a remaining figure, can be
+  # scoped to one key and can be run in observe mode first, none of which a token
+  # bucket does.
+  requests_per_minute: 3600
 
 # Response caching is off by default: an identical prompt returning a stored
 # answer is the right behaviour only where the caller expects it.

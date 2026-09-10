@@ -33,11 +33,11 @@ func TestRateLimiterSpendsABurstAndThenRefills(t *testing.T) {
 
 	// A burst of three is three requests and no more, however fast they arrive.
 	for i := range 3 {
-		if _, ok := l.take("ten_a", 1, 3); !ok {
+		if _, ok := l.take("ten_a", 1, 3, 0); !ok {
 			t.Fatalf("request %d of the burst was refused", i+1)
 		}
 	}
-	wait, ok := l.take("ten_a", 1, 3)
+	wait, ok := l.take("ten_a", 1, 3, 0)
 	if ok {
 		t.Fatal("the fourth request inside one instant was admitted; the burst is not a bound")
 	}
@@ -51,17 +51,17 @@ func TestRateLimiterSpendsABurstAndThenRefills(t *testing.T) {
 	// second buys exactly two requests.
 	now = now.Add(2 * time.Second)
 	for i := range 2 {
-		if _, ok := l.take("ten_a", 1, 3); !ok {
+		if _, ok := l.take("ten_a", 1, 3, 0); !ok {
 			t.Fatalf("request %d after a two-second refill was refused", i+1)
 		}
 	}
-	if _, ok := l.take("ten_a", 1, 3); ok {
+	if _, ok := l.take("ten_a", 1, 3, 0); ok {
 		t.Error("a third request was admitted; the refill gave back more than it should")
 	}
 
 	// A different tenant is untouched by any of it, which is what "per tenant"
 	// has to mean to be worth configuring.
-	if _, ok := l.take("ten_b", 1, 3); !ok {
+	if _, ok := l.take("ten_b", 1, 3, 0); !ok {
 		t.Error("a second tenant was refused for the first tenant's spending")
 	}
 }
@@ -69,9 +69,215 @@ func TestRateLimiterSpendsABurstAndThenRefills(t *testing.T) {
 func TestRateLimiterTreatsZeroAsNoLimit(t *testing.T) {
 	l := newRateLimiter()
 	for i := range 100 {
-		if _, ok := l.take("ten_a", 0, 0); !ok {
+		if _, ok := l.take("ten_a", 0, 0, 0); !ok {
 			t.Fatalf("request %d was refused by a rate limit configured to zero", i+1)
 		}
+	}
+}
+
+// A per-day request allowance is a quota rather than a third limiter window,
+// so it reads back the way the other caps do: a slot with a cap, a remaining
+// figure and a reset, in its own unit and unaffected by cost_visibility.
+func TestRequestQuotaReportsItsOwnSlot(t *testing.T) {
+	h := newHarness(t)
+	tenant := h.newTenant("acme")
+	for range 3 {
+		err := h.mem.RecordUsage(context.Background(), &store.UsageRecord{
+			RequestID:   store.NewID(store.IDRequest),
+			TenantID:    tenant.id,
+			KeyPrefix:   "cg-testkey",
+			Provider:    "test",
+			Model:       "test-small",
+			TotalTokens: 10,
+			StatusCode:  http.StatusOK,
+			RecordedAt:  time.Now().UTC(),
+		})
+		if err != nil {
+			t.Fatalf("recording usage: %v", err)
+		}
+	}
+
+	res := h.do(http.MethodPut, "/admin/v1/tenants/"+tenant.id+"/quota", tenant.adminKey,
+		map[string]any{"day": map[string]any{"requests": map[string]any{"cap": 5}}})
+	if res.status != http.StatusOK {
+		t.Fatalf("setting a request quota: status %d, body %s", res.status, res.body)
+	}
+
+	var out usageResponse
+	h.do(http.MethodGet, "/v1/usage?window=day", tenant.dataKey, nil).decode(t, &out)
+	var slot *usageLimit
+	for i := range out.Limits {
+		if out.Limits[i].Unit == unitRequests {
+			slot = &out.Limits[i]
+		}
+	}
+	if slot == nil {
+		t.Fatalf("the requests cap is missing from /v1/usage, limits: %+v", out.Limits)
+	}
+	if slot.Window != windowDay {
+		t.Errorf("window = %q, want %q", slot.Window, windowDay)
+	}
+	if slot.Consumed != 3 {
+		t.Errorf("consumed = %v, want the 3 rows recorded", slot.Consumed)
+	}
+	if slot.Remaining != 2 {
+		t.Errorf("remaining = %v, want 2", slot.Remaining)
+	}
+}
+
+// A request cap that is reached rejects, and rejects as a quota rather than a
+// budget: nothing here is about money, and a caller keying on the code should
+// not have to guess which.
+func TestRequestQuotaRejectsAsAQuotaNotABudget(t *testing.T) {
+	h := newHarness(t)
+	tenant := h.newTenant("acme")
+	err := h.mem.RecordUsage(context.Background(), &store.UsageRecord{
+		RequestID:   store.NewID(store.IDRequest),
+		TenantID:    tenant.id,
+		KeyPrefix:   "cg-testkey",
+		Provider:    "test",
+		Model:       "test-small",
+		TotalTokens: 10,
+		StatusCode:  http.StatusOK,
+		RecordedAt:  time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("recording usage: %v", err)
+	}
+
+	res := h.do(http.MethodPut, "/admin/v1/tenants/"+tenant.id+"/quota", tenant.adminKey,
+		map[string]any{"day": map[string]any{"requests": map[string]any{"cap": 1}}})
+	if res.status != http.StatusOK {
+		t.Fatalf("setting a request quota: status %d, body %s", res.status, res.body)
+	}
+
+	res = h.do(http.MethodPost, "/v1/chat/completions", tenant.dataKey,
+		map[string]any{"model": "test-small", "messages": []any{
+			map[string]any{"role": "user", "content": "hi"},
+		}})
+	if res.status != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want 429 once the request cap is reached; body %s",
+			res.status, res.body)
+	}
+	if !bytes.Contains(res.body, []byte("quota_exceeded")) {
+		t.Errorf("body = %s, want the quota_exceeded code rather than a budget one", res.body)
+	}
+}
+
+func TestMinuteWindowCapsTheMinuteAndResetsWhole(t *testing.T) {
+	now := time.Now()
+	l := newRateLimiter()
+	l.now = func() time.Time { return now }
+
+	// The bucket is switched off, so the minute window is the only ceiling and
+	// what it admits is exactly its cap.
+	for i := range 5 {
+		if _, ok := l.take("ten_a", 0, 0, 5); !ok {
+			t.Fatalf("request %d of the minute allowance was refused", i+1)
+		}
+	}
+	wait, ok := l.take("ten_a", 0, 0, 5)
+	if ok {
+		t.Fatal("a sixth request was admitted against a cap of five")
+	}
+	// A fixed window resets whole, so the cooldown is the rest of the minute
+	// rather than the time for one request-worth of allowance to appear.
+	if wait <= 0 || wait > time.Minute {
+		t.Errorf("Retry-After hint = %v, want (0s, 1m]", wait)
+	}
+
+	// Half a minute buys nothing: unlike the bucket, the window does not refill
+	// proportionally.
+	now = now.Add(30 * time.Second)
+	if _, ok := l.take("ten_a", 0, 0, 5); ok {
+		t.Error("the window refilled part way through; it is meant to reset whole")
+	}
+
+	now = now.Add(31 * time.Second)
+	for i := range 5 {
+		if _, ok := l.take("ten_a", 0, 0, 5); !ok {
+			t.Fatalf("request %d of the next minute was refused", i+1)
+		}
+	}
+
+	// Per tenant, like the bucket it sits over.
+	if _, ok := l.take("ten_b", 0, 0, 5); !ok {
+		t.Error("a second tenant was refused for the first tenant's spending")
+	}
+}
+
+// Whichever ceiling refuses, the request is charged against neither: a client
+// held off by the bucket must not spend its minute allowance on requests that
+// never ran, and the cooldown it is given has to clear both.
+func TestRefusedRequestsAreChargedAgainstNeitherCeiling(t *testing.T) {
+	now := time.Now()
+	l := newRateLimiter()
+	l.now = func() time.Time { return now }
+
+	// A bucket of one token per second with a burst of one, under a minute cap
+	// of three. The burst is spent immediately, so everything after it in this
+	// instant is refused by the bucket.
+	if _, ok := l.take("ten_a", 1, 1, 3); !ok {
+		t.Fatal("the first request was refused")
+	}
+	for i := range 20 {
+		if _, ok := l.take("ten_a", 1, 1, 3); ok {
+			t.Fatalf("refusal %d was admitted; the burst is not a bound", i+1)
+		}
+	}
+
+	// Twenty refusals later the minute allowance still has two left, because a
+	// refused request consumed none of it.
+	for i := range 2 {
+		now = now.Add(time.Second)
+		if _, ok := l.take("ten_a", 1, 1, 3); !ok {
+			t.Fatalf("request %d was refused; the refusals ate the minute allowance", i+1)
+		}
+	}
+
+	// The minute cap is now the binding one, and the cooldown reported is its
+	// own rather than the second the bucket would have quoted.
+	now = now.Add(time.Second)
+	wait, ok := l.take("ten_a", 1, 1, 3)
+	if ok {
+		t.Fatal("a fourth request was admitted against a minute cap of three")
+	}
+	if wait <= time.Second {
+		t.Errorf("Retry-After hint = %v, want the rest of the minute, not the bucket's second", wait)
+	}
+}
+
+// The sweep drops entries to bound memory, and an entry it drops takes its
+// minute count with it. A tenant idle long enough for its bucket to refill has
+// not necessarily finished its minute, so refilled alone must not be enough.
+func TestSweepKeepsAPartlySpentMinuteWindow(t *testing.T) {
+	now := time.Now()
+	l := newRateLimiter()
+	l.now = func() time.Time { return now }
+
+	if _, ok := l.take("ten_a", 50, 100, 1); !ok {
+		t.Fatal("the first request was refused")
+	}
+	// Long enough for a burst of 100 at 50 a second to have refilled twice over,
+	// and well short of the minute.
+	now = now.Add(10 * time.Second)
+	l.mu.Lock()
+	l.sweep(now, 50, 100)
+	l.mu.Unlock()
+	if _, ok := l.take("ten_a", 50, 100, 1); ok {
+		t.Error("the sweep forgot a spent minute window and handed back a fresh allowance")
+	}
+
+	// Past the minute it is genuinely finished with, and the entry may go.
+	now = now.Add(51 * time.Second)
+	l.mu.Lock()
+	l.sweep(now, 50, 100)
+	l.mu.Unlock()
+	l.mu.Lock()
+	n := len(l.buckets)
+	l.mu.Unlock()
+	if n != 0 {
+		t.Errorf("buckets held %d entries after the window expired, want 0", n)
 	}
 }
 

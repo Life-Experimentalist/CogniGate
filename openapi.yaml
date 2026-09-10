@@ -2578,6 +2578,7 @@ components:
           enum:
           - tokens
           - cost
+          - requests
         cap:
           type: number
         soft_threshold_pct:
@@ -3055,6 +3056,10 @@ components:
           type: integer
         burst_capacity:
           type: integer
+        requests_per_minute:
+          type: integer
+          description: The fixed minute window over the token bucket. Zero when the deployment
+            has switched it off.
     AdminMeta:
       type: object
       required:
@@ -3084,6 +3089,8 @@ components:
         requests_per_second:
           type: integer
         burst_capacity:
+          type: integer
+        requests_per_minute:
           type: integer
       description: |
         Per-tenant ceilings (GW-13). Each may only lower the deployment's own figure, never raise it, and a value above it is refused. An omitted or zero field means the deployment's value.
@@ -3330,8 +3337,12 @@ components:
           $ref: '#/components/schemas/QuotaLimit'
         cost:
           $ref: '#/components/schemas/QuotaLimit'
-      description: Either may be absent, so a tenant can be capped on spend without also being
-        capped on tokens.
+        requests:
+          $ref: '#/components/schemas/QuotaLimit'
+      description: 'Any may be absent, so a holder can be capped on spend without also being
+        capped on tokens or on calls. `requests` counts served requests only: one refused
+        by a rate limit, a quota or the concurrency cap writes no usage row and so does not
+        count against it.'
     Quota:
       type: object
       required:

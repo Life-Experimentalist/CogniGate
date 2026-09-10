@@ -198,9 +198,20 @@ type Limits struct {
 	MaxConcurrentPerKey    int           `yaml:"max_concurrent_per_key"`
 }
 
+// RateLimit is the pair of ceilings a tenant's request rate is held to: a token
+// bucket for the short term and a fixed minute window over it.
+//
+// The bucket is what shapes ordinary traffic. RequestsPerMinute is the ceiling
+// an operator quotes to a customer, and it is a fixed window rather than a
+// second bucket because "3000 a minute" means the same thing to the person
+// reading the invoice as to the code, which a smoothed rate does not.
+//
+// Zero switches either one off. Refusing everything is the other reading of
+// zero, and it is not one any operator who sets it intends.
 type RateLimit struct {
 	RequestsPerSecond int `yaml:"requests_per_second"`
 	BurstCapacity     int `yaml:"burst_capacity"`
+	RequestsPerMinute int `yaml:"requests_per_minute"`
 }
 
 type Cache struct {
@@ -315,7 +326,11 @@ func Default() Config {
 			StreamIdleTimeout:      60 * time.Second,
 			MaxConcurrentPerKey:    32,
 		},
-		RateLimit: RateLimit{RequestsPerSecond: 50, BurstCapacity: 100},
+		// 3600 clears what the bucket admits in a minute at these defaults
+		// (60 x 50 sustained, plus a full burst of 100), so out of the box the
+		// minute window never refuses a request the bucket would have allowed.
+		// An operator lowering it is choosing to make it the binding one.
+		RateLimit: RateLimit{RequestsPerSecond: 50, BurstCapacity: 100, RequestsPerMinute: 3600},
 		Cache: Cache{
 			Enabled:       false,
 			DefaultTTL:    5 * time.Minute,

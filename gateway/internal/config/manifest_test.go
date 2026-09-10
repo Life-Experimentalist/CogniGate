@@ -41,6 +41,7 @@ func TestShippedManifestMatchesTheSchema(t *testing.T) {
 		{"limits.request_timeout", cfg.Limits.RequestTimeout, def.Limits.RequestTimeout},
 		{"limits.max_concurrent_per_key", cfg.Limits.MaxConcurrentPerKey, def.Limits.MaxConcurrentPerKey},
 		{"rate_limit.requests_per_second", cfg.RateLimit.RequestsPerSecond, def.RateLimit.RequestsPerSecond},
+		{"rate_limit.requests_per_minute", cfg.RateLimit.RequestsPerMinute, def.RateLimit.RequestsPerMinute},
 		{"cache.enabled", cfg.Cache.Enabled, def.Cache.Enabled},
 		{"cache.default_ttl", cfg.Cache.DefaultTTL, def.Cache.DefaultTTL},
 		{"cache.max_entry_bytes", cfg.Cache.MaxEntryBytes, def.Cache.MaxEntryBytes},

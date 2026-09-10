@@ -151,6 +151,7 @@ limits:
 rate_limit:
     requests_per_second: 50
     burst_capacity: 100
+    requests_per_minute: 3600
 ```
 
 These are the deployment's ceilings. A tenant may be given lower ones through
@@ -159,6 +160,27 @@ These are the deployment's ceilings. A tenant may be given lower ones through
 `stream_idle_timeout` is the one worth understanding: a stream that goes quiet
 for longer than this is ended with `upstream_stream_stalled` rather than left
 holding a connection open indefinitely.
+
+The three rate figures are two ceilings, not one. `requests_per_second` and
+`burst_capacity` are a token bucket, which shapes traffic second by second;
+`requests_per_minute` is a plain count against a wall-clock minute, which is
+how an allowance is usually quoted to a customer. The default clears what the
+bucket admits in a minute, so out of the box it never refuses a request the
+bucket would have allowed. Lower it to make it the binding one, or set it to
+zero to switch it off. Both are measured before either is charged, so a request
+one refuses does not spend the other's allowance, and the `Retry-After` a
+client gets is the longer of the two waits.
+
+Rate is per tenant and concurrency is per key, deliberately. A tenant that
+could lift its own rate ceiling by minting another key would not have one; a
+concurrency cap exists to stop one integration starving another inside the same
+tenant, which is a distinction that only means anything per key.
+
+**For a requests-per-day allowance, set a quota rather than a rate limit.**
+`quota.day.requests` is the per-day counterpart, and it is a quota because a
+day is not a rate: it resets at a fixed hour, reads back with a remaining
+figure, can be scoped to a single key and can be run in observe mode first.
+[Set a quota](/docs/api#set-a-quota) has the shape of one.
 
 ### Fallback and circuit breaking
 

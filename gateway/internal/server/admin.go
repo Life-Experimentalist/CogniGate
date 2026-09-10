@@ -1137,12 +1137,13 @@ func (s *Server) quotaTarget(c *fiber.Ctx) (tenantID, keyID string, err error) {
 	return "", "", apierr.ResourceNotFound("key", keyID)
 }
 
-// quotaWindowRequest mirrors store.QuotaWindow on the wire. Both units are
-// pointers so that omitting one leaves it unlimited rather than setting it to
+// quotaWindowRequest mirrors store.QuotaWindow on the wire. Every unit is a
+// pointer so that omitting one leaves it unlimited rather than setting it to
 // zero, which would be a cap nothing could pass.
 type quotaWindowRequest struct {
-	Tokens *store.QuotaLimit `json:"tokens"`
-	Cost   *store.QuotaLimit `json:"cost"`
+	Tokens   *store.QuotaLimit `json:"tokens"`
+	Cost     *store.QuotaLimit `json:"cost"`
+	Requests *store.QuotaLimit `json:"requests"`
 }
 
 func (s *Server) setQuota(c *fiber.Ctx) error {
@@ -1162,8 +1163,12 @@ func (s *Server) setQuota(c *fiber.Ctx) error {
 	q := &store.Quota{
 		TenantID: tenantID,
 		KeyID:    keyID,
-		Day:      store.QuotaWindow{Tokens: req.Day.Tokens, Cost: req.Day.Cost},
-		Month:    store.QuotaWindow{Tokens: req.Month.Tokens, Cost: req.Month.Cost},
+		Day: store.QuotaWindow{
+			Tokens: req.Day.Tokens, Cost: req.Day.Cost, Requests: req.Day.Requests,
+		},
+		Month: store.QuotaWindow{
+			Tokens: req.Month.Tokens, Cost: req.Month.Cost, Requests: req.Month.Requests,
+		},
 	}
 	for _, slot := range []struct {
 		param string
@@ -1171,8 +1176,10 @@ func (s *Server) setQuota(c *fiber.Ctx) error {
 	}{
 		{"day.tokens", q.Day.Tokens},
 		{"day.cost", q.Day.Cost},
+		{"day.requests", q.Day.Requests},
 		{"month.tokens", q.Month.Tokens},
 		{"month.cost", q.Month.Cost},
+		{"month.requests", q.Month.Requests},
 	} {
 		if err := s.normaliseQuotaLimit(slot.limit, slot.param); err != nil {
 			return httpx.Fail(c, err)
@@ -1180,7 +1187,7 @@ func (s *Server) setQuota(c *fiber.Ctx) error {
 	}
 	if q.Empty() {
 		return httpx.Fail(c, apierr.InvalidRequest(
-			"A quota must configure at least one of day.tokens, day.cost, month.tokens or month.cost."))
+			"A quota must configure at least one cap: day or month, in tokens, cost or requests."))
 	}
 
 	ctx, cancel := s.opContext(c)

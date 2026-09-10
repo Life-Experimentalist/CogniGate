@@ -85,7 +85,7 @@ type TenantCache struct {
 // rejects a value above the deployment's, so a tenant cannot be configured into
 // consuming more of the process than the process was sized for.
 //
-// Only the four limits that can be decided per request are here.
+// Only the limits that can be decided per request are here.
 // max_response_bytes and upstream_connect_timeout are deliberately absent: both
 // are baked into the provider adapter's HTTP transport when the process starts,
 // so honouring them per tenant would mean a transport per tenant — a real cost
@@ -97,6 +97,7 @@ type TenantLimits struct {
 	MaxConcurrentPerKey      int   `json:"max_concurrent_per_key,omitempty"`
 	RequestsPerSecond        int   `json:"requests_per_second,omitempty"`
 	BurstCapacity            int   `json:"burst_capacity,omitempty"`
+	RequestsPerMinute        int   `json:"requests_per_minute,omitempty"`
 }
 
 // TenantPatch is a partial update. Every field is a pointer so that "absent"
@@ -300,6 +301,13 @@ type QuotaLimit struct {
 type QuotaWindow struct {
 	Tokens *QuotaLimit `json:"tokens,omitempty"`
 	Cost   *QuotaLimit `json:"cost,omitempty"`
+	// Requests caps how many requests the window may serve, which is the
+	// ceiling an operator sets when what they are protecting is not spend but
+	// the provider account: a per-day request allowance is how most vendors
+	// express theirs. Only served requests count. A request refused by a rate
+	// limit, a quota or the concurrency cap writes no usage row, so retrying
+	// against a cap that is already full does not dig the hole deeper.
+	Requests *QuotaLimit `json:"requests,omitempty"`
 }
 
 // Quota bounds consumption over two windows in two units (GW-4). The four slots
@@ -323,8 +331,8 @@ type Quota struct {
 // from having no quota at all and is treated as such rather than as a cap of
 // zero.
 func (q *Quota) Empty() bool {
-	return q.Day.Tokens == nil && q.Day.Cost == nil &&
-		q.Month.Tokens == nil && q.Month.Cost == nil
+	return q.Day.Tokens == nil && q.Day.Cost == nil && q.Day.Requests == nil &&
+		q.Month.Tokens == nil && q.Month.Cost == nil && q.Month.Requests == nil
 }
 
 // Webhook is one delivery target for the GW-4/GW-1/GW-3 event registry.

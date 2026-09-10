@@ -26,6 +26,7 @@ type effectiveLimits struct {
 	MaxConcurrentPerKey int
 	RequestsPerSecond   int
 	BurstCapacity       int
+	RequestsPerMinute   int
 }
 
 // limits resolves the limits in force for this request.
@@ -57,6 +58,7 @@ func (s *Server) limitsFor(t *store.Tenant) effectiveLimits {
 		MaxConcurrentPerKey: dep.MaxConcurrentPerKey,
 		RequestsPerSecond:   s.Config.RateLimit.RequestsPerSecond,
 		BurstCapacity:       s.Config.RateLimit.BurstCapacity,
+		RequestsPerMinute:   s.Config.RateLimit.RequestsPerMinute,
 	}
 	if t == nil {
 		return eff
@@ -68,6 +70,7 @@ func (s *Server) limitsFor(t *store.Tenant) effectiveLimits {
 	eff.MaxConcurrentPerKey = lowerInt(eff.MaxConcurrentPerKey, o.MaxConcurrentPerKey)
 	eff.RequestsPerSecond = lowerInt(eff.RequestsPerSecond, o.RequestsPerSecond)
 	eff.BurstCapacity = lowerInt(eff.BurstCapacity, o.BurstCapacity)
+	eff.RequestsPerMinute = lowerInt(eff.RequestsPerMinute, o.RequestsPerMinute)
 	return eff
 }
 
@@ -115,6 +118,7 @@ func (s *Server) validateTenantLimits(l store.TenantLimits) *apierr.Error {
 		{"limits.max_concurrent_per_key", int64(l.MaxConcurrentPerKey), int64(dep.MaxConcurrentPerKey)},
 		{"limits.requests_per_second", int64(l.RequestsPerSecond), int64(s.Config.RateLimit.RequestsPerSecond)},
 		{"limits.burst_capacity", int64(l.BurstCapacity), int64(s.Config.RateLimit.BurstCapacity)},
+		{"limits.requests_per_minute", int64(l.RequestsPerMinute), int64(s.Config.RateLimit.RequestsPerMinute)},
 	} {
 		switch {
 		case f.value < 0:
@@ -161,7 +165,9 @@ func (s *Server) limitTenant() fiber.Handler {
 		}
 
 		if !rateExempt(c) {
-			if wait, ok := s.rates.take(tenant.ID, lim.RequestsPerSecond, lim.BurstCapacity); !ok {
+			if wait, ok := s.rates.take(
+				tenant.ID, lim.RequestsPerSecond, lim.BurstCapacity, lim.RequestsPerMinute,
+			); !ok {
 				return httpx.Fail(c, apierr.RateLimited().WithRetryAfter(wait))
 			}
 		}
@@ -259,9 +265,18 @@ func (s *slot) releaseUnlessAdopted() {
 
 // --- rate limiter -----------------------------------------------------------
 
-// rateLimiter is a per-tenant token bucket: requests_per_second refills it and
-// burst_capacity bounds it, so a client may spend a burst at once and then
-// settles to the sustained rate.
+// rateLimiter holds a tenant to two ceilings at once. requests_per_second
+// refills a token bucket that burst_capacity bounds, so a client may spend a
+// burst at once and then settles to the sustained rate; requests_per_minute is
+// a fixed window over the top of it.
+//
+// The minute window is a plain count against a wall-clock minute rather than a
+// second, slower bucket, because it is the figure an operator quotes to a
+// customer: "3000 a minute" should mean the same thing to whoever reads the
+// contract as it does here, and a smoothed rate does not. What a fixed window
+// costs is that a client can spend one minute's allowance at the end of one
+// window and the next at the start of the following, which is the sort of burst
+// the bucket underneath it is there to absorb.
 //
 // Per tenant rather than per key, because the rate is what the tenant is paying
 // for: splitting it across keys would let a tenant lift its own ceiling by
@@ -279,6 +294,10 @@ type rateLimiter struct {
 type bucket struct {
 	tokens float64
 	last   time.Time
+	// The fixed minute window, carried on the same entry as the bucket so one
+	// lock and one sweep cover both ceilings.
+	minuteStart time.Time
+	minuteCount int
 }
 
 // sweepAbove is the bucket count past which take drops the ones it can prove are
@@ -293,14 +312,17 @@ func newRateLimiter() *rateLimiter {
 	return &rateLimiter{buckets: map[string]*bucket{}, now: time.Now}
 }
 
-// take spends one token. It reports how long to wait when there is none, which
-// becomes the Retry-After header: a client told only "too many requests" has to
-// guess, and guesses badly.
-func (l *rateLimiter) take(id string, rps, burst int) (time.Duration, bool) {
-	if rps < 1 || burst < 1 {
-		// A deployment that configured the rate limit away is not rate limited.
-		// Refusing everything is the other reading of zero, and it is not one
-		// any operator who sets it intends.
+// take spends one request against both ceilings. It reports how long to wait
+// when either refuses, which becomes the Retry-After header: a client told only
+// "too many requests" has to guess, and guesses badly.
+//
+// A ceiling set to zero is off. A deployment that configured the rate limit away
+// is not rate limited; refusing everything is the other reading of zero, and it
+// is not one any operator who sets it intends.
+func (l *rateLimiter) take(id string, rps, burst, rpm int) (time.Duration, bool) {
+	bucketOn := rps >= 1 && burst >= 1
+	minuteOn := rpm >= 1
+	if !bucketOn && !minuteOn {
 		return 0, true
 	}
 
@@ -310,34 +332,69 @@ func (l *rateLimiter) take(id string, rps, burst int) (time.Duration, bool) {
 	now := l.now()
 	b, ok := l.buckets[id]
 	if !ok {
-		b = &bucket{tokens: float64(burst)}
+		b = &bucket{tokens: float64(burst), minuteStart: now}
 		l.buckets[id] = b
 		if len(l.buckets) > sweepAbove {
 			l.sweep(now, rps, burst)
 		}
 	} else {
-		b.tokens += now.Sub(b.last).Seconds() * float64(rps)
-		if b.tokens > float64(burst) {
-			b.tokens = float64(burst)
+		if bucketOn {
+			b.tokens += now.Sub(b.last).Seconds() * float64(rps)
+			if b.tokens > float64(burst) {
+				b.tokens = float64(burst)
+			}
+		}
+		if now.Sub(b.minuteStart) >= time.Minute {
+			b.minuteStart = now
+			b.minuteCount = 0
 		}
 	}
 	b.last = now
 
-	if b.tokens < 1 {
+	// Both ceilings are measured before either is charged. Charging one for a
+	// request the other refused would let a client burn a minute's allowance on
+	// requests that never ran. The cooldown reported is the longer of the two,
+	// because a Retry-After that expires while the other ceiling is still
+	// refusing sends the client straight back into a 429.
+	var wait time.Duration
+	denied := false
+	if bucketOn && b.tokens < 1 {
 		// Time until one whole token exists. WithRetryAfter rounds it up to a
 		// second, which is the finest unit the header has.
-		return time.Duration((1 - b.tokens) / float64(rps) * float64(time.Second)), false
+		wait = time.Duration((1 - b.tokens) / float64(rps) * float64(time.Second))
+		denied = true
 	}
-	b.tokens--
+	if minuteOn && b.minuteCount >= rpm {
+		if w := time.Minute - now.Sub(b.minuteStart); w > wait {
+			wait = w
+		}
+		denied = true
+	}
+	if denied {
+		return wait, false
+	}
+
+	if bucketOn {
+		b.tokens--
+	}
+	if minuteOn {
+		b.minuteCount++
+	}
 	return 0, true
 }
 
-// sweep drops every bucket idle long enough to have refilled. Called with the
-// lock held.
+// sweep drops every entry whose bucket has refilled and whose minute window has
+// expired. Both conditions, because an entry idle long enough to have refilled
+// is not necessarily one whose minute is over, and forgetting a partly spent
+// minute window would hand that tenant a fresh allowance. Called with the lock
+// held.
 func (l *rateLimiter) sweep(now time.Time, rps, burst int) {
-	full := time.Duration(float64(burst) / float64(rps) * float64(time.Second))
+	var full time.Duration
+	if rps >= 1 && burst >= 1 {
+		full = time.Duration(float64(burst) / float64(rps) * float64(time.Second))
+	}
 	for id, b := range l.buckets {
-		if now.Sub(b.last) >= full {
+		if now.Sub(b.last) >= full && now.Sub(b.minuteStart) >= time.Minute {
 			delete(l.buckets, id)
 		}
 	}

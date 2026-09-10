@@ -209,6 +209,18 @@ read back after the setting changed still says how each request in it was priced
 `GET /admin/v1/tenants/{id}/usage` adds `margin_usd`, which is `charge_usd` minus
 `cost_usd`; it exists on that plane only.
 
+**A tenant has two rate ceilings and any number of quota caps.** The ceilings
+are `rate_limit.requests_per_second` with `burst_capacity` (a token bucket) and
+`rate_limit.requests_per_minute` (a fixed wall-clock minute, default 3600).
+Both are measured before either is charged, the `Retry-After` is the longer of
+the two waits, and zero switches either off. Rate is per tenant;
+`limits.max_concurrent_per_key` is per key, so one integration cannot starve
+another inside the same tenant. A per-day allowance is not a rate limit but a
+quota: `requests` is a quota unit beside `tokens` and `cost`, set per window as
+`{"day": {"requests": {"cap": 50000}}}`. Only served requests count, because a
+request refused by a rate limit, a quota or the concurrency cap writes no usage
+row.
+
 ## 7. Behaviours users misread as bugs
 
 - **A restart loses all configuration.** Tenants, keys, providers, aliases,

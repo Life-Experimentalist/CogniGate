@@ -141,7 +141,10 @@ in a billing column.
 **Quota caps are measured in cost, not in charge.** A `cost` budget stops
 traffic on what it cost the operator, which is the figure that stays meaningful
 under `absorb`, where the charge is always zero and a cap on it could never
-fire. [Set a quota](/docs/api#set-a-quota) has the shape of one.
+fire. A quota can also be set in `tokens` or in `requests`, neither of which is
+about money at all, so a deployment that bills nobody can still hold a tenant
+to a per-day allowance. [Set a quota](/docs/api#set-a-quota) has the shape of
+one.
 
 ## How much of the cost a tenant sees
 

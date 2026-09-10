@@ -187,7 +187,7 @@ Everything below is scoped to one tenant at
 | `PUT` `GET` `DELETE`| `aliases/{name}`    | Define a capability alias (`GET` lists all)       |
 | `PUT` `GET`         | `routing-rules`     | Define fallback chains                            |
 | `DELETE`            | `routing-rules/{id}`| Remove one                                        |
-| `PUT` `GET` `DELETE`| `quota`             | Token and spend caps for the tenant               |
+| `PUT` `GET` `DELETE`| `quota`             | Token, spend and request caps for the tenant      |
 | `PUT` `GET` `DELETE`| `keys/{id}/quota`   | The same, narrowed to one key                     |
 | `POST`              | `cache/flush`       | Drop this tenant's cached responses               |
 | `GET`               | `captures`          | Read debug captures, when the tenant enabled them |
@@ -326,11 +326,27 @@ curl -X PUT http://localhost:8080/admin/v1/tenants/ten_7f3a/quota \
   -H "Authorization: Bearer $COGNIGATE_ADMIN_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "tokens": {"cap": 5000000, "soft_threshold_pct": 80},
-    "cost":   {"cap": 250.0,   "soft_threshold_pct": 80}
+    "day": {
+      "requests": {"cap": 50000, "soft_threshold_pct": 80}
+    },
+    "month": {
+      "tokens": {"cap": 5000000, "soft_threshold_pct": 80},
+      "cost":   {"cap": 250.0,   "soft_threshold_pct": 80}
+    }
   }'
 ```
 
+Caps are set per window, `day` or `month`, in any of three units. `tokens` and
+`requests` are counts, `cost` is what the traffic cost the operator in USD.
+Omit a unit to leave it unlimited, so a tenant can be capped on spend without
+also being capped on calls. At least one cap must be set.
+
+`day.requests` is the per-day request allowance most vendors publish their own
+limits as, and setting one under the provider's is how a deployment stops a
+single tenant spending the whole account. Only served requests count: a request
+refused by a rate limit, a quota or the concurrency cap writes no usage row, so
+retrying against a cap that is already full does not dig the hole deeper.
+
 Crossing the soft threshold emits an event; crossing the cap refuses the request
-with `quota_exceeded` or `budget_exceeded`. A key-level quota narrows the
-tenant's — it is evaluated alongside it and can never widen it.
+with `quota_exceeded`, or `budget_exceeded` for a `cost` cap. A key-level quota
+narrows the tenant's: it is evaluated alongside it and can never widen it.

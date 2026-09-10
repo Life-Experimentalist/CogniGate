@@ -25,10 +25,20 @@ import (
 // bound even if the invalidation on the write path were ever missed.
 const quotaCacheTTL = 5 * time.Second
 
-// The two units a quota is measured in, and the two windows it is measured over.
+// The three units a quota is measured in, and the two windows it is measured
+// over.
+//
+// unitRequests is the plain call count, and it is the one an operator reaches
+// for when what they are protecting is a provider account rather than a budget:
+// vendors publish their own allowances that way, so a cap expressed the same way
+// can be set to sit under one. It is a quota rather than a third rate-limiter
+// window because a day is not a rate: it resets at a fixed hour, it is read back
+// with a remaining figure, it can be scoped to a single key, and it can be run
+// in observe mode first. None of that is true of a token bucket.
 const (
-	unitTokens = "tokens"
-	unitCost   = "cost"
+	unitTokens   = "tokens"
+	unitCost     = "cost"
+	unitRequests = "requests"
 
 	windowDay   = "day"
 	windowMonth = "month"
@@ -338,7 +348,7 @@ func (s *Server) loadQuota(ctx context.Context, tenantID, keyID string) (*store.
 }
 
 // windowTotals is the consumption behind one quota, aggregated once per window
-// rather than once per slot: the two units of a window come from the same rows.
+// rather than once per slot: every unit of a window comes from the same rows.
 type windowTotals struct {
 	day   store.UsageTotals
 	month store.UsageTotals
@@ -359,14 +369,14 @@ func (s *Server) usageFor(
 		return s.Store.KeyUsage(ctx, tenantID, keyPrefix, since, until)
 	}
 
-	if q.Day.Tokens != nil || q.Day.Cost != nil {
+	if q.Day.Tokens != nil || q.Day.Cost != nil || q.Day.Requests != nil {
 		totals, err := read(windowDay)
 		if err != nil {
 			return out, err
 		}
 		out.day = totals
 	}
-	if q.Month.Tokens != nil || q.Month.Cost != nil {
+	if q.Month.Tokens != nil || q.Month.Cost != nil || q.Month.Requests != nil {
 		totals, err := read(windowMonth)
 		if err != nil {
 			return out, err
@@ -406,8 +416,10 @@ func (s *Server) positions(
 
 	add(windowDay, unitTokens, q.Day.Tokens, float64(totals.day.TotalTokens))
 	add(windowDay, unitCost, q.Day.Cost, totals.day.CostUSD)
+	add(windowDay, unitRequests, q.Day.Requests, float64(totals.day.Requests))
 	add(windowMonth, unitTokens, q.Month.Tokens, float64(totals.month.TotalTokens))
 	add(windowMonth, unitCost, q.Month.Cost, totals.month.CostUSD)
+	add(windowMonth, unitRequests, q.Month.Requests, float64(totals.month.Requests))
 	return out
 }
 
