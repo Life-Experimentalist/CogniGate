@@ -113,13 +113,18 @@ const (
 	BillingAbsorb      = "absorb"
 )
 
-// How precise the cost figure is on the data plane. Exact publishes the
-// number the gateway computed. Hint rounds it to one significant figure, so a
-// tenant can see roughly what its traffic cost without being able to work the
-// operator's margin back out of it.
+// How much of the cost figure the data plane publishes. Hidden, the default,
+// publishes none of it: what the provider charged the operator is the
+// operator's business, and a tenant is owed a charge rather than an account of
+// somebody else's margin. Hint rounds it to one significant figure, for a
+// deployment that wants its tenants to see roughly what their traffic cost
+// without being able to work the margin back out of it. Exact publishes the
+// number the gateway computed, which is what an operator absorbing the bill
+// for its own teams usually wants.
 const (
-	CostExact = "exact"
-	CostHint  = "hint"
+	CostExact  = "exact"
+	CostHint   = "hint"
+	CostHidden = "hidden"
 )
 
 // Billing decides what a request costs its tenant, given what it cost the
@@ -131,19 +136,22 @@ type Billing struct {
 	// MarkupPct is the percentage added to the provider rate in "markup"
 	// mode, and is ignored in the other two.
 	MarkupPct float64 `yaml:"markup_pct"`
-	// CostVisibility decides how precise cost_usd is on the data plane. The
+	// CostVisibility decides how much of cost_usd the data plane publishes. The
 	// charge is always exact: it is what the tenant owes, and a figure someone
 	// is billed on cannot be approximate. The admin plane is always exact too.
 	CostVisibility string `yaml:"cost_visibility"`
 }
 
-// TenantCost is the cost figure as the data plane reports it. Under "hint" it
-// is rounded to one significant figure: enough for a tenant to see the order of
-// magnitude of what its traffic cost, not enough to divide into the exact
-// charge beside it and recover the operator's margin.
+// TenantCost is the cost figure as the data plane reports it when it reports
+// one at all. Under "hint" it is rounded to one significant figure: enough for
+// a tenant to see the order of magnitude of what its traffic cost, not enough
+// to divide into the exact charge beside it and recover the operator's margin.
 //
 // Rounding through the decimal formatter rather than by arithmetic is what
 // keeps 0.002 from being published as 0.0020000000000000005.
+//
+// Under "hidden" there is no figure to round, so callers check HidesCost first
+// and leave the field out rather than passing it through here.
 func (b Billing) TenantCost(cost float64) float64 {
 	if b.CostVisibility != CostHint || cost <= 0 {
 		return cost
@@ -154,6 +162,11 @@ func (b Billing) TenantCost(cost float64) float64 {
 	}
 	return out
 }
+
+// HidesCost reports whether the data plane may publish cost_usd at all. It is
+// separate from TenantCost because withholding a field is not a rounding: the
+// answer is an absent key, not a number, and a zero would read as free.
+func (b Billing) HidesCost() bool { return b.CostVisibility == CostHidden }
 
 // Charge converts one request's provider cost into what its tenant is
 // billed. A model with no rate costs zero and so is charged zero: there is
@@ -317,7 +330,7 @@ func Default() Config {
 			StaleWarnAfter:  6 * time.Hour,
 			ProviderTimeout: 10 * time.Second,
 		},
-		Billing: Billing{Mode: BillingPassthrough, CostVisibility: CostExact},
+		Billing: Billing{Mode: BillingPassthrough, CostVisibility: CostHidden},
 		Routing: Routing{
 			MaxFallbackDepth: 5,
 			Breaker: Breaker{
@@ -482,10 +495,10 @@ func (c Config) Validate() error {
 			BillingPassthrough, BillingMarkup, BillingAbsorb, c.Billing.Mode)
 	}
 	switch c.Billing.CostVisibility {
-	case CostExact, CostHint:
+	case CostExact, CostHint, CostHidden:
 	default:
-		return fmt.Errorf("billing.cost_visibility must be %q or %q, got %q",
-			CostExact, CostHint, c.Billing.CostVisibility)
+		return fmt.Errorf("billing.cost_visibility must be %q, %q or %q, got %q",
+			CostHidden, CostHint, CostExact, c.Billing.CostVisibility)
 	}
 	if c.Routing.MaxFallbackDepth < 1 {
 		return fmt.Errorf("routing.max_fallback_depth must be at least 1")

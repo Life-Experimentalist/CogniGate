@@ -818,15 +818,20 @@ type usageLimit struct {
 
 // usageReport is GET /v1/usage.
 type usageReport struct {
-	Object           string       `json:"object"`
-	Window           string       `json:"window"`
-	Requests         int64        `json:"requests"`
-	PromptTokens     int64        `json:"prompt_tokens"`
-	CompletionTokens int64        `json:"completion_tokens"`
-	TotalTokens      int64        `json:"total_tokens"`
-	CostUSD          float64      `json:"cost_usd"`
-	State            string       `json:"state"`
-	Limits           []usageLimit `json:"limits"`
+	Object           string `json:"object"`
+	Window           string `json:"window"`
+	Requests         int64  `json:"requests"`
+	PromptTokens     int64  `json:"prompt_tokens"`
+	CompletionTokens int64  `json:"completion_tokens"`
+	TotalTokens      int64  `json:"total_tokens"`
+	// CostUSD is absent from the body under billing.cost_visibility: hidden,
+	// which is the shipped default, so it decodes as zero against a stock
+	// deployment. ChargeUSD is published under every setting, which is what
+	// makes it the figure a money assertion can rely on here.
+	CostUSD   float64      `json:"cost_usd"`
+	ChargeUSD float64      `json:"charge_usd"`
+	State     string       `json:"state"`
+	Limits    []usageLimit `json:"limits"`
 }
 
 // slot finds the limit for one window and unit, so an assertion can name what it

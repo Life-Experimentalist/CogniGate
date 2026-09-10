@@ -196,13 +196,18 @@ charges nothing and leaves the bill with the operator. Both figures are on every
 usage row. Quota caps are measured in `cost_usd`, not `charge_usd`, so a spend
 limit still fires under `absorb`.
 
-**`billing.cost_visibility` decides how precise `cost_usd` is on the data plane.**
-`exact` is the default. `hint` rounds it to one significant figure so a tenant
-reading `/v1/usage` cannot divide the exact charge beside it by an exact cost and
-recover the margin. The rounding happens in response shaping only: the stored row,
-the charge, the admin plane and quota enforcement are all exact under `hint`, and
-a tenant-facing `remaining` is derived from the rounded `consumed` so subtracting
-it from a known cap does not hand the exact figure back.
+**`billing.cost_visibility` decides how much of `cost_usd` the data plane
+publishes.** `hidden` is the default: `/v1/usage` and `/v1/usage/breakdown` carry
+no `cost_usd` key at all, and a `cost` quota slot is left out of `limits` with it,
+because cap minus remaining is the consumption. A tenant reads `charge_usd`, which
+is what it owes. `hint` publishes the cost rounded to one significant figure, so a
+tenant sees the order of magnitude but cannot divide the exact charge beside it by
+an exact cost and recover the margin; a tenant-facing `remaining` is derived from
+the rounded `consumed` for the same reason. `exact` publishes the computed figure.
+All of this is response shaping only: the stored row, the charge, the admin plane
+and quota enforcement are exact under all three, and a tenant over a withheld cost
+cap still reads `state: hard-exceeded` and is still rejected with
+`budget_exceeded`.
 
 Each usage row carries the `billing_mode` in force when it was served, so a window
 read back after the setting changed still says how each request in it was priced.

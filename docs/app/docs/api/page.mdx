@@ -108,12 +108,16 @@ curl "http://localhost:8080/v1/usage?window=month" \
     "prompt_tokens": 384200,
     "completion_tokens": 91043,
     "total_tokens": 475243,
-    "cost_usd": 4.81,
     "charge_usd": 4.81,
     "state": "ok",
     "limits": []
 }
 ```
+
+There is no `cost_usd` there because `billing.cost_visibility` defaults to
+`hidden`: what the provider charged the operator is not published to tenants,
+and `charge_usd` is what this caller owes. Set it to `hint` or `exact` and the
+key appears; the operator reads the exact figure on the admin plane either way.
 
 **GET** `/v1/usage/breakdown?group_by=model` returns the same figures per
 bucket under `data`, sorted by spend. `group_by` accepts `model`, `provider`,

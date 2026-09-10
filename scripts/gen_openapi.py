@@ -303,16 +303,22 @@ TOTALS = [
     ("cost_usd", p("number", "What the traffic cost at the provider's published rate. "
                              "Zero for a model whose listing publishes no price and whose "
                              "rate the operator has not supplied. This is the figure cost "
-                             "quotas are measured against. A deployment that sets "
-                             "`billing.cost_visibility: hint` rounds it to one significant "
-                             "figure on the data plane; the admin plane and the stored row "
-                             "are always exact.")),
+                             "quotas are measured against. `billing.cost_visibility` "
+                             "decides how much of it the data plane publishes: under "
+                             "`hidden`, the default, the key is absent altogether, under "
+                             "`hint` it is rounded to one significant figure, and under "
+                             "`exact` it is the computed figure. The admin plane and the "
+                             "stored row are always exact.")),
     ("charge_usd", p("number", "What is owed for the traffic. Equal to `cost_usd` unless "
                                "the operator has put a margin on the provider rate, or is "
                                "carrying the bill themselves, in which case it is zero.")),
 ]
+# cost_usd is deliberately absent from this list. The data plane omits the key
+# under billing.cost_visibility: hidden, which is the default, so a client that
+# required it would be broken by a stock deployment. The admin plane, which is
+# exact whatever the setting does, adds it back below.
 TOTALS_REQUIRED = ["requests", "cached_requests", "prompt_tokens", "completion_tokens",
-                   "total_tokens", "cost_usd", "charge_usd"]
+                   "total_tokens", "charge_usd"]
 
 SCHEMAS["UsageLimit"] = obj(
     [
@@ -322,8 +328,10 @@ SCHEMAS["UsageLimit"] = obj(
         ("cap", p("number")),
         ("soft_threshold_pct", p("integer")),
         ("consumed", p("number", "Consumption in this slot's own unit. A cost slot "
-                                 "follows `billing.cost_visibility`, so it can be a "
-                                 "rounded figure on the data plane.")),
+                                 "follows `billing.cost_visibility`: it is a rounded "
+                                 "figure on the data plane under `hint`, and under "
+                                 "`hidden` the whole slot is left out of a tenant's "
+                                 "`limits` while still counting toward `state`.")),
         ("remaining", p("number", "`cap` minus `consumed`, floored at zero, so the two "
                                   "always sum to the cap as reported.")),
         ("resets_at", dt()),
@@ -359,7 +367,10 @@ SCHEMAS["AdminUsageResponse"] = obj(
                                    "decimal places. Zero under `passthrough`, negative "
                                    "under `absorb`.")),
     ],
-    required=USAGE_REQUIRED + ["margin_usd"],
+    # cost_usd is required here and nowhere else: the operator reads the exact
+    # figure under every cost_visibility setting, and the margin beside it is
+    # only readable against it.
+    required=USAGE_REQUIRED + ["cost_usd", "margin_usd"],
 )
 
 SCHEMAS["UsageBucket"] = obj(

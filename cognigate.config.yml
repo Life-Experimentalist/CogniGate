@@ -85,13 +85,18 @@ billing:
   # "markup" with nothing here is refused at startup rather than quietly
   # behaving as passthrough.
   markup_pct: 0
-  # How precise cost_usd is on the data plane. "exact" publishes the figure the
-  # gateway computed. "hint" rounds it to one significant figure, so a tenant
-  # can still see roughly what its traffic cost without dividing the exact
-  # charge beside it by an exact cost and recovering the margin. The admin
-  # plane and the stored row are exact either way, and the charge is never
-  # rounded: it is what the tenant owes.
-  cost_visibility: exact
+  # How much of cost_usd the data plane publishes. "hidden", the default,
+  # publishes none of it: a tenant reads charge_usd, which is what it owes,
+  # and no cost_usd key at all. A cost quota is withheld with it, since cap
+  # minus remaining is the consumption. "hint" rounds the cost to one
+  # significant figure instead, for a deployment that wants tenants to see
+  # roughly what their traffic cost without dividing the exact charge beside
+  # it by an exact cost and recovering the margin. "exact" publishes the
+  # figure the gateway computed, which is what an operator absorbing the bill
+  # for its own teams usually wants. The admin plane and the stored row are
+  # exact under all three, quota enforcement reads the exact position, and
+  # the charge is never rounded or withheld: it is what the tenant owes.
+  cost_visibility: hidden
 
 # The one thing the gateway adds to a completion request. Everything else is
 # relayed to the provider exactly as it arrived.

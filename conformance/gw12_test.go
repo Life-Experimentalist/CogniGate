@@ -200,6 +200,13 @@ func TestGW12_AC2_AHitCostsNoTokensAndNoMoney(t *testing.T) {
 		t.Errorf("cost_usd went from %v to %v across a cache hit; nothing was bought",
 			primed.CostUSD, after.CostUSD)
 	}
+	// The charge carries this assertion on a deployment that withholds the cost,
+	// where the comparison above is 0 against 0 and says nothing. A hit is served
+	// from what was already bought, so neither figure moves.
+	if after.ChargeUSD != primed.ChargeUSD {
+		t.Errorf("charge_usd went from %v to %v across a cache hit; a replayed answer is not billed again",
+			primed.ChargeUSD, after.ChargeUSD)
+	}
 	if after.Requests != 2 {
 		t.Errorf("requests = %d, want 2: a hit is still a request the tenant made", after.Requests)
 	}

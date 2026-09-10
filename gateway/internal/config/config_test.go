@@ -215,11 +215,24 @@ func TestNoRateMeansNoChargeInEveryMode(t *testing.T) {
 	}
 }
 
-// The default has to publish the figure the gateway actually computed. A
-// deployment that never heard of cost_visibility reports cost exactly.
-func TestDefaultCostVisibilityIsExact(t *testing.T) {
-	if got := Default().Billing.TenantCost(1.8734); got != 1.8734 {
-		t.Errorf("tenant cost = %v, want the exact figure under the default", got)
+// A deployment that never heard of cost_visibility publishes no cost to its
+// tenants. What the provider charged the operator is not part of what a
+// tenant is owed an account of, so withholding it is the default rather than
+// something an operator has to remember to switch on.
+func TestDefaultCostVisibilityIsHidden(t *testing.T) {
+	if !Default().Billing.HidesCost() {
+		t.Errorf("cost_visibility defaults to %q, want the cost withheld",
+			Default().Billing.CostVisibility)
+	}
+}
+
+// The other two settings publish a figure, so neither may report itself as
+// hiding one.
+func TestOnlyHiddenWithholdsTheCost(t *testing.T) {
+	for _, v := range []string{CostExact, CostHint} {
+		if (Billing{CostVisibility: v}).HidesCost() {
+			t.Errorf("cost_visibility %q reports itself as withholding the cost", v)
+		}
 	}
 }
 
@@ -255,6 +268,16 @@ func TestValidateRejectsAnUnknownCostVisibility(t *testing.T) {
 
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("an unknown billing.cost_visibility was accepted")
+	}
+}
+
+func TestValidateAcceptsEveryCostVisibility(t *testing.T) {
+	for _, v := range []string{CostExact, CostHint, CostHidden} {
+		cfg := Default()
+		cfg.Billing.CostVisibility = v
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("billing.cost_visibility %q was rejected: %v", v, err)
+		}
 	}
 }
 

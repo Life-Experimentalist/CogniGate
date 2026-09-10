@@ -35,7 +35,7 @@ The first release has not been cut. Everything below is the state of `main`.
   billing:
       mode: passthrough # passthrough | markup | absorb
       markup_pct: 0
-      cost_visibility: exact # exact | hint
+      cost_visibility: hidden # hidden | hint | exact
   ```
 
   `passthrough` is the default and charges the provider rate itself, so the
@@ -60,21 +60,32 @@ The first release has not been cut. Everything below is the state of `main`.
   override the section from the environment, like every other setting.
 
 - **`billing.cost_visibility` decides how much of the cost a tenant sees.**
-  A tenant reading its own usage sees both money figures, so under `markup` it
-  could divide one by the other and read the margin straight off. `exact`, the
-  default, publishes the figure the gateway computed and is the right answer
-  under `passthrough`, where there is no margin, and under `absorb`, where teams
-  want to know what they are spending. `hint` rounds `cost_usd` to one
-  significant figure on the data plane: $1.8734 is published as $2, and dividing
-  an exact charge of $2.1544 by that says nothing useful about a markup of 15%.
+  What the provider charged the operator and what the tenant owes are different
+  numbers, and a tenant reading both could divide one by the other and read the
+  margin straight off. `hidden` is the default and publishes none of the first:
+  `/v1/usage` and `/v1/usage/breakdown` carry no `cost_usd` key at all, so a
+  tenant reads the charge it owes and nothing about what the traffic cost to
+  buy. The key is absent rather than zero, because a published zero would read
+  as free traffic. A `cost` quota goes with it: the slot is left out of a
+  tenant's `limits`, since `cap` minus `remaining` hands the consumption back.
 
-  The rounding is applied where the response is shaped and nowhere else, so four
-  things stay exact under `hint`: `charge_usd`, which is what the tenant owes;
-  everything the admin plane returns; the stored row; and quota enforcement,
-  which is computed from the real position rather than from what was published.
-  A tenant does see a rounded `consumed`, and a `remaining` derived from it
-  rather than from the exact number, because a tenant knows its own cap and an
-  exact remainder would subtract straight back to the figure the hint blurs.
+  `hint` publishes the cost rounded to one significant figure instead, for a
+  deployment that wants tenants to see roughly what their traffic cost: $1.8734
+  is published as $2, and dividing an exact charge of $2.1544 by that says
+  nothing useful about a markup of 15%. `exact` publishes the computed figure,
+  which suits `passthrough`, where there is no margin, and `absorb`, where teams
+  want to know what they are spending the company.
+
+  This is applied where the response is shaped and nowhere else, so four things
+  stay exact under all three: `charge_usd`, which is what the tenant owes;
+  everything the admin plane returns, where `cost_usd` sits beside its
+  `margin_usd`; the stored row; and quota enforcement, which is computed from
+  the real position rather than from what was published. A tenant over a
+  withheld cost cap still reads `state: hard-exceeded` and is still rejected
+  with `budget_exceeded`. Under `hint` a tenant sees a rounded `consumed` and a
+  `remaining` derived from it rather than from the exact number, because a
+  tenant knows its own cap and an exact remainder would subtract straight back
+  to the figure the hint blurs.
 
 - **Usage rows record the billing mode, and the admin plane reports the margin.**
   `billing_mode` is stamped on each usage record as it is served, so a window

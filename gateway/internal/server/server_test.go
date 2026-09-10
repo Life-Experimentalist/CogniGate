@@ -533,7 +533,7 @@ func TestCostHintCoarsensTheTenantPlane(t *testing.T) {
 
 	var out usageResponse
 	h.do(http.MethodGet, "/v1/usage", tenant.dataKey, nil).decode(t, &out)
-	if out.CostUSD != 2 {
+	if costOf(out.CostUSD) != 2 {
 		t.Errorf("cost_usd = %v, want the 1-significant-figure hint 2", out.CostUSD)
 	}
 	if out.ChargeUSD != 2.1544 {
@@ -545,8 +545,96 @@ func TestCostHintCoarsensTheTenantPlane(t *testing.T) {
 	if len(bd.Data) != 1 {
 		t.Fatalf("breakdown returned %d buckets, want 1", len(bd.Data))
 	}
-	if bd.Data[0].CostUSD != 2 {
+	if costOf(bd.Data[0].CostUSD) != 2 {
 		t.Errorf("bucket cost_usd = %v, want the hint 2", bd.Data[0].CostUSD)
+	}
+}
+
+// costOf reads a published cost figure whether or not the deployment publishes
+// one, so an assertion that is not about visibility does not have to care.
+func costOf(v *float64) float64 {
+	if v == nil {
+		return 0
+	}
+	return *v
+}
+
+// Hidden is the shipped default, and it has to leave the key out rather than
+// publish a zero: a tenant reading cost_usd: 0 beside a charge concludes its
+// traffic was free, which is a different and wrong statement. The charge is
+// untouched, because that is the figure the tenant is actually billed on.
+func TestHiddenCostLeavesTheKeyOutOfTheTenantPlane(t *testing.T) {
+	h, tenant := billingHarness(t, config.CostHidden)
+
+	res := h.do(http.MethodGet, "/v1/usage", tenant.dataKey, nil)
+	var raw map[string]any
+	if err := json.Unmarshal([]byte(res.body), &raw); err != nil {
+		t.Fatalf("decoding /v1/usage: %v\n%s", err, res.body)
+	}
+	if _, ok := raw["cost_usd"]; ok {
+		t.Errorf("cost_usd is published under the hidden setting: %s", res.body)
+	}
+	if raw["charge_usd"] != 2.1544 {
+		t.Errorf("charge_usd = %v, want the exact charge 2.1544", raw["charge_usd"])
+	}
+
+	bd := h.do(http.MethodGet, "/v1/usage/breakdown", tenant.dataKey, nil)
+	var rawBd struct {
+		Data []map[string]any `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(bd.body), &rawBd); err != nil {
+		t.Fatalf("decoding the breakdown: %v\n%s", err, bd.body)
+	}
+	if len(rawBd.Data) != 1 {
+		t.Fatalf("breakdown returned %d buckets, want 1", len(rawBd.Data))
+	}
+	if _, ok := rawBd.Data[0]["cost_usd"]; ok {
+		t.Errorf("a breakdown bucket publishes cost_usd under the hidden setting: %s", bd.body)
+	}
+	if rawBd.Data[0]["charge_usd"] != 2.1544 {
+		t.Errorf("bucket charge_usd = %v, want 2.1544", rawBd.Data[0]["charge_usd"])
+	}
+}
+
+// The operator is not the one being kept out. Hidden is a data-plane setting,
+// and the admin plane reads the exact cost and the margin under it.
+func TestHiddenCostStillReportsToTheOperator(t *testing.T) {
+	h, tenant := billingHarness(t, config.CostHidden)
+
+	var out adminUsageResponse
+	h.do(http.MethodGet, "/admin/v1/tenants/"+tenant.id+"/usage", tenant.adminKey, nil).
+		decode(t, &out)
+	if costOf(out.CostUSD) != 1.8734 {
+		t.Errorf("admin cost_usd = %v, want the exact 1.8734", costOf(out.CostUSD))
+	}
+	if out.MarginUSD != 0.281 {
+		t.Errorf("margin_usd = %v, want 0.281", out.MarginUSD)
+	}
+}
+
+// A cost cap is denominated in the cost, and cap minus remaining is the
+// consumption, so publishing the row would hand back the figure the setting
+// withholds. The row goes; the position does not. The tenant is still told it
+// is over a spend cap, and the rejection still names budget_exceeded.
+func TestHiddenCostDropsTheCostCapRowButNotTheState(t *testing.T) {
+	h, tenant := billingHarness(t, config.CostHidden)
+	res := h.do(http.MethodPut, "/admin/v1/tenants/"+tenant.id+"/quota", tenant.adminKey,
+		map[string]any{"month": map[string]any{"cost": map[string]any{"cap": 1}}})
+	if res.status != http.StatusOK {
+		t.Fatalf("setting a quota: status %d, body %s", res.status, res.body)
+	}
+
+	var out usageResponse
+	h.do(http.MethodGet, "/v1/usage?window=month", tenant.dataKey, nil).decode(t, &out)
+	for _, l := range out.Limits {
+		if l.Unit == unitCost {
+			t.Errorf("the cost cap is published under the hidden setting: %+v", l)
+		}
+	}
+	// $1.8734 spent against a $1 cap.
+	if out.State != httpx.QuotaHardExceeded {
+		t.Errorf("state = %q, want the hard-exceeded position the dropped row carried",
+			out.State)
 	}
 }
 
@@ -558,8 +646,8 @@ func TestAdminUsageStaysExactAndCarriesTheMargin(t *testing.T) {
 	var out adminUsageResponse
 	h.do(http.MethodGet, "/admin/v1/tenants/"+tenant.id+"/usage", tenant.adminKey, nil).
 		decode(t, &out)
-	if out.CostUSD != 1.8734 {
-		t.Errorf("admin cost_usd = %v, want the exact 1.8734", out.CostUSD)
+	if costOf(out.CostUSD) != 1.8734 {
+		t.Errorf("admin cost_usd = %v, want the exact 1.8734", costOf(out.CostUSD))
 	}
 	if out.MarginUSD != 0.281 {
 		t.Errorf("margin_usd = %v, want 0.281", out.MarginUSD)
@@ -606,7 +694,7 @@ func TestUsageIsTenantIsolated(t *testing.T) {
 
 	var out usageResponse
 	h.do(http.MethodGet, "/v1/usage", other.dataKey, nil).decode(t, &out)
-	if out.TotalTokens != 0 || out.CostUSD != 0 {
+	if out.TotalTokens != 0 || costOf(out.CostUSD) != 0 || out.ChargeUSD != 0 {
 		t.Errorf("tenant sees another tenant's usage: %+v", out.UsageTotals)
 	}
 

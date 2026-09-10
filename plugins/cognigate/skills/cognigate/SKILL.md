@@ -255,7 +255,7 @@ difference between them.
 billing:
   mode: passthrough # passthrough | markup | absorb
   markup_pct: 0 # only read in markup mode
-  cost_visibility: exact # exact | hint
+  cost_visibility: hidden # hidden | hint | exact
 ```
 
 `passthrough` charges the provider rate itself, so the operator collects
@@ -266,13 +266,22 @@ at all: `charge_usd` is zero on every row and the operator carries the bill. A
 cost quota is measured in cost rather than charge, so a spend cap still stops
 runaway usage under `absorb`.
 
-`cost_visibility: hint` coarsens `cost_usd` on the data plane to one
-significant figure. A tenant still sees the order of magnitude of what its
-traffic cost, but cannot divide the charge beside it by an exact cost and
-recover the operator's margin. The charge itself is never rounded, because it
-is what the tenant owes; the admin plane and the stored row stay exact
-whatever this is set to; and enforcement reads the exact position, so what
-stops traffic never depends on how it is displayed.
+`cost_visibility` decides how much of `cost_usd` the data plane publishes.
+`hidden` is the default and publishes none of it: `/v1/usage` and
+`/v1/usage/breakdown` carry no `cost_usd` key at all, and a `cost` quota slot
+is left out of `limits` with it, because `cap` minus `remaining` gives the
+consumption back. The tenant is still told where it stands: the overall
+`state` accounts for the dropped slot, so a tenant on a spend cap reads
+`hard-exceeded` and is still rejected with `budget_exceeded`. `hint` publishes
+the cost coarsened to one significant figure instead, so a tenant sees the
+order of magnitude of what its traffic cost but cannot divide the charge
+beside it by an exact cost and recover the operator's margin. `exact`
+publishes the computed figure.
+
+The charge is never rounded or withheld, because it is what the tenant owes;
+the admin plane and the stored row stay exact whatever this is set to; and
+enforcement reads the exact position, so what stops traffic never depends on
+how it is displayed.
 
 Environment: `CG_BILLING_MODE`, `CG_BILLING_MARKUP_PCT`,
 `CG_BILLING_COST_VISIBILITY`.

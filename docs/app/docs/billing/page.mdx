@@ -117,7 +117,7 @@ One setting decides it, for the whole gateway:
 billing:
     mode: passthrough
     markup_pct: 0
-    cost_visibility: exact
+    cost_visibility: hidden
 ```
 
 - **`passthrough`**, the default, charges the provider's rate itself. The
@@ -148,31 +148,45 @@ one.
 
 ## How much of the cost a tenant sees
 
-A tenant reading its own usage sees both figures, so under `markup` it could
-divide one by the other and read the margin straight off. `cost_visibility`
-decides whether it can:
+What the provider charged the operator and what the tenant owes are different
+numbers, and a tenant reading both could divide one by the other and read
+the margin straight off. `cost_visibility` decides how much of the first one it
+gets:
 
-- **`exact`**, the default, publishes the figure the gateway computed. Nothing
-  is hidden, which is the right answer for `passthrough`, where the charge is
-  the cost and there is no margin to hide, and for an internal platform under
-  `absorb`, where teams want to know what they are spending the company.
+- **`hidden`**, the default, publishes none of it. `/v1/usage` and
+  `/v1/usage/breakdown` carry no `cost_usd` key at all, so a tenant reads
+  `charge_usd` and nothing about what the traffic cost to buy. The key is
+  absent rather than zero, because a published zero reads as free traffic.
 - **`hint`** rounds `cost_usd` to one significant figure on the data plane.
-  $1.8734 is published as $2, $0.0018734 as $0.002. The tenant still sees the
-  order of magnitude of what its traffic cost, and dividing an exact charge of
+  $1.8734 is published as $2, $0.0018734 as $0.002. The tenant sees the order
+  of magnitude of what its traffic cost, and dividing an exact charge of
   $2.1544 by a cost of $2 says nothing useful about a markup of 15%.
+- **`exact`** publishes the figure the gateway computed. Nothing is withheld,
+  which suits `passthrough`, where the charge is the cost and there is no
+  margin to withhold, and an internal platform under `absorb`, where teams
+  want to know what they are spending the company.
 
-Four things stay exact under `hint`, and they are the ones that matter:
+A `cost` quota goes with the cost. Under `hidden` the slot is left out of the
+`limits` list on `/v1/usage`, because `cap` and `remaining` are denominated in
+the withheld figure and any two of them give the third. The tenant is not
+left guessing: the overall `state` still accounts for the slot, so a tenant on
+a spend cap reads `soft-exceeded` or `hard-exceeded`, and the rejection is
+still a `429` with `budget_exceeded`. Under `hint` the slot is published with a
+rounded `consumed`.
+
+Four things stay exact whatever this is set to, and they are the ones that
+matter:
 
 - `charge_usd`, on both planes. It is what the tenant owes, and nobody should
   be billed on an approximation.
 - Everything the admin plane returns, including a `margin_usd` on
   `GET /admin/v1/tenants/{id}/usage` so an operator does not have to subtract.
-- The stored row, so a figure is never lost, only displayed coarsely.
+- The stored row, so a figure is never lost, only withheld or displayed coarsely.
 - Quota enforcement. What stops traffic is computed from the real position,
-  never from what was published. A tenant does see a rounded `consumed`, and a
-  `remaining` derived from it rather than from the exact number: the tenant
-  knows its own cap, so an exact remainder would subtract straight back to the
-  figure the hint is meant to blur.
+  never from what was published. Under `hint` a tenant sees a rounded
+  `consumed` and a `remaining` derived from it rather than from the exact
+  number: the tenant knows its own cap, so an exact remainder would subtract
+  straight back to the figure the hint is meant to blur.
 
 The setting is deployment-wide, like the mode itself. It is not a per-tenant
 knob, because a deployment showing one tenant exact costs and another rounded
@@ -198,12 +212,15 @@ curl "http://localhost:8080/v1/usage?window=month" \
     "prompt_tokens": 391204,
     "completion_tokens": 88317,
     "total_tokens": 479521,
-    "cost_usd": 1.8734,
     "charge_usd": 2.1544,
     "state": "ok",
     "limits": []
 }
 ```
+
+There is no `cost_usd` in that body because `cost_visibility` is `hidden`. Set
+it to `hint` or `exact` and the key appears, rounded or not; the operator reads
+it on `GET /admin/v1/tenants/{id}/usage` either way, beside a `margin_usd`.
 
 `cached_requests` is how many of `requests` the completion cache answered.
 Those rows carry no tokens and cost nothing, so a window whose spend looks

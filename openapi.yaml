@@ -2597,8 +2597,9 @@ components:
           type: integer
         consumed:
           type: number
-          description: Consumption in this slot's own unit. A cost slot follows `billing.cost_visibility`,
-            so it can be a rounded figure on the data plane.
+          description: 'Consumption in this slot''s own unit. A cost slot follows `billing.cost_visibility`:
+            it is a rounded figure on the data plane under `hint`, and under `hidden` the
+            whole slot is left out of a tenant''s `limits` while still counting toward `state`.'
         remaining:
           type: number
           description: '`cap` minus `consumed`, floored at zero, so the two always sum to
@@ -2626,7 +2627,6 @@ components:
       - prompt_tokens
       - completion_tokens
       - total_tokens
-      - cost_usd
       - charge_usd
       properties:
         object:
@@ -2660,9 +2660,11 @@ components:
           type: number
           description: 'What the traffic cost at the provider''s published rate. Zero for
             a model whose listing publishes no price and whose rate the operator has not supplied.
-            This is the figure cost quotas are measured against. A deployment that sets `billing.cost_visibility:
-            hint` rounds it to one significant figure on the data plane; the admin plane and
-            the stored row are always exact.'
+            This is the figure cost quotas are measured against. `billing.cost_visibility`
+            decides how much of it the data plane publishes: under `hidden`, the default,
+            the key is absent altogether, under `hint` it is rounded to one significant figure,
+            and under `exact` it is the computed figure. The admin plane and the stored row
+            are always exact.'
         charge_usd:
           type: number
           description: What is owed for the traffic. Equal to `cost_usd` unless the operator
@@ -2695,8 +2697,8 @@ components:
       - prompt_tokens
       - completion_tokens
       - total_tokens
-      - cost_usd
       - charge_usd
+      - cost_usd
       - margin_usd
       properties:
         object:
@@ -2730,9 +2732,11 @@ components:
           type: number
           description: 'What the traffic cost at the provider''s published rate. Zero for
             a model whose listing publishes no price and whose rate the operator has not supplied.
-            This is the figure cost quotas are measured against. A deployment that sets `billing.cost_visibility:
-            hint` rounds it to one significant figure on the data plane; the admin plane and
-            the stored row are always exact.'
+            This is the figure cost quotas are measured against. `billing.cost_visibility`
+            decides how much of it the data plane publishes: under `hidden`, the default,
+            the key is absent altogether, under `hint` it is rounded to one significant figure,
+            and under `exact` it is the computed figure. The admin plane and the stored row
+            are always exact.'
         charge_usd:
           type: number
           description: What is owed for the traffic. Equal to `cost_usd` unless the operator
@@ -2764,7 +2768,6 @@ components:
       - prompt_tokens
       - completion_tokens
       - total_tokens
-      - cost_usd
       - charge_usd
       properties:
         key:
@@ -2787,9 +2790,11 @@ components:
           type: number
           description: 'What the traffic cost at the provider''s published rate. Zero for
             a model whose listing publishes no price and whose rate the operator has not supplied.
-            This is the figure cost quotas are measured against. A deployment that sets `billing.cost_visibility:
-            hint` rounds it to one significant figure on the data plane; the admin plane and
-            the stored row are always exact.'
+            This is the figure cost quotas are measured against. `billing.cost_visibility`
+            decides how much of it the data plane publishes: under `hidden`, the default,
+            the key is absent altogether, under `hint` it is rounded to one significant figure,
+            and under `exact` it is the computed figure. The admin plane and the stored row
+            are always exact.'
         charge_usd:
           type: number
           description: What is owed for the traffic. Equal to `cost_usd` unless the operator

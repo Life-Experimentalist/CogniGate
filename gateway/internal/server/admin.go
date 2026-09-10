@@ -1451,6 +1451,10 @@ func (s *Server) adminUsage(c *fiber.Ctx) error {
 			Since:       since.Format(time.RFC3339),
 			Until:       until.Format(time.RFC3339),
 			UsageTotals: totals,
+			// Set from the store rather than through tenantCost: this is the
+			// plane billing.cost_visibility does not reach, and the margin
+			// below is only readable beside an exact cost.
+			CostUSD: &totals.CostUSD,
 		},
 		MarginUSD: margin(totals.ChargeUSD, totals.CostUSD),
 	})
@@ -1481,8 +1485,13 @@ func (s *Server) adminUsageBreakdown(c *fiber.Ctx) error {
 	if err != nil {
 		return httpx.Fail(c, apierr.From(err))
 	}
-	if buckets == nil {
-		buckets = []store.UsageBucket{}
+	// The operator reads the exact cost whatever billing.cost_visibility does
+	// to the data plane, so these rows are filled straight from the store
+	// rather than through tenantCost.
+	rows := make([]bucketView, len(buckets))
+	for i := range buckets {
+		cost := buckets[i].CostUSD
+		rows[i] = bucketView{UsageBucket: buckets[i], CostUSD: &cost}
 	}
 	return c.JSON(breakdownResponse{
 		Object:  "usage_breakdown",
@@ -1490,6 +1499,6 @@ func (s *Server) adminUsageBreakdown(c *fiber.Ctx) error {
 		GroupBy: groupBy,
 		Since:   since.Format(time.RFC3339),
 		Until:   until.Format(time.RFC3339),
-		Data:    buckets,
+		Data:    rows,
 	})
 }

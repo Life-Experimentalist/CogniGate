@@ -220,18 +220,32 @@ type usageResponse struct {
 	Since  string `json:"since"`
 	Until  string `json:"until"`
 	store.UsageTotals
+	// CostUSD shadows the embedded figure, which encoding/json resolves in
+	// favour of the shallower field. A pointer is what lets the key be absent
+	// under billing.cost_visibility: hidden; the embedded float cannot be, and
+	// a zero cost would read as free traffic rather than as a withheld figure.
+	// store.UsageTotals keeps its plain float for the admin plane, the stored
+	// row and the analytics decode, none of which withholds anything.
+	CostUSD *float64 `json:"cost_usd,omitempty"`
 	// State is the caller's overall position, which is the worst of the limits
 	// below — being under budget does not license passing a token cap.
 	State  string       `json:"state"`
 	Limits []usageLimit `json:"limits"`
 }
 
-// tenantCost applies billing.cost_visibility to one figure. Under the default
-// it is the identity; under "hint" the cost is coarsened to one significant
-// figure so the exact charge beside it cannot be divided into it. It is used on
-// the data plane only: the admin plane and the stored row stay exact.
-func (s *Server) tenantCost(v float64) float64 {
-	return s.Config.Billing.TenantCost(v)
+// tenantCost is what the data plane publishes as cost_usd. Under the default,
+// "hidden", it publishes nothing: nil is omitted from the JSON, so a tenant
+// reads the charge it owes rather than what the operator paid for the traffic.
+// Under "hint" the cost is coarsened to one significant figure so the exact
+// charge beside it cannot be divided into it, and under "exact" it is the
+// figure itself. Data plane only: the admin plane and the stored row stay
+// exact whatever this returns.
+func (s *Server) tenantCost(v float64) *float64 {
+	if s.Config.Billing.HidesCost() {
+		return nil
+	}
+	out := s.Config.Billing.TenantCost(v)
+	return &out
 }
 
 func (s *Server) handleUsage(c *fiber.Ctx) error {
@@ -257,14 +271,13 @@ func (s *Server) handleUsage(c *fiber.Ctx) error {
 		return httpx.Fail(c, apierr.From(err))
 	}
 
-	totals.CostUSD = s.tenantCost(totals.CostUSD)
-
 	resp := usageResponse{
 		Object:      "usage",
 		Window:      window,
 		Since:       since.Format(time.RFC3339),
 		Until:       until.Format(time.RFC3339),
 		UsageTotals: totals,
+		CostUSD:     s.tenantCost(totals.CostUSD),
 		State:       httpx.QuotaOK,
 		// Never null: a caller with no quota configured gets an empty list, not
 		// a field it has to nil-check.
@@ -282,11 +295,21 @@ func (s *Server) handleUsage(c *fiber.Ctx) error {
 		// allows, and Remaining is derived from that rather than from the exact
 		// figure: the tenant knows its own cap, so an exact remainder would
 		// subtract straight back to the consumption the hint is meant to blur.
-		// State is unaffected: it is computed from the exact position, because
-		// what stops traffic must not depend on how it is displayed.
+		// Under "hidden" the row is left out altogether, because cap, consumed
+		// and remaining are all denominated in the cost the setting withholds,
+		// and any two of them give the third. The tenant is still told it is on
+		// a spend cap: the state below still accounts for the slot, and the
+		// rejection still names budget_exceeded.
+		// State is unaffected either way: it is computed from the exact
+		// position, because what stops traffic must not depend on how it is
+		// displayed.
 		used := p.used
 		if p.unit == unitCost {
-			used = s.tenantCost(used)
+			if s.Config.Billing.HidesCost() {
+				resp.State = worse(resp.State, p.state)
+				continue
+			}
+			used = s.Config.Billing.TenantCost(used)
 		}
 		remaining := p.cap - used
 		if remaining < 0 {
@@ -308,13 +331,22 @@ func (s *Server) handleUsage(c *fiber.Ctx) error {
 	return c.JSON(resp)
 }
 
+// bucketView is one breakdown row as it goes out. The shadowed pointer is
+// there for the reason it is there on usageResponse: under "hidden" the key
+// has to be missing rather than zero. Each plane fills it for itself, the
+// data plane through tenantCost and the admin plane with the exact figure.
+type bucketView struct {
+	store.UsageBucket
+	CostUSD *float64 `json:"cost_usd,omitempty"`
+}
+
 type breakdownResponse struct {
-	Object  string              `json:"object"`
-	Window  string              `json:"window"`
-	GroupBy string              `json:"group_by"`
-	Since   string              `json:"since"`
-	Until   string              `json:"until"`
-	Data    []store.UsageBucket `json:"data"`
+	Object  string       `json:"object"`
+	Window  string       `json:"window"`
+	GroupBy string       `json:"group_by"`
+	Since   string       `json:"since"`
+	Until   string       `json:"until"`
+	Data    []bucketView `json:"data"`
 	// Truncated says the window held more groups than maxBreakdownBuckets, so
 	// this is the top of the list and not all of it. A caller billing from these
 	// rows needs to know the difference.
@@ -359,10 +391,12 @@ func (s *Server) handleUsageBreakdown(c *fiber.Ctx) error {
 		buckets = buckets[:maxBreakdownBuckets]
 	}
 	// Ordering is by exact spend and stays that way; only the reported figure
-	// is coarsened, so two buckets that round to the same hint still appear in
-	// the order they actually cost.
+	// is coarsened or withheld, so two buckets that round to the same hint, or
+	// that publish no cost at all, still appear in the order they actually
+	// cost. The charge on each row is untouched.
+	rows := make([]bucketView, len(buckets))
 	for i := range buckets {
-		buckets[i].CostUSD = s.tenantCost(buckets[i].CostUSD)
+		rows[i] = bucketView{UsageBucket: buckets[i], CostUSD: s.tenantCost(buckets[i].CostUSD)}
 	}
 	return c.JSON(breakdownResponse{
 		Object:    "usage_breakdown",
@@ -370,7 +404,7 @@ func (s *Server) handleUsageBreakdown(c *fiber.Ctx) error {
 		GroupBy:   groupBy,
 		Since:     since.Format(time.RFC3339),
 		Until:     until.Format(time.RFC3339),
-		Data:      buckets,
+		Data:      rows,
 		Truncated: truncated,
 	})
 }

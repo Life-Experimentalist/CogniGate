@@ -159,7 +159,7 @@ func TestGW7ClientRequestIDIsCorrelatableInUsage(t *testing.T) {
 		t.Errorf("first bucket = %q, want the costliest (job-43)", out.Data[0].Key)
 	}
 
-	byKey := map[string]store.UsageBucket{}
+	byKey := map[string]bucketView{}
 	for _, b := range out.Data {
 		byKey[b.Key] = b
 	}

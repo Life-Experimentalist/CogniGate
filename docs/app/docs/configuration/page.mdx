@@ -80,7 +80,7 @@ it out of the environment.
 billing:
     mode: passthrough # passthrough | markup | absorb
     markup_pct: 0
-    cost_visibility: exact # exact | hint
+    cost_visibility: hidden # hidden | hint | exact
 ```
 
 Every usage row records two figures: what the request cost at the provider's
@@ -98,13 +98,15 @@ A model with no published rate costs zero, so it is charged zero in every mode.
 Quota caps are measured in cost rather than charge, so a spend limit still
 works under `absorb`.
 
-`cost_visibility` decides how much of the first figure a tenant sees. `exact`
-publishes what the gateway computed. `hint` rounds it to one significant figure
-on the data plane, which leaves a tenant able to see roughly what its traffic
-cost while making the exact charge beside it useless for working out the
-margin. The admin plane, the stored row, the charge itself and quota
-enforcement are all exact either way. [Usage & cost](/docs/billing) has the
-detail.
+`cost_visibility` decides how much of the first figure a tenant sees. `hidden`,
+the default, publishes none of it: the data plane carries no `cost_usd` key,
+and a `cost` quota slot is withheld with it since cap minus remaining is the
+consumption. `hint` publishes the cost rounded to one significant figure
+instead, which leaves a tenant able to see roughly what its traffic cost while
+making the exact charge beside it useless for working out the margin. `exact`
+publishes what the gateway computed. The admin plane, the stored row, the
+charge itself and quota enforcement are exact under all three.
+[Usage & cost](/docs/billing) has the detail.
 
 ### Quota enforcement
 
