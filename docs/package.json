@@ -20,15 +20,15 @@
         "@types/mdx": "^2.0.14",
         "clsx": "^2.1.1",
         "framer-motion": "^12.42.2",
-        "lucide-react": "^1.39.0",
+        "lucide-react": "^1.43.0",
         "mermaid": "^11.17.2",
         "next": "16.3.4",
-        "react": "19.2.8",
-        "react-dom": "19.2.8",
+        "react": "19.3.0",
+        "react-dom": "19.3.0",
         "remark-gfm": "^4.0.1",
         "remark-github-markdown-alerts": "^1.2.2",
         "tailwind-merge": "^3.6.0",
-        "three": "^0.185.1"
+        "three": "^0.186.0"
     },
     "devDependencies": {
         "@tailwindcss/postcss": "^4",
