@@ -32,7 +32,9 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Update ${{ matrix.repo }}
-        uses: peter-evans/dockerhub-description@v4
+        # Third party and handed the Docker Hub token, so pinned to a commit
+        # rather than a movable tag. Dependabot updates the SHA.
+        uses: peter-evans/dockerhub-description@1b9a80c056b620d92cedb9d9b5a223409c68ddfa # v5.0.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
