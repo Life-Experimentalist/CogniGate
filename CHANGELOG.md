@@ -21,7 +21,9 @@ conformance (GW-9.AC-6), which is checked in CI against this file.
 
 ## [Unreleased]
 
-The first release has not been cut. Everything below is the state of `main`.
+## [1.0.0-rc.1] - 2026-09-17
+
+The first release candidate for 1.0.0.
 
 ### Added
 
@@ -443,5 +445,4 @@ because the documentation was public and someone may have planned against it.
   ```
 
   Release binaries are attested the same way; the command is printed in each
-  release's notes. No release has been cut yet, so that half is configured and
-  not yet exercised.
+  release's notes.
