@@ -21,6 +21,11 @@ conformance (GW-9.AC-6), which is checked in CI against this file.
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-09-17
+
+The first stable release. Identical to 1.0.0-rc.1 apart from the analytics
+JAR in the release assets, which is now named for the release version.
+
 ## [1.0.0-rc.1] - 2026-09-17
 
 The first release candidate for 1.0.0.

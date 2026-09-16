@@ -42,7 +42,11 @@ jobs:
 
       - name: Build Analytics Fat-JAR
         working-directory: analytics
-        run: mvn -B package -DskipTests
+        # The pom stays at a -SNAPSHOT version, which the Dockerfile copies by name,
+        # so the release asset is renamed to the tag instead.
+        run: |
+          mvn -B package -DskipTests
+          mv target/analytics-*.jar "target/analytics-${GITHUB_REF_NAME#v}.jar"
 
       - name: Build Gateway binary (linux-amd64)
         working-directory: gateway
