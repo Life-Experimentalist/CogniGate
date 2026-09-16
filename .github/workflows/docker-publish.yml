@@ -81,7 +81,7 @@ jobs:
 
       - name: Build & Push — Gateway
         id: build-gateway
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v7
         with:
           context: ./gateway
           file: ./gateway/Dockerfile
@@ -127,7 +127,7 @@ jobs:
 
       - name: Build & Push — Analytics
         id: build-analytics
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v7
         with:
           context: ./analytics
           file: ./analytics/Dockerfile
