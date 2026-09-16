@@ -1,4 +1,4 @@
-name: Docker Hub: Descriptions
+name: "Docker Hub: Descriptions"
 
 # Keeps the Docker Hub repository pages in step with .github/dockerhub/.
 # Separate from docker-publish.yml so that editing a description does not
